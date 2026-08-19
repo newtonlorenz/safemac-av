@@ -1,0 +1,61 @@
+# Xcode build products and results
+build/
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.xcarchive
+*.xcresult
+
+# Xcode user-specific state (shared schemes remain tracked)
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+*.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+# Swift Package Manager build and local workspace state
+.build/
+Packages/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+.swiftpm/xcode/xcuserdata/
+.swiftpm/configuration/
+.swiftpm/security/
+
+# Dependency-manager build products
+Pods/
+Carthage/Build/
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Signing and local credentials
+*.cer
+*.key
+*.mobileprovision
+*.p12
+*.pem
+*.provisionprofile
+.env
+.env.local
+.env.*.local
+
+# Local agent tooling
+.aider*
+.claude/
+.codex/
+.continue/
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Logs and editor backups
+*.log
+*.swp
+*~

@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a focused improvement to ClamAV GUI.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user need or limitation does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the user-visible result, not only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include current workarounds if any.
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and privacy impact
+      description: Note any new permissions, processes, filesystem writes, network use, or persisted data.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This belongs in the GUI rather than the upstream ClamAV engine.
+          required: true
+        - label: I searched for an existing request.
+          required: true

@@ -1,0 +1,179 @@
+# ClamAV GUI for macOS
+
+[![CI](https://github.com/newtonlorenz/clamav-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/newtonlorenz/clamav-gui/actions/workflows/ci.yml)
+[![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black?logo=apple)](https://support.apple.com/macos)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+An unofficial, native SwiftUI front end for running [ClamAV](https://www.clamav.net/) on macOS. Scan files without assembling long shell commands, update signatures with `freshclam`, review results, quarantine detections, and automate repeat scans from one local app.
+
+![ClamAV GUI dashboard](docs/images/dashboard.png)
+
+> [!IMPORTANT]
+> This project is an independent community interface. It is not affiliated with, endorsed by, or supported by Cisco, Talos, or the ClamAV project. ClamAV is installed separately and remains the scanning engine.
+
+## What it does
+
+- Quick scans of Downloads and Desktop, plus custom file or folder scans
+- Configurable `clamscan` options, exclusions, limits, and optional local `clamdscan`
+- Signature status and updates through the installed `freshclam` executable
+- Transactional quarantine metadata, hash verification on restore, and explicit deletion confirmation
+- Daily, weekly, or monthly scans through per-user `launchd` jobs
+- FSEvents-based folder monitoring while the application is running
+- Scan history, operational logs, pause, resume, and cancellation controls
+- Optional Finder context-menu requests through the bundled Finder Sync extension
+
+The app has no analytics or telemetry SDK. Its own state stays on the Mac; `freshclam` accesses ClamAV's update infrastructure when you request a signature update.
+
+## Requirements
+
+- macOS 13 Ventura or later
+- Xcode with the macOS SDK for source builds
+- [Homebrew](https://brew.sh/) and its [`clamav` formula](https://formulae.brew.sh/formula/clamav.html), or an equivalent local ClamAV installation
+
+Both Apple silicon (`/opt/homebrew`) and Intel Homebrew (`/usr/local`) defaults are supported. Custom executable and data paths can be set in the app.
+
+## Quick start
+
+1. Install ClamAV:
+
+   ```bash
+   brew install clamav
+   ```
+
+2. Create an active `freshclam` configuration from Homebrew's sample, then comment out or remove the standalone `Example` line:
+
+   ```bash
+   BREW_PREFIX="$(brew --prefix)"
+   cp -n "$BREW_PREFIX/etc/clamav/freshclam.conf.sample" \
+     "$BREW_PREFIX/etc/clamav/freshclam.conf"
+   ${EDITOR:-vi} "$BREW_PREFIX/etc/clamav/freshclam.conf"
+   "$BREW_PREFIX/bin/freshclam"
+   ```
+
+   If `freshclam.conf` already exists, keep it and verify that `Example` is commented. ClamAV's [signature management guide](https://docs.clamav.net/manual/Usage/SignatureManagement.html) explains the configuration and update process.
+
+3. Clone and open the project:
+
+   ```bash
+   git clone https://github.com/newtonlorenz/clamav-gui.git
+   cd clamav-gui
+   open ClamAV-GUI.xcodeproj
+   ```
+
+4. Select the `ClamAV-GUI` scheme and run it. The Settings screen can auto-detect Homebrew paths; update signatures before the first scan.
+
+For a guided environment check, run `./setup.sh`. It is read-only by default; installation and configuration changes require explicit flags shown by `./setup.sh --help`.
+
+## Build and test
+
+Build from the command line without a signing identity:
+
+```bash
+xcodebuild \
+  -project ClamAV-GUI.xcodeproj \
+  -scheme ClamAV-GUI \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+```
+
+Run the unit and integration suite:
+
+```bash
+xcodebuild \
+  -project ClamAV-GUI.xcodeproj \
+  -scheme ClamAV-GUI \
+  -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO \
+  test
+```
+
+Run the interactive UI smoke test on a logged-in Mac. Unlike the headless unit suite, the UI runner needs a locally signable test host, so do not disable code signing for this command:
+
+```bash
+xcodebuild \
+  -project ClamAV-GUI.xcodeproj \
+  -scheme ClamAV-GUI-UI \
+  -destination 'platform=macOS' \
+  test
+```
+
+The hosted CI workflow intentionally omits UI automation because macOS UI tests require both a locally signable test host and a reliable logged-in window session. An ad-hoc or development-signed local test run is sufficient; forcing `CODE_SIGNING_ALLOWED=NO` terminates the UI runner before the test can execute.
+
+## Local packages and releases
+
+The distribution helper has three explicit modes:
+
+```bash
+# Unsigned local DMG for testing
+./scripts/create-dmg.sh
+
+# Signed local DMG; not notarized
+SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+  ./scripts/create-dmg.sh
+
+# Signed, submitted with a notarytool Keychain profile, and stapled
+SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+NOTARY_PROFILE='clamav-gui-notary' \
+  ./scripts/create-dmg.sh
+```
+
+Create the Keychain profile separately with `xcrun notarytool store-credentials`. Credentials should stay in Keychain and must never be committed or passed as plain-text script arguments. The resulting DMG is written under the ignored `build/` directory. Only the third mode attempts notarization; always verify a release artifact before publishing it.
+
+## Security and privacy model
+
+ClamAV GUI launches executables at the paths configured in Settings and passes selected local paths as process arguments. It does not upload files, scan results, or usage data. A local `clamdscan` backend is supported; remote TCP `clamd` is not configured by this app.
+
+The app sandbox is deliberately disabled. Scanning arbitrary user-selected folders, observing configured folders with FSEvents, writing a user-selected quarantine location, installing per-user LaunchAgents, and coordinating with Finder all require filesystem/process access that the current design cannot provide from the App Sandbox. Review source builds before running them, and only configure trusted ClamAV executable paths.
+
+Local state can contain sensitive path names and threat results:
+
+- Settings and scheduled-job metadata: `~/Library/Application Support/ClamAV-GUI/`
+- Per-user schedules: `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.scan.*.plist`
+- Quarantine by default: `~/.clamav-quarantine/`
+- Logs and scan history: held in application memory for the current run
+
+See [SECURITY.md](SECURITY.md) for the supported reporting process.
+
+## Current limitations
+
+- This is a user-facing ClamAV client, not a replacement for endpoint security or macOS platform protections.
+- Folder monitoring is application-level FSEvents monitoring. It only runs while ClamAV GUI is running and is not a kernel or system on-access scanner.
+- Scheduled scans are per-user `launchd` jobs. The app must remain at the path captured by the job, and the user must be logged in.
+- The Finder extension must be signed with the app and enabled manually in System Settings. Forks also need their own compatible bundle/app-group configuration.
+- Launch-at-login, user notifications, and a standalone menu-bar experience are not complete yet.
+- Source builds are unsigned unless you configure an Apple Developer identity. A successful local build is not the same as a signed and notarized distribution.
+
+## Project layout
+
+```text
+ClamAV-GUI/          SwiftUI app, models, and local service layer
+ClamAV-GUI-Finder/   Finder Sync extension
+ClamAV-GUITests/     Unit and integration tests
+ClamAV-GUIUITests/   Interactive macOS UI smoke tests
+docs/                Architecture and maintainer notes
+scripts/             Icon and distribution helpers
+```
+
+The runtime design and state boundaries are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Contributing
+
+Bug reports, focused fixes, tests, and accessibility improvements are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+The checked-in `com.newtonlorenz.*` identifiers identify the upstream project. If you distribute a fork, change the app, extension, test, notification, LaunchAgent, and app-group identifiers to a namespace you control; see the fork checklist in the contributing guide.
+
+## License and credit
+
+ClamAV GUI is available under the [MIT License](LICENSE). You may use, modify, and distribute it, including commercially. The license requires copies or substantial portions to retain the copyright and permission notice:
+
+```text
+Copyright (c) 2026 Daniel Graetzer and Newton Lorenz
+```
+
+That retained notice is the required credit. A visible acknowledgement in your product or documentation is appreciated, but the MIT License does not require additional advertising.
+
+ClamAV GUI was originally developed by **Daniel Graetzer** for **Newton Lorenz**. See [AUTHORS.md](AUTHORS.md) for project credits.
+
+ClamAV itself is a separate project under its own license and trademarks.

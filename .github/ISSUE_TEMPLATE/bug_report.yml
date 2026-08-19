@@ -1,0 +1,79 @@
+name: Bug report
+description: Report reproducible incorrect behavior in ClamAV GUI.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve the project. Redact usernames, home-directory paths, filenames, and threat results. Report security issues through a private security advisory instead.
+  - type: input
+    id: version
+    attributes:
+      label: App version or commit
+      placeholder: v1.0.0 or a1b2c3d
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac architecture
+      placeholder: macOS 15.6, Apple silicon
+    validations:
+      required: true
+  - type: input
+    id: clamav
+    attributes:
+      label: ClamAV version and installation source
+      description: Run `clamscan --version` and note whether ClamAV came from Homebrew or another source.
+      placeholder: ClamAV 1.x from Homebrew
+    validations:
+      required: true
+  - type: dropdown
+    id: build
+    attributes:
+      label: Build type
+      options:
+        - Local Xcode source build
+        - Upstream signed release
+        - Fork or third-party build
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use a harmless fixture and the smallest repeatable sequence.
+      placeholder: |
+        1. Open ...
+        2. Choose ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Optional. Remove personal paths, file contents, credentials, and real malware.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched for an existing issue.
+          required: true
+        - label: This report does not contain vulnerability details or private data.
+          required: true
