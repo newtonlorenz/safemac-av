@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
@@ -26,6 +27,7 @@ struct ContentView: View {
         .frame(minWidth: 800, minHeight: 600)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("app-shell")
+        .accessibilityLabel(uiTestAppearanceLabel)
         .alert(
             "Settings Couldn’t Be Saved",
             isPresented: Binding(
@@ -44,6 +46,13 @@ struct ContentView: View {
             Text(appState.settingsSaveError ?? "")
                 .accessibilityIdentifier("settings-save-error-message")
         }
+    }
+
+    private var uiTestAppearanceLabel: Text {
+        guard CommandLine.arguments.contains("--ui-testing") else {
+            return Text("")
+        }
+        return Text(colorScheme == .dark ? "dark" : "light")
     }
 }
 

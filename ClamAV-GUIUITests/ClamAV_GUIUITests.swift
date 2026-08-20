@@ -65,7 +65,9 @@ final class ClamAV_GUIUITests: XCTestCase {
         XCTAssertTrue(newWindow.waitForExistence(timeout: 5), "Expected the default New Window command")
         newWindow.click()
 
-        XCTAssertTrue(app.descendants(matching: .any)["app-shell"].waitForExistence(timeout: 5))
+        let appShell = app.descendants(matching: .any)["app-shell"]
+        XCTAssertTrue(appShell.waitForExistence(timeout: 5))
+        XCTAssertEqual(appShell.label, "light")
         XCTAssertTrue(app.descendants(matching: .any)["primary-sidebar"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["detail-header"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["dashboard-content"].exists)
@@ -96,7 +98,9 @@ final class ClamAV_GUIUITests: XCTestCase {
         XCTAssertTrue(newWindow.waitForExistence(timeout: 5), "Expected the default New Window command")
         newWindow.click()
 
-        XCTAssertTrue(app.descendants(matching: .any)["app-shell"].waitForExistence(timeout: 5))
+        let appShell = app.descendants(matching: .any)["app-shell"]
+        XCTAssertTrue(appShell.waitForExistence(timeout: 5))
+        XCTAssertEqual(appShell.label, "dark")
         XCTAssertTrue(app.descendants(matching: .any)["dashboard-content"].exists)
 
         let screenshot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())

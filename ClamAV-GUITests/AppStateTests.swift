@@ -134,6 +134,44 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(appState.isUpdatingSignatures)
     }
 
+    func testProtectionScoreIsCachedDuringScanProgressUpdates() {
+        var settings = AppSettings.default
+        settings.monitoringEnabled = false
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let mockWatcher = MockFileWatcher()
+        let appState = AppState(configManager: mockConfig, fileWatcher: mockWatcher)
+        mockConfig.resetProtectionScoreInputCalls()
+
+        appState.currentScanProgress = ScanProgress(
+            status: .scanning,
+            currentFile: "/tmp/example",
+            filesScanned: 42,
+            infectedCount: 0,
+            startTime: Date()
+        )
+
+        XCTAssertGreaterThanOrEqual(appState.protectionScore.score, 0)
+        XCTAssertEqual(mockConfig.validateInstallationCalls, 0)
+        XCTAssertEqual(mockConfig.signatureInfoCalls, 0)
+    }
+
+    func testProtectionScoreRefreshesAfterSettingsSave() {
+        var settings = AppSettings.default
+        settings.monitoringEnabled = false
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let mockWatcher = MockFileWatcher()
+        let appState = AppState(configManager: mockConfig, fileWatcher: mockWatcher)
+        let initialScore = appState.protectionScore.score
+        mockConfig.resetProtectionScoreInputCalls()
+
+        appState.settings.monitoringEnabled = true
+        appState.saveSettings()
+
+        XCTAssertGreaterThan(appState.protectionScore.score, initialScore)
+        XCTAssertGreaterThan(mockConfig.validateInstallationCalls, 0)
+        XCTAssertGreaterThan(mockConfig.signatureInfoCalls, 0)
+    }
+
     func testSaveSettingsReconfiguresMonitoringAndStopsWhenDisabled() throws {
         let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
@@ -375,6 +413,8 @@ private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol, @un
 
 private final class AppStateMockConfigManager: ConfigManagerProtocol {
     var settings: AppSettings
+    private(set) var validateInstallationCalls = 0
+    private(set) var signatureInfoCalls = 0
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -393,7 +433,8 @@ private final class AppStateMockConfigManager: ConfigManagerProtocol {
     }
 
     func validateClamAVInstallation() -> ClamAVInstallationStatus {
-        .ready(clamscanPath: settings.clamScanPath)
+        validateInstallationCalls += 1
+        return .ready(clamscanPath: settings.clamScanPath)
     }
 
     func validateClamAVInstallation(using settings: AppSettings) -> ClamAVInstallationStatus {
@@ -401,13 +442,19 @@ private final class AppStateMockConfigManager: ConfigManagerProtocol {
     }
 
     func getSignatureInfo() -> SignatureInfo {
-        SignatureInfo(
+        signatureInfoCalls += 1
+        return SignatureInfo(
             mainVersion: "1",
             dailyVersion: "1",
             bytecodeVersion: "1",
             lastUpdated: Date(),
             signatureCount: nil
         )
+    }
+
+    func resetProtectionScoreInputCalls() {
+        validateInstallationCalls = 0
+        signatureInfoCalls = 0
     }
 }
 
