@@ -40,6 +40,7 @@ struct ScanView: View {
                 }
             }
         }
+        .accessibilityIdentifier("scan-content")
         .fileImporter(
             isPresented: $showingFilePicker,
             allowedContentTypes: [.folder, .item],
@@ -77,31 +78,34 @@ struct ScanSetupView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                DropZoneView(
-                    selectedPaths: $selectedPaths,
-                    isDragOver: $isDragOver,
-                    onBrowse: { showingFilePicker = true }
-                )
+            AdaptiveGlassEffectContainer(spacing: 20) {
+                VStack(spacing: 20) {
+                    DropZoneView(
+                        selectedPaths: $selectedPaths,
+                        isDragOver: $isDragOver,
+                        onBrowse: { showingFilePicker = true }
+                    )
 
-                if !selectedPaths.isEmpty {
-                    SelectedPathsList(paths: $selectedPaths)
-                }
-
-                ScanOptionsView(options: $scanOptions)
-
-                Button(action: onStartScan) {
-                    HStack {
-                        Image(systemName: "magnifyingglass")
-                        Text("Start Scan")
+                    if !selectedPaths.isEmpty {
+                        SelectedPathsList(paths: $selectedPaths)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding()
+
+                    ScanOptionsView(options: $scanOptions)
+
+                    Button(action: onStartScan) {
+                        Label("Start Scan", systemImage: "magnifyingglass")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
+                    .adaptiveGlassButton(prominent: true)
+                    .disabled(selectedPaths.isEmpty)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(selectedPaths.isEmpty)
+                .frame(maxWidth: 820)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, GlassDesign.contentPadding)
+                .padding(.vertical, 16)
             }
-            .padding()
         }
     }
 }
@@ -114,7 +118,7 @@ struct DropZoneView: View {
     var body: some View {
         VStack(spacing: 16) {
             Image(systemName: "arrow.down.doc")
-                .font(.system(size: 48))
+                .font(.system(size: 44, weight: .light))
                 .foregroundColor(isDragOver ? .blue : .secondary)
 
             Text("Drop files or folders to scan")
@@ -139,14 +143,16 @@ struct DropZoneView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 200)
-        .background(
+        .frame(height: 210)
+        .overlay(
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
                 .foregroundColor(isDragOver ? .blue : .secondary.opacity(0.5))
         )
-        .background(isDragOver ? Color.blue.opacity(0.1) : Color.clear)
-        .cornerRadius(12)
+        .adaptiveGlassSurface(
+            tint: isDragOver ? Color.blue.opacity(0.16) : nil,
+            interactive: true
+        )
         .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
             handleDrop(providers: providers)
         }
@@ -204,9 +210,8 @@ struct SelectedPathsList: View {
                 .padding(.vertical, 4)
             }
         }
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(10)
+        .padding(18)
+        .adaptiveGlassSurface()
     }
 }
 
@@ -251,9 +256,8 @@ struct ScanOptionsView: View {
             }
             .padding(.top, 8)
         }
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(10)
+        .padding(18)
+        .adaptiveGlassSurface()
     }
 }
 
@@ -327,8 +331,10 @@ struct ScanProgressView: View {
 
             Spacer()
         }
+        .frame(maxWidth: 720, maxHeight: 520)
+        .padding(30)
+        .adaptiveGlassSurface(tint: Color.blue.opacity(0.06), cornerRadius: 28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
     }
 
     private func formatElapsedTime(_ interval: TimeInterval) -> String {
@@ -362,7 +368,7 @@ struct ScanResultsView: View {
                 Spacer()
 
                 Button("New Scan", action: onDismiss)
-                    .buttonStyle(.borderedProminent)
+                    .adaptiveGlassButton(prominent: true)
             }
             .padding()
         }
@@ -472,9 +478,11 @@ struct ScanSummaryHeader: View {
                     .foregroundColor(.secondary)
             }
         }
-        .padding()
+        .padding(20)
         .frame(maxWidth: .infinity)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .adaptiveGlassSurface(
+            tint: (report.isClean ? Color.green : Color.red).opacity(0.08)
+        )
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {

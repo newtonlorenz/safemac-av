@@ -10,6 +10,7 @@ struct ClamAVApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
+                .preferredColorScheme(uiTestColorScheme)
                 .task {
                     await handleInitialLaunch()
                 }
@@ -18,9 +19,23 @@ struct ClamAVApp: App {
                     Task { await appState.drainExternalScanRequests() }
                 }
         }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1_060, height: 720)
         .commands {
             ScanCommands()
         }
+    }
+
+    private var uiTestColorScheme: ColorScheme? {
+#if DEBUG
+        if CommandLine.arguments.contains("--force-light-appearance") {
+            return .light
+        }
+        if CommandLine.arguments.contains("--force-dark-appearance") {
+            return .dark
+        }
+#endif
+        return nil
     }
 
     @MainActor

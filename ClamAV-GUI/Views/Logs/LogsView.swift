@@ -17,7 +17,7 @@ struct LogsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
             LogsToolbar(
                 selectedLevel: $selectedLevel,
                 searchText: $searchText,
@@ -32,6 +32,9 @@ struct LogsView: View {
                 LogsList(logs: filteredLogs, autoScroll: autoScroll)
             }
         }
+        .padding(.horizontal, GlassDesign.contentPadding)
+        .padding(.bottom, 16)
+        .accessibilityIdentifier("logs-content")
         .alert(item: $exportError) { error in
             Alert(
                 title: Text("Logs Couldn’t Be Exported"),
@@ -106,8 +109,8 @@ struct LogsToolbar: View {
             }
             .buttonStyle(.bordered)
         }
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor))
+        .padding(14)
+        .adaptiveGlassSurface(cornerRadius: GlassDesign.compactCornerRadius)
     }
 }
 
@@ -139,6 +142,7 @@ struct LogsList: View {
                 LogEntryRow(entry: entry)
                     .id(entry.id)
             }
+            .scrollContentBackground(.hidden)
             .onChange(of: logs.count) { _ in
                 if autoScroll, let lastLog = logs.last {
                     withAnimation {

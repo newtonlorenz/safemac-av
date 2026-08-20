@@ -13,7 +13,7 @@ struct OnboardingView: View {
                 UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
                 isPresented = false
             }
-            .buttonStyle(.borderedProminent)
+            .adaptiveGlassButton(prominent: true)
         }
         .padding(32)
         .frame(width: 420)

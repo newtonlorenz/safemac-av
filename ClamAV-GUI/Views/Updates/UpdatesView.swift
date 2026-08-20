@@ -10,25 +10,31 @@ struct UpdatesView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 24) {
-                SignatureStatusCard(info: signatureInfo)
+            AdaptiveGlassEffectContainer(spacing: 20) {
+                VStack(spacing: 20) {
+                    SignatureStatusCard(info: signatureInfo)
 
-                UpdateActionCard(
-                    isUpdating: appState.isUpdatingSignatures,
-                    lastResult: appState.lastUpdateResult,
-                    onUpdate: performUpdate
-                )
+                    UpdateActionCard(
+                        isUpdating: appState.isUpdatingSignatures,
+                        lastResult: appState.lastUpdateResult,
+                        onUpdate: performUpdate
+                    )
 
-                if let error = updateError {
-                    ErrorCard(message: error) {
-                        updateError = nil
+                    if let error = updateError {
+                        ErrorCard(message: error) {
+                            updateError = nil
+                        }
                     }
-                }
 
-                AutoUpdateSettingsCard()
+                    AutoUpdateSettingsCard()
+                }
+                .frame(maxWidth: 820)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, GlassDesign.contentPadding)
+                .padding(.vertical, 16)
             }
-            .padding()
         }
+        .accessibilityIdentifier("updates-content")
     }
 
     private func performUpdate() {
@@ -88,10 +94,9 @@ struct SignatureStatusCard: View {
                 .font(.caption)
             }
         }
-        .padding()
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(10)
+        .adaptiveGlassSurface(tint: Color.blue.opacity(0.07))
     }
 }
 
@@ -133,17 +138,16 @@ struct UpdateActionCard: View {
                     .frame(maxWidth: .infinity)
                     .padding()
                 }
-                .buttonStyle(.borderedProminent)
+                .adaptiveGlassButton(prominent: true)
             }
 
             if let result = lastResult {
                 UpdateResultBanner(result: result)
             }
         }
-        .padding()
+        .padding(20)
         .frame(maxWidth: .infinity)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(10)
+        .adaptiveGlassSurface()
     }
 }
 
@@ -265,10 +269,9 @@ struct AutoUpdateSettingsCard: View {
                 }
             }
         }
-        .padding()
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(10)
+        .adaptiveGlassSurface()
     }
 }
 

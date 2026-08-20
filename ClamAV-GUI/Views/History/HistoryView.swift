@@ -12,5 +12,8 @@ struct HistoryView: View {
                 Text("\(entry.threatsFound) threats")
             }
         }
+        .scrollContentBackground(.hidden)
+        .padding(.horizontal, GlassDesign.contentPadding)
+        .accessibilityIdentifier("history-content")
     }
 }

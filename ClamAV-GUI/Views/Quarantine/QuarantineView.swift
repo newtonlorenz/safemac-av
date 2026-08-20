@@ -21,7 +21,7 @@ struct QuarantineView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
             if appState.quarantinedFiles.isEmpty {
                 EmptyQuarantineView()
             } else {
@@ -46,6 +46,9 @@ struct QuarantineView: View {
                 )
             }
         }
+        .padding(.horizontal, GlassDesign.contentPadding)
+        .padding(.bottom, 16)
+        .accessibilityIdentifier("quarantine-content")
         .alert("Restore File?", isPresented: $showingRestoreConfirmation) {
             Button("Cancel", role: .cancel) {
                 fileToRestore = nil
@@ -222,8 +225,8 @@ struct QuarantineToolbar: View {
                 .foregroundColor(.red)
             }
         }
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor))
+        .padding(14)
+        .adaptiveGlassSurface(cornerRadius: GlassDesign.compactCornerRadius)
     }
 }
 
@@ -243,6 +246,7 @@ struct QuarantineList: View {
             )
             .tag(file.id)
         }
+        .scrollContentBackground(.hidden)
     }
 }
 
