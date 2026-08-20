@@ -75,6 +75,65 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.lastUpdateResult?.status, .upToDate)
     }
 
+    func testUpdateSignaturesIgnoresSecondCallWhileFirstUpdateIsInProgress() async throws {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let mockWatcher = MockFileWatcher()
+        let freshclamRunner = AppStateDelayedFreshclamRunner()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: mockWatcher,
+            freshclamRunner: freshclamRunner
+        )
+
+        let firstUpdate = Task { await appState.updateSignatures() }
+        try await waitUntil {
+            freshclamRunner.updateCalls == 1 && appState.isUpdatingSignatures
+        }
+        let inProgressResult = appState.lastUpdateResult
+
+        await appState.updateSignatures()
+
+        XCTAssertEqual(freshclamRunner.updateCalls, 1)
+        XCTAssertTrue(appState.isUpdatingSignatures)
+        XCTAssertEqual(appState.lastUpdateResult, inProgressResult)
+        XCTAssertEqual(appState.lastUpdateResult?.status, .inProgress)
+
+        freshclamRunner.complete(with: .alreadyUpToDate())
+        await firstUpdate.value
+
+        XCTAssertFalse(appState.isUpdatingSignatures)
+        XCTAssertEqual(appState.lastUpdateResult?.status, .upToDate)
+    }
+
+    func testUpdateSignaturesPublishesFailureAndClearsUpdatingState() async throws {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let mockWatcher = MockFileWatcher()
+        let freshclamRunner = AppStateDelayedFreshclamRunner()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: mockWatcher,
+            freshclamRunner: freshclamRunner
+        )
+        let errorMessage = "Freshclam update failed"
+        let updateError = NSError(
+            domain: "AppStateTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: errorMessage]
+        )
+
+        let update = Task { await appState.updateSignatures() }
+        try await waitUntil {
+            freshclamRunner.updateCalls == 1 && appState.isUpdatingSignatures
+        }
+
+        freshclamRunner.complete(throwing: updateError)
+        await update.value
+
+        XCTAssertEqual(appState.lastUpdateResult?.status, .failed)
+        XCTAssertEqual(appState.lastUpdateResult?.message, errorMessage)
+        XCTAssertFalse(appState.isUpdatingSignatures)
+    }
+
     func testSaveSettingsReconfiguresMonitoringAndStopsWhenDisabled() throws {
         let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
@@ -303,6 +362,14 @@ private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol, @un
             return self.continuation
         }
         continuation?.resume(returning: result)
+    }
+
+    func complete(throwing error: Error) {
+        let continuation = lock.withLock {
+            defer { self.continuation = nil }
+            return self.continuation
+        }
+        continuation?.resume(throwing: error)
     }
 }
 
