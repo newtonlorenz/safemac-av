@@ -1,0 +1,8 @@
+# Default upstream maintainer
+* @newtonlorenz
+
+# Security-sensitive workflow and distribution surfaces
+/.github/ @newtonlorenz
+/scripts/ @newtonlorenz
+/ClamAV-GUI/*.entitlements @newtonlorenz
+/ClamAV-GUI-Finder/*.entitlements @newtonlorenz
