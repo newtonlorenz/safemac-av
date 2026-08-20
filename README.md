@@ -5,25 +5,27 @@
 [![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black?logo=apple)](https://support.apple.com/macos)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-An unofficial, native SwiftUI front end for running [ClamAV](https://www.clamav.net/) on macOS. Scan files without assembling long shell commands, update signatures with `freshclam`, review results, quarantine detections, and automate repeat scans from one local app.
+**Scan. Monitor. Quarantine. Keep your Mac under your control.**
+
+ClamAV GUI is a free, open-source Mac security app powered by [ClamAV](https://www.clamav.net/). It turns ClamAV's command-line engine into a complete local malware-scanning workflow. Scan on demand, watch folders, update signatures, quarantine detections, and schedule repeat checks. Review history and start scans from Finder. There are no subscriptions, telemetry, or cloud uploads.
+
+**[Download the latest signed and notarized release →](https://github.com/newtonlorenz/clamav-gui/releases/latest)**
 
 ![ClamAV GUI dashboard](docs/images/dashboard.png)
 
 > [!IMPORTANT]
-> This project is an independent community interface. It is not affiliated with, endorsed by, or supported by Cisco, Talos, or the ClamAV project. ClamAV is installed separately and remains the scanning engine.
+> This project is an independent community app. It is not affiliated with, endorsed by, or supported by Cisco, Talos, or the ClamAV project. ClamAV is installed separately and remains the scanning engine.
 
-## What it does
+## More than a scan button
 
-- Quick scans of Downloads and Desktop, plus custom file or folder scans
-- Configurable `clamscan` options, exclusions, limits, and optional local `clamdscan`
-- Signature status and updates through the installed `freshclam` executable
-- Transactional quarantine metadata, hash verification on restore, and explicit deletion confirmation
-- Daily, weekly, or monthly scans through per-user `launchd` jobs
-- FSEvents-based folder monitoring while the application is running
-- Scan history, operational logs, pause, resume, and cancellation controls
-- Optional Finder context-menu requests through the bundled Finder Sync extension
+- **Scan on demand.** Run quick scans, choose any file or folder, or start from Finder.
+- **Watch important folders.** Monitor selected locations and automatically scan new downloads while the app runs.
+- **Respond to detections.** Review findings, quarantine suspicious files, verify restores, and confirm permanent deletion.
+- **Automate routine checks.** Schedule daily, weekly, or monthly scans and keep signatures current with `freshclam`.
+- **Stay in control.** Configure exclusions and limits, inspect history and logs, and pause, resume, or cancel scans.
+- **Use your preferred engine mode.** Run `clamscan` directly or connect to an optional local `clamdscan` service.
 
-The app has no analytics or telemetry SDK. Its own state stays on the Mac; `freshclam` accesses ClamAV's update infrastructure when you request a signature update.
+Everything the app stores stays on your Mac. There are no analytics or telemetry SDKs. `freshclam` only contacts ClamAV's infrastructure when you request a signature update.
 
 ## Requirements
 
