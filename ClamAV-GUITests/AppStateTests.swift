@@ -45,7 +45,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(appState.shouldOpenCustomScanPicker)
     }
 
-    func testDashboardSignatureFixStartsUpdateAndPublishesProgress() async {
+    func testDashboardSignatureFixStartsUpdateAndPublishesProgress() async throws {
         let mockConfig = AppStateMockConfigManager(settings: .default)
         let mockWatcher = MockFileWatcher()
         let freshclamRunner = AppStateDelayedFreshclamRunner()
@@ -63,14 +63,14 @@ final class AppStateTests: XCTestCase {
 
         DashboardScoreActionHandler.handle(component, appState: appState)
 
-        await waitUntil {
+        try await waitUntil {
             freshclamRunner.updateCalls == 1 && appState.isUpdatingSignatures
         }
 
         XCTAssertEqual(appState.lastUpdateResult?.status, .inProgress)
 
         freshclamRunner.complete(with: .alreadyUpToDate())
-        await waitUntil { !appState.isUpdatingSignatures }
+        try await waitUntil { !appState.isUpdatingSignatures }
 
         XCTAssertEqual(appState.lastUpdateResult?.status, .upToDate)
     }
@@ -133,7 +133,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(mockWatcher.isWatching)
     }
 
-    func testDownloadsDetectedDuringManualScanAreCoalescedAndScannedWhenIdle() async {
+    func testDownloadsDetectedDuringManualScanAreCoalescedAndScannedWhenIdle() async throws {
         var settings = AppSettings.default
         settings.autoScanDownloads = true
         settings.monitoringEnabled = false
@@ -156,14 +156,14 @@ final class AppStateTests: XCTestCase {
         let manualScan = Task { @MainActor in
             await appState.startScan(paths: [manualURL], options: .default, source: .manual)
         }
-        await waitUntil { runner.scanPaths.count == 1 }
+        try await waitUntil { runner.scanPaths.count == 1 }
 
         mockWatcher.detect(firstDownloadURL)
         mockWatcher.detect(secondDownloadURL)
         XCTAssertEqual(runner.scanPaths, [[manualURL]])
 
         runner.resumeNextScan()
-        await waitUntil { runner.scanPaths.count == 2 }
+        try await waitUntil { runner.scanPaths.count == 2 }
         let _ = await manualScan.value
 
         XCTAssertEqual(runner.scanPaths[1], [firstDownloadURL, secondDownloadURL])
@@ -171,11 +171,11 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.currentScanProgress?.status, .preparing)
 
         runner.resumeNextScan()
-        await waitUntil { !appState.isScanning }
+        try await waitUntil { !appState.isScanning }
         XCTAssertNil(appState.currentScanProgress)
     }
 
-    func testDisablingDownloadAutoScanClearsPendingDownloads() async {
+    func testDisablingDownloadAutoScanClearsPendingDownloads() async throws {
         var settings = AppSettings.default
         settings.autoScanDownloads = true
         settings.monitoringEnabled = false
@@ -194,7 +194,7 @@ final class AppStateTests: XCTestCase {
         let manualScan = Task { @MainActor in
             await appState.startScan(paths: [manualURL], options: .default, source: .manual)
         }
-        await waitUntil { runner.scanPaths.count == 1 }
+        try await waitUntil { runner.scanPaths.count == 1 }
 
         mockWatcher.detect(downloadURL)
         await Task.yield()
@@ -214,7 +214,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(runner.scanPaths, [[manualURL]])
     }
 
-    func testReenablingDownloadAutoScanDoesNotStartClearedPendingWork() async {
+    func testReenablingDownloadAutoScanDoesNotStartClearedPendingWork() async throws {
         var settings = AppSettings.default
         settings.autoScanDownloads = true
         settings.monitoringEnabled = false
@@ -233,7 +233,7 @@ final class AppStateTests: XCTestCase {
         let manualScan = Task { @MainActor in
             await appState.startScan(paths: [manualURL], options: .default, source: .manual)
         }
-        await waitUntil { runner.scanPaths.count == 1 }
+        try await waitUntil { runner.scanPaths.count == 1 }
 
         mockWatcher.detect(downloadURL)
         for _ in 0..<20 {
@@ -256,21 +256,40 @@ final class AppStateTests: XCTestCase {
 
     private func waitUntil(
         _ condition: @escaping @MainActor () -> Bool
-    ) async {
-        while !condition() {
-            await Task.yield()
+    ) async throws {
+        for _ in 0..<500 {
+            if condition() {
+                return
+            }
+            try await Task<Never, Never>.sleep(nanoseconds: 10_000_000)
         }
+        throw AppStateTestError.conditionTimedOut
     }
 }
 
-private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol {
-    private(set) var updateCalls = 0
+private enum AppStateTestError: LocalizedError {
+    case conditionTimedOut
+
+    var errorDescription: String? {
+        "Timed out waiting for an asynchronous AppState test condition."
+    }
+}
+
+private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedUpdateCalls = 0
     private var continuation: CheckedContinuation<UpdateResult, Error>?
 
+    var updateCalls: Int {
+        lock.withLock { storedUpdateCalls }
+    }
+
     func update() async throws -> UpdateResult {
-        updateCalls += 1
         return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
+            lock.withLock {
+                self.continuation = continuation
+                storedUpdateCalls += 1
+            }
         }
     }
 
@@ -279,8 +298,11 @@ private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol {
     }
 
     func complete(with result: UpdateResult) {
+        let continuation = lock.withLock {
+            defer { self.continuation = nil }
+            return self.continuation
+        }
         continuation?.resume(returning: result)
-        continuation = nil
     }
 }
 
