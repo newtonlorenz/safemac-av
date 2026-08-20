@@ -9,6 +9,7 @@ final class AppState: ObservableObject {
     @Published var isScanPaused = false
     @Published var lastScanResult: ScanReport?
     @Published var lastUpdateResult: UpdateResult?
+    @Published var isUpdatingSignatures = false
     @Published var quarantinedFiles: [QuarantinedFile] = []
     @Published var settings: AppSettings
     @Published var logs: [LogEntry] = []
@@ -18,7 +19,7 @@ final class AppState: ObservableObject {
 
     let configManager: ConfigManagerProtocol
     let clamAVRunner: ClamAVRunner
-    let freshclamRunner: FreshclamRunner
+    let freshclamRunner: FreshclamRunnerProtocol
     let quarantineManager: QuarantineManager
     let scanScheduler: ScanScheduler
     let fileWatcher: FileWatcherProtocol
@@ -37,6 +38,7 @@ final class AppState: ObservableObject {
         scanScheduler: ScanScheduler = ScanScheduler(),
         fileWatcher: FileWatcherProtocol? = nil,
         scanCoordinator: ScanCoordinator? = nil,
+        freshclamRunner: FreshclamRunnerProtocol? = nil,
         externalScanRequestStore: ExternalScanRequestStore = ExternalScanRequestStore(),
         scanHistoryManager: ScanHistoryManager = ScanHistoryManager()
     ) {
@@ -46,7 +48,7 @@ final class AppState: ObservableObject {
         self.configManager = configManager
         self.settings = loadedSettings
         self.clamAVRunner = runner
-        self.freshclamRunner = FreshclamRunner(configManager: configManager)
+        self.freshclamRunner = freshclamRunner ?? FreshclamRunner(configManager: configManager)
         self.quarantineManager = QuarantineManager(configManager: configManager)
         self.scanScheduler = scanScheduler
         self.fileWatcher = fileWatcher ?? FileWatcher(
@@ -215,7 +217,16 @@ final class AppState: ObservableObject {
     }
 
     func updateSignatures() async {
+        guard !isUpdatingSignatures else {
+            addLog(.info, "Signature update already in progress")
+            return
+        }
+
+        isUpdatingSignatures = true
+        lastUpdateResult = .inProgress()
         addLog(.info, "Starting signature update...")
+        defer { isUpdatingSignatures = false }
+
         do {
             let result = try await freshclamRunner.update()
             lastUpdateResult = result

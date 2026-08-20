@@ -2,7 +2,6 @@ import SwiftUI
 
 struct UpdatesView: View {
     @EnvironmentObject var appState: AppState
-    @State private var isUpdating = false
     @State private var updateError: String?
 
     var signatureInfo: SignatureInfo {
@@ -15,7 +14,7 @@ struct UpdatesView: View {
                 SignatureStatusCard(info: signatureInfo)
 
                 UpdateActionCard(
-                    isUpdating: isUpdating,
+                    isUpdating: appState.isUpdatingSignatures,
                     lastResult: appState.lastUpdateResult,
                     onUpdate: performUpdate
                 )
@@ -33,7 +32,6 @@ struct UpdatesView: View {
     }
 
     private func performUpdate() {
-        isUpdating = true
         updateError = nil
 
         Task {
@@ -41,7 +39,6 @@ struct UpdatesView: View {
             if appState.lastUpdateResult?.status == .failed {
                 updateError = appState.lastUpdateResult?.message
             }
-            isUpdating = false
         }
     }
 }

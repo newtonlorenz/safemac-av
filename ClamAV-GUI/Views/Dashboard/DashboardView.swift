@@ -7,7 +7,7 @@ struct DashboardView: View {
         ScrollView {
             VStack(spacing: 20) {
                 ProtectionScoreView(score: appState.protectionScore) { component in
-                    handleScoreAction(component)
+                    DashboardScoreActionHandler.handle(component, appState: appState)
                 }
 
                 StatusCardsSection()
@@ -21,8 +21,11 @@ struct DashboardView: View {
             .padding()
         }
     }
+}
 
-    private func handleScoreAction(_ component: ScoreComponent) {
+@MainActor
+enum DashboardScoreActionHandler {
+    static func handle(_ component: ScoreComponent, appState: AppState) {
         switch component.action {
         case .configureClamAV:
             appState.selectedTab = .settings
