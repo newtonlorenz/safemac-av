@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProtectionScoreView: View {
     let score: ProtectionScore
+    @EnvironmentObject var appState: AppState
     let onAction: (ScoreComponent) -> Void
 
     var body: some View {
@@ -21,7 +22,17 @@ struct ProtectionScoreView: View {
                     Text(component.title)
                     Spacer()
                     if component.action != nil {
-                        Button("Fix") { onAction(component) }
+                        if isUpdating(component) {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                Text("Updating...")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            Button("Fix") { onAction(component) }
+                        }
                     }
                 }
             }
@@ -29,5 +40,9 @@ struct ProtectionScoreView: View {
         .padding()
         .background(Color(nsColor: .controlBackgroundColor))
         .cornerRadius(10)
+    }
+
+    private func isUpdating(_ component: ScoreComponent) -> Bool {
+        component.action == .updateSignatures && appState.isUpdatingSignatures
     }
 }

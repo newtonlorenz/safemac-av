@@ -45,6 +45,36 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(appState.shouldOpenCustomScanPicker)
     }
 
+    func testDashboardSignatureFixStartsUpdateAndPublishesProgress() async {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let mockWatcher = MockFileWatcher()
+        let freshclamRunner = AppStateDelayedFreshclamRunner()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: mockWatcher,
+            freshclamRunner: freshclamRunner
+        )
+        let component = ScoreComponent(
+            title: "Signatures Up to Date",
+            isComplete: false,
+            points: 25,
+            action: .updateSignatures
+        )
+
+        DashboardScoreActionHandler.handle(component, appState: appState)
+
+        await waitUntil {
+            freshclamRunner.updateCalls == 1 && appState.isUpdatingSignatures
+        }
+
+        XCTAssertEqual(appState.lastUpdateResult?.status, .inProgress)
+
+        freshclamRunner.complete(with: .alreadyUpToDate())
+        await waitUntil { !appState.isUpdatingSignatures }
+
+        XCTAssertEqual(appState.lastUpdateResult?.status, .upToDate)
+    }
+
     func testSaveSettingsReconfiguresMonitoringAndStopsWhenDisabled() throws {
         let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
@@ -230,6 +260,27 @@ final class AppStateTests: XCTestCase {
         while !condition() {
             await Task.yield()
         }
+    }
+}
+
+private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol {
+    private(set) var updateCalls = 0
+    private var continuation: CheckedContinuation<UpdateResult, Error>?
+
+    func update() async throws -> UpdateResult {
+        updateCalls += 1
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func checkForUpdates() async throws -> Bool {
+        true
+    }
+
+    func complete(with result: UpdateResult) {
+        continuation?.resume(returning: result)
+        continuation = nil
     }
 }
 

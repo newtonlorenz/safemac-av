@@ -40,6 +40,17 @@ struct UpdateResult: Equatable {
             message: error
         )
     }
+
+    static func inProgress() -> UpdateResult {
+        UpdateResult(
+            timestamp: Date(),
+            status: .inProgress,
+            mainVersion: nil,
+            dailyVersion: nil,
+            bytecodeVersion: nil,
+            message: "Updating signatures..."
+        )
+    }
 }
 
 enum UpdateStatus: String, Equatable {
