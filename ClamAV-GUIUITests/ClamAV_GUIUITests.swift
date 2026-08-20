@@ -38,9 +38,74 @@ final class ClamAV_GUIUITests: XCTestCase {
             let button = app.buttons[tab.button]
             XCTAssertTrue(button.waitForExistence(timeout: 2), "Missing sidebar button \(tab.button)")
             button.click()
+            XCTAssertTrue(button.isSelected, "Expected \(tab.button) to expose its selected state")
 
             let title = app.descendants(matching: .any)[tab.title]
             XCTAssertTrue(title.waitForExistence(timeout: 2), "Detail did not switch to \(tab.title)")
         }
+    }
+
+    func testModernShellExposesItsPrimarySurfaces() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--ui-testing",
+            "-ApplePersistenceIgnoreState", "YES",
+            "-hasCompletedOnboarding", "YES",
+            "--force-light-appearance"
+        ]
+        app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
+        app.launch()
+
+        app.activate()
+        let fileMenu = app.menuBars.menuBarItems["File"]
+        XCTAssertTrue(fileMenu.waitForExistence(timeout: 5), "Expected the File menu")
+        fileMenu.click()
+
+        let newWindow = app.menuItems["New Window"]
+        XCTAssertTrue(newWindow.waitForExistence(timeout: 5), "Expected the default New Window command")
+        newWindow.click()
+
+        let appShell = app.descendants(matching: .any)["app-shell"]
+        XCTAssertTrue(appShell.waitForExistence(timeout: 5))
+        XCTAssertEqual(appShell.label, "light")
+        XCTAssertTrue(app.descendants(matching: .any)["primary-sidebar"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["detail-header"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["dashboard-content"].exists)
+
+        let screenshot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        screenshot.name = "Modern dashboard"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testModernShellSupportsDarkAppearance() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--ui-testing",
+            "-ApplePersistenceIgnoreState", "YES",
+            "-hasCompletedOnboarding", "YES",
+            "--force-dark-appearance"
+        ]
+        app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
+        app.launch()
+
+        app.activate()
+        let fileMenu = app.menuBars.menuBarItems["File"]
+        XCTAssertTrue(fileMenu.waitForExistence(timeout: 5), "Expected the File menu")
+        fileMenu.click()
+
+        let newWindow = app.menuItems["New Window"]
+        XCTAssertTrue(newWindow.waitForExistence(timeout: 5), "Expected the default New Window command")
+        newWindow.click()
+
+        let appShell = app.descendants(matching: .any)["app-shell"]
+        XCTAssertTrue(appShell.waitForExistence(timeout: 5))
+        XCTAssertEqual(appShell.label, "dark")
+        XCTAssertTrue(app.descendants(matching: .any)["dashboard-content"].exists)
+
+        let screenshot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        screenshot.name = "Modern dashboard dark"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 }

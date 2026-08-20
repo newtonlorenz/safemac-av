@@ -5,21 +5,27 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                ProtectionScoreView(score: appState.protectionScore) { component in
-                    DashboardScoreActionHandler.handle(component, appState: appState)
+            AdaptiveGlassEffectContainer(spacing: 20) {
+                VStack(spacing: 20) {
+                    ProtectionScoreView(score: appState.protectionScore) { component in
+                        DashboardScoreActionHandler.handle(component, appState: appState)
+                    }
+
+                    StatusCardsSection()
+
+                    QuickActionsSection()
+
+                    if let lastScan = appState.lastScanResult {
+                        LastScanSection(report: lastScan)
+                    }
                 }
-
-                StatusCardsSection()
-
-                QuickActionsSection()
-
-                if let lastScan = appState.lastScanResult {
-                    LastScanSection(report: lastScan)
-                }
+                .frame(maxWidth: GlassDesign.contentMaxWidth)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, GlassDesign.contentPadding)
+                .padding(.vertical, 16)
             }
-            .padding()
         }
+        .accessibilityIdentifier("dashboard-content")
     }
 }
 
@@ -49,9 +55,7 @@ struct StatusCardsSection: View {
 
     var body: some View {
         LazyVGrid(columns: [
-            GridItem(.flexible()),
-            GridItem(.flexible()),
-            GridItem(.flexible())
+            GridItem(.adaptive(minimum: 180, maximum: 320), spacing: 16)
         ], spacing: 16) {
             StatusCard(
                 title: "ClamAV Status",
@@ -139,9 +143,13 @@ struct StatusCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 10) {
                 Image(systemName: icon)
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(color)
+                    .frame(width: 34, height: 34)
+                    .background(color.opacity(0.12), in: Circle())
+
                 Text(title)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -153,9 +161,10 @@ struct StatusCard: View {
                 .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(10)
+        .padding(16)
+        .adaptiveGlassSurface(tint: color.opacity(0.08))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title), \(value)")
     }
 }
 
@@ -167,7 +176,9 @@ struct QuickActionsSection: View {
             Text("Quick Actions")
                 .font(.headline)
 
-            HStack(spacing: 12) {
+            LazyVGrid(columns: [
+                GridItem(.adaptive(minimum: 150, maximum: 260), spacing: 12)
+            ], spacing: 12) {
                 QuickActionButton(
                     title: "Scan Downloads",
                     icon: "arrow.down.doc",
@@ -220,17 +231,28 @@ struct QuickActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.title2)
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .background(color.opacity(0.12), in: Circle())
                 Text(title)
-                    .font(.caption)
+                    .font(.subheadline.weight(.medium))
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity)
-            .padding()
-            .background(color.opacity(0.1))
+            .padding(12)
             .foregroundColor(color)
-            .cornerRadius(10)
+            .adaptiveGlassSurface(
+                tint: color.opacity(0.10),
+                interactive: true,
+                cornerRadius: GlassDesign.compactCornerRadius
+            )
         }
         .buttonStyle(.plain)
     }
@@ -283,9 +305,8 @@ struct LastScanSection: View {
                 }
             }
         }
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(10)
+        .padding(18)
+        .adaptiveGlassSurface()
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {
@@ -330,9 +351,20 @@ struct InstallationStatusBadge: View {
                 .font(.caption)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(12)
+        .padding(.vertical, 6)
+        .background(
+            (status.isReady ? Color.green : Color.orange).opacity(0.11),
+            in: Capsule()
+        )
+        .overlay {
+            Capsule()
+                .strokeBorder(
+                    (status.isReady ? Color.green : Color.orange).opacity(0.20),
+                    lineWidth: 0.75
+                )
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(status.isReady ? "ClamAV is ready" : "ClamAV setup required")
     }
 }
 

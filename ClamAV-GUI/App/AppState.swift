@@ -16,6 +16,7 @@ final class AppState: ObservableObject {
     @Published var scanError: String?
     @Published var settingsSaveError: String?
     @Published var shouldOpenCustomScanPicker = false
+    @Published private(set) var protectionScore: ProtectionScore
 
     let configManager: ConfigManagerProtocol
     let clamAVRunner: ClamAVRunner
@@ -58,7 +59,13 @@ final class AppState: ObservableObject {
         self.scanCoordinator = scanCoordinator ?? ScanCoordinator(clamAVRunner: runner)
         self.externalScanRequestStore = externalScanRequestStore
         self.scanHistoryManager = scanHistoryManager
-        self.protectionScoreManager = ProtectionScoreManager(configManager: configManager)
+        let scoreManager = ProtectionScoreManager(configManager: configManager)
+        self.protectionScoreManager = scoreManager
+        self.protectionScore = scoreManager.calculateScore(
+            lastScanDate: nil,
+            monitoringEnabled: loadedSettings.monitoringEnabled,
+            finderExtensionEnabled: FinderExtensionManager.isEnabled
+        )
 
         loadQuarantinedFiles()
         setupNotifications()
@@ -185,6 +192,7 @@ final class AppState: ObservableObject {
             isScanPaused = false
             currentScanProgress = nil
         }
+        refreshProtectionScore()
         return outcome
     }
 
@@ -235,6 +243,7 @@ final class AppState: ObservableObject {
             lastUpdateResult = .failed(error: error.localizedDescription)
             addLog(.error, "Signature update failed: \(error.localizedDescription)")
         }
+        refreshProtectionScore()
     }
 
     func loadQuarantinedFiles() {
@@ -265,10 +274,11 @@ final class AppState: ObservableObject {
             pendingAutomaticDownloadPaths.removeAll()
         }
         configureMonitoring()
+        refreshProtectionScore()
     }
 
-    var protectionScore: ProtectionScore {
-        protectionScoreManager.calculateScore(
+    func refreshProtectionScore() {
+        protectionScore = protectionScoreManager.calculateScore(
             lastScanDate: lastScanResult?.endTime,
             monitoringEnabled: settings.monitoringEnabled,
             finderExtensionEnabled: FinderExtensionManager.isEnabled

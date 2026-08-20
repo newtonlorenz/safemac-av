@@ -5,16 +5,22 @@ struct SettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                ClamAVPathsSection()
-                ScannerBackendSection()
-                AutomationSettingsView()
-                ExclusionsSection()
-                MonitoringSection()
-                NotificationsSection()
+            AdaptiveGlassEffectContainer(spacing: 20) {
+                VStack(spacing: 20) {
+                    ClamAVPathsSection()
+                    ScannerBackendSection()
+                    AutomationSettingsView()
+                    ExclusionsSection()
+                    MonitoringSection()
+                    NotificationsSection()
+                }
+                .frame(maxWidth: 900)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, GlassDesign.contentPadding)
+                .padding(.vertical, 16)
             }
-            .padding()
         }
+        .accessibilityIdentifier("settings-content")
     }
 }
 
@@ -73,7 +79,7 @@ struct ClamAVPathsSection: View {
                     Button("Save") {
                         appState.saveSettings()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .adaptiveGlassButton(prominent: true)
                 }
             }
         }
@@ -200,7 +206,7 @@ struct ScannerBackendSection: View {
                         Button("Save") {
                             appState.saveSettings()
                         }
-                        .buttonStyle(.borderedProminent)
+                        .adaptiveGlassButton(prominent: true)
                     }
 
                     Text("clamdscan reduces repeated scan overhead when a local clamd daemon is configured. Remote TCP clamd is not configured by this app.")
@@ -451,10 +457,9 @@ struct SettingsSection<Content: View>: View {
 
             content
         }
-        .padding()
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(10)
+        .adaptiveGlassSurface()
     }
 }
 

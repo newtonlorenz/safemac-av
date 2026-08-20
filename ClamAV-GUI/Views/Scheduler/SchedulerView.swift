@@ -8,7 +8,7 @@ struct SchedulerView: View {
     @State private var actionError: SchedulerActionError?
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
             if scheduledJobs.isEmpty {
                 EmptySchedulerView {
                     showingAddJob = true
@@ -25,7 +25,8 @@ struct SchedulerView: View {
                     }
                     .buttonStyle(.bordered)
                 }
-                .padding()
+                .padding(14)
+                .adaptiveGlassSurface(cornerRadius: GlassDesign.compactCornerRadius)
 
                 ScheduledJobsList(
                     jobs: $scheduledJobs,
@@ -35,6 +36,9 @@ struct SchedulerView: View {
                 )
             }
         }
+        .padding(.horizontal, GlassDesign.contentPadding)
+        .padding(.bottom, 16)
+        .accessibilityIdentifier("scheduler-content")
         .onAppear {
             scheduledJobs = appState.scanScheduler.listScheduledScans()
         }
@@ -140,10 +144,12 @@ struct EmptySchedulerView: View {
                 .multilineTextAlignment(.center)
 
             Button("Create Scheduled Scan", action: onAddJob)
-                .buttonStyle(.borderedProminent)
+                .adaptiveGlassButton(prominent: true)
         }
+        .frame(maxWidth: 620, maxHeight: 420)
+        .padding(30)
+        .adaptiveGlassSurface(tint: Color.blue.opacity(0.06), cornerRadius: 28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
     }
 }
 
@@ -164,6 +170,7 @@ struct ScheduledJobsList: View {
                 )
             }
         }
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -383,7 +390,7 @@ struct ScheduleJobEditor: View {
                 }
                 .keyboardShortcut(.return)
                 .disabled(name.isEmpty || paths.isEmpty)
-                .buttonStyle(.borderedProminent)
+                .adaptiveGlassButton(prominent: true)
             }
             .padding()
         }
