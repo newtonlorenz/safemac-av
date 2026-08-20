@@ -21,11 +21,13 @@ Open `ClamAV-GUI.xcodeproj` and use the shared `ClamAV-GUI` scheme.
 
 ## Working on a change
 
-1. Create a focused branch from `main`.
-2. Add or update a test that demonstrates the behavior.
-3. Make the smallest implementation that passes the test.
-4. Run the unit suite, a Release build, and any affected UI flow.
-5. Update README, architecture, or changelog entries when behavior changes.
+1. Update a clean local `main` with `git pull --ff-only origin main`.
+2. Create a focused branch from `main`. Never commit or push directly to `main`.
+3. Add or update a test that demonstrates the behavior.
+4. Make the smallest implementation that passes the test.
+5. Run the unit suite, a Release build, and any affected UI flow.
+6. Review the complete diff for secrets, private paths, signing assets, and generated output.
+7. Update README, architecture, or changelog entries when behavior changes.
 
 Prefer value semantics and new values over shared mutation. Validate filesystem paths and external data at boundaries. Errors affecting scans, quarantine, schedules, or user data should be visible to the user and retain enough context for diagnosis without exposing unrelated private information.
 
@@ -70,6 +72,10 @@ An ad-hoc or development-signed local test run is sufficient. With `CODE_SIGNING
 
 ## Pull requests
 
+Every tracked change must arrive through a pull request. This includes documentation, CI, release scripts, and maintenance changes. Direct pushes, local merges into `main`, and public-history rewrites are not accepted.
+
+Push the branch with `git push -u origin <branch>`, then open a focused pull request. Upstream merges use squash merge to keep `main` linear. Delete the merged branch afterward.
+
 Use a conventional commit subject where practical, for example:
 
 ```text
@@ -77,6 +83,19 @@ fix: preserve quarantine state when metadata writes fail
 ```
 
 A pull request should explain the problem, the chosen behavior, security or privacy impact, and exact verification performed. Screenshots are useful for visible UI changes. Keep generated build output out of the diff.
+
+Resolve review conversations before merge. Do not merge with failing or unavailable CI unless the maintainer explicitly approves and documents an exception in the pull request.
+
+## Maintainer release workflow
+
+1. Merge version, changelog, packaging, and release-note changes through a pull request.
+2. Tag the reviewed commit on `main`. Do not move or replace a published tag.
+3. Build from a clean tag and run the documented verification suite.
+4. Sign with Developer ID, notarize with Apple, and staple the ticket.
+5. Publish a universal `arm64` and `x86_64` DMG with `SHA256SUMS.txt`.
+6. Download the published assets and verify their checksum, signature, notarization, Gatekeeper result, and installed UI.
+
+Published tags and assets are immutable. Publish a new semantic version for corrections.
 
 ## Fork and distribution checklist
 
