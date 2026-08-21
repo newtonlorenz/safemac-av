@@ -9,10 +9,8 @@ struct ClamAVApp: App {
     @NSApplicationDelegateAdaptor(MenuBarApplicationDelegate.self) private var applicationDelegate
     @StateObject private var appState: AppState
     @StateObject private var menuBarManager = MenuBarManager()
-    @StateObject private var initialLaunchHandler = InitialLaunchHandler()
     private let launchMode: LaunchMode
     @State private var presentsMenuBarExtra: Bool
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openWindow) private var openWindow
 
     init() {
@@ -24,6 +22,28 @@ struct ClamAVApp: App {
             startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices
         )
         _appState = StateObject(wrappedValue: appState)
+        let isAutomatedTestLaunch = CommandLine.arguments.contains("--ui-testing")
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let bundleURL = Bundle.main.bundleURL
+        ApplicationLaunchLifecycle.shared.install(
+            runInitialInteractive: {
+                if SignatureScheduleReconciliationPolicy.shouldReconcile(
+                    bundleURL: bundleURL,
+                    isAutomatedTest: isAutomatedTestLaunch
+                ) {
+                    appState.reconcileSignatureUpdateSchedule()
+                }
+                await appState.drainExternalScanRequests()
+            },
+            runActiveInteractive: {
+                appState.refreshProtectionScore()
+                appState.refreshLaunchAtLoginStatus()
+                await appState.drainExternalScanRequests()
+            },
+            runScheduledScan: { jobID, paths in
+                await appState.runScheduledScan(jobID: jobID, paths: paths)
+            }
+        )
         ScheduledSignatureUpdateLifecycle.shared.install {
             await appState.runScheduledSignatureUpdate()
         }
@@ -35,21 +55,11 @@ struct ClamAVApp: App {
                 .environmentObject(appState)
                 .preferredColorScheme(uiTestColorScheme)
                 .background(MainWindowIdentifier(identifier: Self.mainWindowID))
-                .task {
-                    menuBarManager.applyDockVisibility(hidden: currentLaunchModeHidesDock)
-                    await handleInitialLaunch()
-                }
                 .onChange(of: appState.settings.hideFromDock) { isHidden in
                     menuBarManager.applyDockVisibility(hidden: launchMode.hidesDock(
                         settings: updatedSettings(hideFromDock: isHidden),
                         isUITesting: isUITesting
                     ))
-                }
-                .onChange(of: scenePhase) { phase in
-                    guard phase == .active, launchMode.runsActiveSceneMaintenance else { return }
-                    appState.refreshProtectionScore()
-                    appState.refreshLaunchAtLoginStatus()
-                    Task { await appState.drainExternalScanRequests() }
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -67,9 +77,10 @@ struct ClamAVApp: App {
             Image(systemName: menuBarIcon)
                 .accessibilityLabel("SafeMac AV")
                 .accessibilityIdentifier("safe-mac-menu-bar-item")
-                .task {
-                    await handleInitialLaunch()
-                }
+                .background(MainWindowPresentationBridge(
+                    lifecycle: .shared,
+                    openWindow: openWindow
+                ))
         }
         .menuBarExtraStyle(.window)
     }
@@ -83,15 +94,6 @@ struct ClamAVApp: App {
 
     private var isUITesting: Bool {
         CommandLine.arguments.contains("--ui-testing")
-    }
-
-    private var isAutomatedTestLaunch: Bool {
-        isUITesting
-            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-    }
-
-    private var currentLaunchModeHidesDock: Bool {
-        launchMode.hidesDock(settings: appState.settings, isUITesting: isUITesting)
     }
 
     private func updatedSettings(hideFromDock: Bool) -> AppSettings {
@@ -112,65 +114,24 @@ struct ClamAVApp: App {
         return nil
     }
 
-    @MainActor
-    private func handleInitialLaunch() async {
-        await initialLaunchHandler.handle(
-            launchMode: launchMode,
-            shouldPresentInteractiveMainWindow: !currentLaunchModeHidesDock,
-            presentInteractiveMainWindow: {
-                menuBarManager.activateMainWindow {
-                    openWindow(id: Self.mainWindowID)
-                }
-            },
-            drainExternalScanRequests: {
-                if SignatureScheduleReconciliationPolicy.shouldReconcile(
-                    bundleURL: Bundle.main.bundleURL,
-                    isAutomatedTest: isAutomatedTestLaunch
-                ) {
-                    appState.reconcileSignatureUpdateSchedule()
-                }
-                await appState.drainExternalScanRequests()
-            },
-            runScheduledScan: { jobID, paths in
-                await appState.runScheduledScan(jobID: jobID, paths: paths)
-            }
-        )
-    }
 }
 
-@MainActor
-final class InitialLaunchHandler: ObservableObject {
-    private var didHandleInitialLaunch = false
+private struct MainWindowPresentationBridge: NSViewRepresentable {
+    let lifecycle: MainWindowPresentationLifecycle
+    let openWindow: OpenWindowAction
 
-    func handle(
-        launchMode: LaunchMode,
-        shouldPresentInteractiveMainWindow: Bool,
-        presentInteractiveMainWindow: () -> Void,
-        drainExternalScanRequests: () async -> Void,
-        runScheduledScan: (UUID?, [URL]) async -> Void
-    ) async {
-        guard !didHandleInitialLaunch else { return }
-        didHandleInitialLaunch = true
-
-        switch launchMode {
-        case .interactive:
-            if shouldPresentInteractiveMainWindow {
-                presentInteractiveMainWindow()
-                await waitForWindowPresentationTurn()
-            }
-            await drainExternalScanRequests()
-        case .scheduledScan(let jobID, let paths):
-            await runScheduledScan(jobID, paths)
-        case .scheduledSignatureUpdate:
-            break
-        }
+    func makeNSView(context: Context) -> NSView {
+        installAction()
+        return NSView(frame: .zero)
     }
 
-    private func waitForWindowPresentationTurn() async {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async {
-                continuation.resume()
-            }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        installAction()
+    }
+
+    private func installAction() {
+        lifecycle.install {
+            openWindow(id: ClamAVApp.mainWindowID)
         }
     }
 }
