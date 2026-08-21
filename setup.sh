@@ -45,7 +45,7 @@ while (($# > 0)); do
 done
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
-    echo "ClamAV GUI requires macOS." >&2
+    echo "SafeMac AV requires macOS." >&2
     exit 1
 fi
 

@@ -2,7 +2,7 @@
 
 ## Our standard
 
-We want participation in ClamAV GUI to be safe, useful, and welcoming. Contributors and maintainers are expected to:
+We want participation in SafeMac AV to be safe, useful, and welcoming. Contributors and maintainers are expected to:
 
 - communicate with empathy, patience, and respect;
 - critique ideas and code without attacking people;

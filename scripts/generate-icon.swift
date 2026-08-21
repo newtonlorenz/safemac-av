@@ -33,20 +33,23 @@ struct AssetContents: Encodable {
 }
 
 enum IconGenerationError: LocalizedError {
+    case sourceIconMissing(String)
+    case sourceIconUnreadable(String)
     case bitmapCreationFailed(Int)
     case graphicsContextUnavailable
-    case gradientCreationFailed(String)
     case pngEncodingFailed(String)
     case invalidGeneratedDimensions(path: String, expected: Int, actualWidth: Int, actualHeight: Int)
 
     var errorDescription: String? {
         switch self {
+        case .sourceIconMissing(let path):
+            return "Source icon not found at \(path)."
+        case .sourceIconUnreadable(let path):
+            return "Could not read the source icon at \(path)."
         case .bitmapCreationFailed(let size):
             return "Could not create a \(size)x\(size) bitmap."
         case .graphicsContextUnavailable:
             return "Could not create an AppKit graphics context."
-        case .gradientCreationFailed(let name):
-            return "Could not create the \(name) gradient."
         case .pngEncodingFailed(let path):
             return "Could not encode PNG data for \(path)."
         case let .invalidGeneratedDimensions(path, expected, actualWidth, actualHeight):
@@ -59,118 +62,13 @@ let iconSpecs = [16, 32, 128, 256, 512].flatMap { pointSize in
     [1, 2].map { scale in IconSpec(pointSize: pointSize, scale: scale) }
 }
 
-func makeGradient(colors: [NSColor], name: String) throws -> NSGradient {
-    guard let gradient = NSGradient(colors: colors) else {
-        throw IconGenerationError.gradientCreationFailed(name)
+func loadSourceIcon(at url: URL) throws -> NSImage {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+        throw IconGenerationError.sourceIconMissing(url.path)
     }
-    return gradient
-}
-
-func createShieldIcon(size: CGFloat) throws -> NSImage {
-    let image = NSImage(size: NSSize(width: size, height: size))
-    image.lockFocus()
-    defer { image.unlockFocus() }
-
-    guard let context = NSGraphicsContext.current?.cgContext else {
-        throw IconGenerationError.graphicsContextUnavailable
+    guard let image = NSImage(contentsOf: url) else {
+        throw IconGenerationError.sourceIconUnreadable(url.path)
     }
-
-    let padding = size * 0.08
-    let drawSize = size - (padding * 2)
-    let centerX = size / 2
-    let centerY = size / 2
-
-    let shieldPath = NSBezierPath()
-    let shieldWidth = drawSize * 0.8
-    let shieldHeight = drawSize * 0.9
-    let topY = centerY + shieldHeight * 0.45
-    let bottomY = centerY - shieldHeight * 0.55
-    let midY = centerY - shieldHeight * 0.05
-
-    let topLeft = CGPoint(x: centerX - shieldWidth / 2, y: topY - shieldHeight * 0.1)
-    let topRight = CGPoint(x: centerX + shieldWidth / 2, y: topY - shieldHeight * 0.1)
-    let topCenter = CGPoint(x: centerX, y: topY)
-    let bottomPoint = CGPoint(x: centerX, y: bottomY)
-    let leftMid = CGPoint(x: centerX - shieldWidth / 2, y: midY)
-    let rightMid = CGPoint(x: centerX + shieldWidth / 2, y: midY)
-
-    shieldPath.move(to: topCenter)
-    shieldPath.curve(
-        to: topRight,
-        controlPoint1: CGPoint(x: centerX + shieldWidth * 0.25, y: topY),
-        controlPoint2: CGPoint(x: centerX + shieldWidth * 0.4, y: topY - shieldHeight * 0.05)
-    )
-    shieldPath.line(to: rightMid)
-    shieldPath.curve(
-        to: bottomPoint,
-        controlPoint1: CGPoint(x: centerX + shieldWidth / 2, y: midY - shieldHeight * 0.2),
-        controlPoint2: CGPoint(x: centerX + shieldWidth * 0.2, y: bottomY + shieldHeight * 0.1)
-    )
-    shieldPath.curve(
-        to: leftMid,
-        controlPoint1: CGPoint(x: centerX - shieldWidth * 0.2, y: bottomY + shieldHeight * 0.1),
-        controlPoint2: CGPoint(x: centerX - shieldWidth / 2, y: midY - shieldHeight * 0.2)
-    )
-    shieldPath.line(to: topLeft)
-    shieldPath.curve(
-        to: topCenter,
-        controlPoint1: CGPoint(x: centerX - shieldWidth * 0.4, y: topY - shieldHeight * 0.05),
-        controlPoint2: CGPoint(x: centerX - shieldWidth * 0.25, y: topY)
-    )
-    shieldPath.close()
-
-    let shieldGradient = try makeGradient(
-        colors: [
-            NSColor(red: 0.204, green: 0.780, blue: 0.349, alpha: 1.0),
-            NSColor(red: 0.0, green: 0.780, blue: 0.745, alpha: 1.0)
-        ],
-        name: "shield"
-    )
-    let highlightGradient = try makeGradient(
-        colors: [NSColor.white.withAlphaComponent(0.3), NSColor.white.withAlphaComponent(0.0)],
-        name: "highlight"
-    )
-
-    context.saveGState()
-    let shadow = NSShadow()
-    shadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
-    shadow.shadowOffset = NSSize(width: 0, height: -size * 0.02)
-    shadow.shadowBlurRadius = size * 0.05
-    shadow.set()
-    shieldGradient.draw(in: shieldPath, angle: -90)
-    context.restoreGState()
-
-    context.saveGState()
-    shieldPath.addClip()
-    let highlightRect = NSRect(
-        x: centerX - shieldWidth / 2,
-        y: centerY,
-        width: shieldWidth,
-        height: shieldHeight / 2
-    )
-    highlightGradient.draw(in: highlightRect, angle: -90)
-    context.restoreGState()
-
-    let checkPath = NSBezierPath()
-    let checkSize = drawSize * 0.35
-    let checkCenterY = centerY - shieldHeight * 0.05
-    checkPath.move(to: CGPoint(x: centerX - checkSize * 0.4, y: checkCenterY))
-    checkPath.line(to: CGPoint(x: centerX - checkSize * 0.1, y: checkCenterY - checkSize * 0.3))
-    checkPath.line(to: CGPoint(x: centerX + checkSize * 0.45, y: checkCenterY + checkSize * 0.4))
-    checkPath.lineWidth = size * 0.06
-    checkPath.lineCapStyle = .round
-    checkPath.lineJoinStyle = .round
-
-    context.saveGState()
-    let checkShadow = NSShadow()
-    checkShadow.shadowColor = NSColor.black.withAlphaComponent(0.2)
-    checkShadow.shadowOffset = NSSize(width: 0, height: -size * 0.01)
-    checkShadow.shadowBlurRadius = size * 0.02
-    checkShadow.set()
-    NSColor.white.setStroke()
-    checkPath.stroke()
-    context.restoreGState()
-
     return image
 }
 
@@ -283,6 +181,7 @@ func generateIcons() throws {
     let fileManager = FileManager.default
     let scriptURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
     let projectDirectory = scriptURL.deletingLastPathComponent().deletingLastPathComponent()
+    let sourceIconURL = projectDirectory.appendingPathComponent("docs/images/safemac-av-logo.png")
     let assetCatalog = projectDirectory.appendingPathComponent("ClamAV-GUI/Resources/Assets.xcassets")
     let destination = assetCatalog.appendingPathComponent("AppIcon.appiconset")
     let temporary = assetCatalog.appendingPathComponent(".AppIcon.generated-\(UUID().uuidString)")
@@ -294,13 +193,13 @@ func generateIcons() throws {
         )
     }
 
+    let sourceIcon = try loadSourceIcon(at: sourceIconURL)
     try fileManager.createDirectory(at: temporary, withIntermediateDirectories: false)
 
     do {
         for spec in iconSpecs {
             let output = temporary.appendingPathComponent(spec.filename)
-            let icon = try createShieldIcon(size: CGFloat(spec.pixelSize))
-            try savePNG(icon, to: output, pixelSize: spec.pixelSize)
+            try savePNG(sourceIcon, to: output, pixelSize: spec.pixelSize)
             print("Created \(spec.filename) (\(spec.pixelSize)x\(spec.pixelSize))")
         }
 

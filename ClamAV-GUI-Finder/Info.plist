@@ -5,9 +5,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.newtonlorenz.ClamAV-GUI.FinderSync</string>
     <key>CFBundleName</key>
-    <string>ClamAV Finder</string>
+    <string>SafeMac AV Finder</string>
     <key>CFBundleDisplayName</key>
-    <string>ClamAV</string>
+    <string>SafeMac AV</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundlePackageType</key>

@@ -17,6 +17,7 @@ The project is preparing its first public source release.
 
 ### Changed
 
+- The product is now branded SafeMac AV, with a new app icon and release package name.
 - The macOS interface now uses a responsive split-view shell, native Liquid Glass surfaces on macOS 26, and accessible material or opaque fallbacks on earlier systems.
 - Quarantine, restore, and delete operations now keep payload and metadata changes transactional when storage operations fail.
 - Settings and scheduled-job metadata now use atomic writes, report failures, and preserve existing state during failed updates.

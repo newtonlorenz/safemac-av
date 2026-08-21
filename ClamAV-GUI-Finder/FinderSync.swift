@@ -18,7 +18,7 @@ class FinderSync: FIFinderSync {
     override func menu(for menuKind: FIMenuKind) -> NSMenu {
         let menu = NSMenu(title: "")
         let menuItem = NSMenuItem(
-            title: "Scan with ClamAV",
+            title: "Scan with SafeMac AV",
             action: #selector(scanSelectedItems(_:)),
             keyEquivalent: ""
         )

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve ClamAV GUI. This project favors small, reviewable changes backed by tests and a clear user outcome.
+Thanks for helping improve SafeMac AV. This project favors small, reviewable changes backed by tests and a clear user outcome.
 
 ## Before opening a change
 
@@ -17,7 +17,7 @@ You need macOS 13 or later, Xcode, and a local ClamAV installation. Follow the [
 ./setup.sh
 ```
 
-Open `ClamAV-GUI.xcodeproj` and use the shared `ClamAV-GUI` scheme.
+Open `ClamAV-GUI.xcodeproj` and use the shared `ClamAV-GUI` scheme. These internal names remain for compatibility.
 
 ## Working on a change
 

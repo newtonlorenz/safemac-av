@@ -5,7 +5,7 @@ struct MenuBarPopoverView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("ClamAV")
+            Text("SafeMac AV")
                 .font(.headline)
             Button("Quick Scan") {
                 Task { await appState.startQuickScan() }
