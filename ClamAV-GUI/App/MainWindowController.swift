@@ -12,13 +12,25 @@ final class MainWindowControllerRegistry {
 
     private var factory: (() -> MainWindowControlling?)?
     private var router: ((NavigationTab?) -> Void)?
+    private var factoryAvailabilityWaiters: [() -> Void] = []
 
     func installFactory(_ factory: @escaping () -> MainWindowControlling?) {
         self.factory = factory
+        let waiters = factoryAvailabilityWaiters
+        factoryAvailabilityWaiters.removeAll()
+        waiters.forEach { $0() }
     }
 
     func makeController() -> MainWindowControlling? {
         factory?()
+    }
+
+    func whenFactoryAvailable(_ operation: @escaping () -> Void) {
+        if factory != nil {
+            operation()
+        } else {
+            factoryAvailabilityWaiters.append(operation)
+        }
     }
 
     func installRouter(_ router: @escaping (NavigationTab?) -> Void) {

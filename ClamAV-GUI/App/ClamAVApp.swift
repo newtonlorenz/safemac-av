@@ -28,13 +28,6 @@ struct ClamAVApp: App {
         let bundleURL = Bundle.main.bundleURL
         let preferredColorScheme = Self.uiTestColorScheme(arguments: arguments)
 
-        MainWindowControllerRegistry.shared.installFactory {
-            MainWindowController(
-                appState: appState,
-                menuBarManager: menuBarManager,
-                preferredColorScheme: preferredColorScheme
-            )
-        }
         DockVisibilityLifecycle.shared.install(
             settings: appState.$settings.eraseToAnyPublisher(),
             launchMode: launchMode,
@@ -71,6 +64,13 @@ struct ClamAVApp: App {
                 await appState.runScheduledSignatureUpdate()
             }
         )
+        MainWindowControllerRegistry.shared.installFactory {
+            MainWindowController(
+                appState: appState,
+                menuBarManager: menuBarManager,
+                preferredColorScheme: preferredColorScheme
+            )
+        }
     }
 
     var body: some Scene {

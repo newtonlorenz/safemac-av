@@ -50,6 +50,23 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(selections[1], .settings)
     }
 
+    func testMainWindowRegistryResumesFactoryWaitersExactlyOnce() {
+        let registry = MainWindowControllerRegistry()
+        var waiterCalls = 0
+
+        registry.whenFactoryAvailable { waiterCalls += 1 }
+        XCTAssertEqual(waiterCalls, 0)
+
+        registry.installFactory { MainWindowControllerMock() }
+        XCTAssertEqual(waiterCalls, 1)
+
+        registry.installFactory { MainWindowControllerMock() }
+        XCTAssertEqual(waiterCalls, 1)
+
+        registry.whenFactoryAvailable { waiterCalls += 1 }
+        XCTAssertEqual(waiterCalls, 2)
+    }
+
     func testConcreteMainWindowControllerRetainsOneWindowAndExactSharedState() throws {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
@@ -167,6 +184,9 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertFalse(source.contains("OpenWindowAction"))
         XCTAssertTrue(source.contains("MenuBarExtra"))
         XCTAssertFalse(source.contains("@StateObject private var initialLaunchHandler"))
+        let configureDelegate = try XCTUnwrap(source.range(of: "applicationDelegate.configure"))
+        let installFactory = try XCTUnwrap(source.range(of: "MainWindowControllerRegistry.shared.installFactory"))
+        XCTAssertLessThan(configureDelegate.lowerBound, installFactory.lowerBound)
     }
 
     func testVisibleInteractiveDelegateLazilyCreatesAndRetainsOneMainWindowController() async {
@@ -203,6 +223,7 @@ final class MenuBarManagerTests: XCTestCase {
             var settings = AppSettings.default
             settings.hideFromDock = true
             var factoryCalls = 0
+            var waiterCalls = 0
             let delegate = MenuBarApplicationDelegate(
                 manager: MenuBarManager(application: application),
                 settingsProvider: { settings },
@@ -211,6 +232,7 @@ final class MenuBarManagerTests: XCTestCase {
                     factoryCalls += 1
                     return MainWindowControllerMock()
                 },
+                waitForMainWindowControllerFactory: { _ in waiterCalls += 1 },
                 runInitialApplicationLaunch: { _ in },
                 runScheduledSignatureUpdate: {}
             )
@@ -220,6 +242,7 @@ final class MenuBarManagerTests: XCTestCase {
             await Task.yield()
 
             XCTAssertEqual(factoryCalls, 0, arguments.description)
+            XCTAssertEqual(waiterCalls, 0, arguments.description)
         }
     }
 
@@ -308,6 +331,46 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(factoryCalls, 2)
         XCTAssertEqual(controller.selections.count, 1)
         XCTAssertNil(controller.selections[0])
+        XCTAssertEqual(
+            application.events,
+            [.showMainWindow, .nextMainRunLoopTurn, .runInitialMaintenance]
+        )
+    }
+
+    func testScheduledScanDefersWorkUntilControllerFactoryIsInstalled() async {
+        let registry = MainWindowControllerRegistry()
+        let controller = MainWindowControllerMock()
+        let application = MenuBarApplicationMock()
+        controller.onShow = { application.events.append(.showMainWindow) }
+        let scanRan = expectation(description: "scheduled scan ran after presentation")
+        var receivedMode: LaunchMode?
+        let delegate = MenuBarApplicationDelegate(
+            manager: MenuBarManager(application: application),
+            settingsProvider: { .default },
+            argumentsProvider: { ["--scheduled-scan", "--path", "/tmp/scheduled"] },
+            nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
+            mainWindowControllerFactory: { registry.makeController() },
+            waitForMainWindowControllerFactory: { registry.whenFactoryAvailable($0) },
+            runInitialApplicationLaunch: { mode in
+                receivedMode = mode
+                application.events.append(.runInitialMaintenance)
+                scanRan.fulfill()
+            }
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+        XCTAssertNil(receivedMode)
+
+        registry.installFactory { controller }
+        await fulfillment(of: [scanRan], timeout: 1)
+
+        XCTAssertEqual(receivedMode, .scheduledScan(
+            jobID: nil,
+            paths: [URL(fileURLWithPath: "/tmp/scheduled")]
+        ))
+        XCTAssertEqual(controller.selections.count, 1)
         XCTAssertEqual(
             application.events,
             [.showMainWindow, .nextMainRunLoopTurn, .runInitialMaintenance]

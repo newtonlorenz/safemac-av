@@ -63,11 +63,17 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     private var argumentsProvider: () -> [String]
     private var nextMainRunLoopTurn: () async -> Void
     private var mainWindowControllerFactory: () -> MainWindowControlling?
+    private var waitForMainWindowControllerFactory: (@escaping () -> Void) -> Void
     private var runInitialApplicationLaunch: (LaunchMode) async -> Void
     private var runActiveInteractiveMaintenance: (LaunchMode) async -> Void
     private var runScheduledSignatureUpdate: () async -> Void
     private var finishScheduledLaunch: () -> Void
     private var mainWindowController: MainWindowControlling?
+    private var isWaitingForMainWindowControllerFactory = false
+    private var hasPendingMainWindowPresentation = false
+    private var pendingMainWindowSelection: NavigationTab?
+    private var shouldStartInitialLaunchAfterPresentation = false
+    private var didStartInitialApplicationLaunch = false
     private var launchMode: LaunchMode = .interactive
     private var canRunScheduledSignatureUpdate = false
     private var shouldPresentMainWindowAtLaunch = false
@@ -86,6 +92,9 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         mainWindowControllerFactory = {
             MainWindowControllerRegistry.shared.makeController()
         }
+        waitForMainWindowControllerFactory = {
+            MainWindowControllerRegistry.shared.whenFactoryAvailable($0)
+        }
         runInitialApplicationLaunch = { _ in }
         runActiveInteractiveMaintenance = { _ in }
         runScheduledSignatureUpdate = {}
@@ -103,6 +112,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
             await MenuBarApplicationDelegate.waitForNextMainRunLoopTurn()
         },
         mainWindowControllerFactory: @escaping () -> MainWindowControlling? = { nil },
+        waitForMainWindowControllerFactory: @escaping (@escaping () -> Void) -> Void = { _ in },
         runInitialApplicationLaunch: @escaping (LaunchMode) async -> Void = { _ in },
         runActiveInteractiveMaintenance: @escaping (LaunchMode) async -> Void = { _ in },
         runScheduledSignatureUpdate: @escaping () async -> Void = {},
@@ -113,6 +123,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         self.argumentsProvider = argumentsProvider
         self.nextMainRunLoopTurn = nextMainRunLoopTurn
         self.mainWindowControllerFactory = mainWindowControllerFactory
+        self.waitForMainWindowControllerFactory = waitForMainWindowControllerFactory
         self.runInitialApplicationLaunch = runInitialApplicationLaunch
         self.runActiveInteractiveMaintenance = runActiveInteractiveMaintenance
         self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
@@ -181,9 +192,20 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         }
 
         if shouldPresentMainWindowAtLaunch {
-            guard showMainWindow(selecting: nil) else { return }
+            shouldStartInitialLaunchAfterPresentation = true
+            if showMainWindow(selecting: nil) {
+                shouldStartInitialLaunchAfterPresentation = false
+                startInitialApplicationLaunch()
+            }
+            return
         }
 
+        startInitialApplicationLaunch()
+    }
+
+    private func startInitialApplicationLaunch() {
+        guard !didStartInitialApplicationLaunch else { return }
+        didStartInitialApplicationLaunch = true
         applicationLaunchTask = Task { [weak self] in
             guard let self else { return }
             await self.runInitialLaunch()
@@ -225,9 +247,39 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         if mainWindowController == nil {
             mainWindowController = mainWindowControllerFactory()
         }
-        guard let mainWindowController else { return false }
+        guard let mainWindowController else {
+            hasPendingMainWindowPresentation = true
+            if let selection {
+                pendingMainWindowSelection = selection
+            }
+            waitForControllerFactoryIfNeeded()
+            return false
+        }
         mainWindowController.showMainWindow(selecting: selection)
         return true
+    }
+
+    private func waitForControllerFactoryIfNeeded() {
+        guard !isWaitingForMainWindowControllerFactory else { return }
+        isWaitingForMainWindowControllerFactory = true
+        waitForMainWindowControllerFactory { [weak self] in
+            self?.controllerFactoryBecameAvailable()
+        }
+    }
+
+    private func controllerFactoryBecameAvailable() {
+        isWaitingForMainWindowControllerFactory = false
+        guard hasPendingMainWindowPresentation else { return }
+        guard let controller = mainWindowControllerFactory() else { return }
+        mainWindowController = controller
+        let selection = pendingMainWindowSelection
+        hasPendingMainWindowPresentation = false
+        pendingMainWindowSelection = nil
+        controller.showMainWindow(selecting: selection)
+        if shouldStartInitialLaunchAfterPresentation {
+            shouldStartInitialLaunchAfterPresentation = false
+            startInitialApplicationLaunch()
+        }
     }
 
     func applicationShouldHandleReopen(
