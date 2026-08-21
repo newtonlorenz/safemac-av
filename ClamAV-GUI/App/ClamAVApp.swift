@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct ClamAVApp: App {
     static let mainWindowID = "main-window"
+    static let mainWindowTitle = "SafeMac AV"
 
     @NSApplicationDelegateAdaptor(MenuBarApplicationDelegate.self) private var applicationDelegate
     @StateObject private var appState: AppState
@@ -29,7 +30,7 @@ struct ClamAVApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("SafeMac AV", id: Self.mainWindowID) {
+        Window(Self.mainWindowTitle, id: Self.mainWindowID) {
             ContentView()
                 .environmentObject(appState)
                 .preferredColorScheme(uiTestColorScheme)
@@ -155,6 +156,7 @@ final class InitialLaunchHandler: ObservableObject {
         case .interactive:
             if shouldPresentInteractiveMainWindow {
                 presentInteractiveMainWindow()
+                await waitForWindowPresentationTurn()
             }
             await drainExternalScanRequests()
         case .scheduledScan(let jobID, let paths):
@@ -163,25 +165,49 @@ final class InitialLaunchHandler: ObservableObject {
             break
         }
     }
+
+    private func waitForWindowPresentationTurn() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
+    }
 }
 
 private struct MainWindowIdentifier: NSViewRepresentable {
     let identifier: String
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        applyIdentifier(to: view)
-        return view
+    func makeNSView(context: Context) -> MainWindowIdentifierView {
+        MainWindowIdentifierView(identifier: identifier)
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        applyIdentifier(to: nsView)
+    func updateNSView(_ nsView: MainWindowIdentifierView, context: Context) {
+        nsView.identifierToApply = identifier
+        nsView.applyIdentifier()
+    }
+}
+
+private final class MainWindowIdentifierView: NSView {
+    var identifierToApply: String
+
+    init(identifier: String) {
+        identifierToApply = identifier
+        super.init(frame: .zero)
     }
 
-    private func applyIdentifier(to view: NSView) {
-        DispatchQueue.main.async {
-            view.window?.identifier = NSUserInterfaceItemIdentifier(identifier)
-        }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyIdentifier()
+    }
+
+    func applyIdentifier() {
+        window?.identifier = NSUserInterfaceItemIdentifier(identifierToApply)
     }
 }
 

@@ -150,11 +150,6 @@ final class ClamAV_GUIUITests: XCTestCase {
             return
         }
 
-        app.typeKey("n", modifierFlags: .command)
-        if mainWindow.waitForExistence(timeout: 5) {
-            return
-        }
-
         let menuBarItem = app.menuBars.statusItems["SafeMac AV"]
         XCTAssertTrue(
             menuBarItem.waitForExistence(timeout: 5),
