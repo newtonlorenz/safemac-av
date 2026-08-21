@@ -642,6 +642,45 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(notifications.signatureResults.map(\.status), [.success])
     }
 
+    func testScheduledSignatureUpdateUsesAlreadyValidatedSettings() async throws {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = true
+        settings.freshclamPath = "/validated/freshclam"
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let freshclamRunner = AppStateDelayedFreshclamRunner()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            freshclamRunner: freshclamRunner
+        )
+        mockConfig.settings = .default
+        mockConfig.lastSettingsLoadState = .fallbackDueToError(reason: "corrupt")
+
+        let update = Task { await appState.runScheduledSignatureUpdate() }
+        try await waitUntil { freshclamRunner.updateCalls == 1 }
+        freshclamRunner.complete(with: .alreadyUpToDate())
+        await update.value
+
+        XCTAssertEqual(freshclamRunner.validatedSettings.map(\.freshclamPath), ["/validated/freshclam"])
+    }
+
+    func testManualSignatureUpdateReloadsSettings() async throws {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let freshclamRunner = AppStateDelayedFreshclamRunner()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            freshclamRunner: freshclamRunner
+        )
+
+        let update = Task { await appState.updateSignatures() }
+        try await waitUntil { freshclamRunner.updateCalls == 1 }
+        freshclamRunner.complete(with: .alreadyUpToDate())
+        await update.value
+
+        XCTAssertTrue(freshclamRunner.validatedSettings.isEmpty)
+    }
+
     func testScheduledScanSendsStartingNotificationBeforeRunning() async throws {
         let mockConfig = AppStateMockConfigManager(settings: .default)
         let runner = AppStateControlledRunner()
@@ -1037,16 +1076,32 @@ private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol, @un
     private let lock = NSLock()
     private var storedUpdateCalls = 0
     private var continuation: CheckedContinuation<UpdateResult, Error>?
+    private var storedValidatedSettings: [AppSettings] = []
 
     var updateCalls: Int {
         lock.withLock { storedUpdateCalls }
     }
 
+    var validatedSettings: [AppSettings] {
+        lock.withLock { storedValidatedSettings }
+    }
+
     func update() async throws -> UpdateResult {
+        try await waitForCompletion(settings: nil)
+    }
+
+    func update(using settings: AppSettings) async throws -> UpdateResult {
+        try await waitForCompletion(settings: settings)
+    }
+
+    private func waitForCompletion(settings: AppSettings?) async throws -> UpdateResult {
         return try await withCheckedThrowingContinuation { continuation in
             lock.withLock {
                 self.continuation = continuation
                 storedUpdateCalls += 1
+                if let settings {
+                    storedValidatedSettings.append(settings)
+                }
             }
         }
     }

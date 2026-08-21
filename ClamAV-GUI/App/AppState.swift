@@ -262,6 +262,10 @@ final class AppState: ObservableObject {
     }
 
     func updateSignatures() async {
+        await updateSignatures(using: nil)
+    }
+
+    private func updateSignatures(using validatedSettings: AppSettings?) async {
         guard !isUpdatingSignatures else {
             addLog(.info, "Signature update already in progress")
             return
@@ -273,7 +277,12 @@ final class AppState: ObservableObject {
         defer { isUpdatingSignatures = false }
 
         do {
-            let result = try await freshclamRunner.update()
+            let result: UpdateResult
+            if let validatedSettings {
+                result = try await freshclamRunner.update(using: validatedSettings)
+            } else {
+                result = try await freshclamRunner.update()
+            }
             lastUpdateResult = result
             addLog(.info, "Signature update completed: \(result.status.rawValue)")
         } catch {
@@ -562,7 +571,7 @@ final class AppState: ObservableObject {
             addLog(.info, "Skipped scheduled signature update because automatic updates are disabled")
             return
         }
-        await updateSignatures()
+        await updateSignatures(using: settings)
     }
 
     private func setupFileWatcherAutoScan() {
