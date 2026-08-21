@@ -33,6 +33,7 @@ final class AppState: ObservableObject {
     let scanHistoryManager: ScanHistoryManager
     let protectionScoreManager: ProtectionScoreManager
     private let launchAtLoginManager: any LaunchAtLoginManaging
+    private let signatureUpdateScheduler: any SignatureUpdateSchedulerProtocol
     let notificationManager: NotificationManaging
 
     private let logManager = LogManager()
@@ -49,7 +50,8 @@ final class AppState: ObservableObject {
         notificationManager: NotificationManaging? = nil,
         externalScanRequestStore: ExternalScanRequestStore = ExternalScanRequestStore(),
         scanHistoryManager: ScanHistoryManager = ScanHistoryManager(),
-        launchAtLoginManager: any LaunchAtLoginManaging = LaunchAtLoginManager()
+        launchAtLoginManager: any LaunchAtLoginManaging = LaunchAtLoginManager(),
+        signatureUpdateScheduler: any SignatureUpdateSchedulerProtocol = SignatureUpdateSchedulerFactory.defaultScheduler()
     ) {
         var loadedSettings = configManager.loadSettings()
         let settingsLoadState = configManager.lastSettingsLoadState
@@ -74,6 +76,7 @@ final class AppState: ObservableObject {
         self.externalScanRequestStore = externalScanRequestStore
         self.scanHistoryManager = scanHistoryManager
         self.launchAtLoginManager = launchAtLoginManager
+        self.signatureUpdateScheduler = signatureUpdateScheduler
         self.launchAtLoginStatus = initialLaunchAtLoginStatus
         let scoreManager = ProtectionScoreManager(configManager: configManager)
         self.protectionScoreManager = scoreManager
@@ -309,6 +312,7 @@ final class AppState: ObservableObject {
         if !settings.autoScanDownloads {
             pendingAutomaticDownloadPaths.removeAll()
         }
+        configureSignatureUpdateSchedule()
         configureMonitoring()
         refreshProtectionScore()
     }
@@ -408,6 +412,20 @@ final class AppState: ObservableObject {
         )
     }
 
+    func configureSignatureUpdateSchedule() {
+        do {
+            if settings.autoUpdateSignatures {
+                try signatureUpdateScheduler.install(schedule: settings.updateSchedule ?? .daily9am)
+                addLog(.info, "Automatic signature updates scheduled")
+            } else {
+                try signatureUpdateScheduler.remove()
+                addLog(.info, "Automatic signature updates disabled")
+            }
+        } catch {
+            addLog(.error, "Failed to configure automatic signature updates: \(error.localizedDescription)")
+        }
+    }
+
     private func addLog(_ level: LogLevel, _ message: String) {
         logManager.add(level, message)
         logs = logManager.entries
@@ -455,6 +473,10 @@ final class AppState: ObservableObject {
         if let jobID {
             scanScheduler.markScheduledScanRun(jobID: jobID, result: outcome.scheduledResultMessage, at: Date())
         }
+    }
+
+    func runScheduledSignatureUpdate() async {
+        await updateSignatures()
     }
 
     private func setupFileWatcherAutoScan() {

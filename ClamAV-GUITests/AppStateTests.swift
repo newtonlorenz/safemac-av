@@ -306,6 +306,45 @@ final class AppStateTests: XCTestCase {
         })
     }
 
+    func testSaveSettingsInstallsSignatureUpdateScheduleWhenEnabled() {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = true
+        settings.updateSchedule = ScanSchedule(
+            frequency: .weekly,
+            time: DateComponents(hour: 6, minute: 15),
+            dayOfWeek: 3
+        )
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let signatureScheduler = AppStateMockSignatureUpdateScheduler()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            signatureUpdateScheduler: signatureScheduler
+        )
+
+        appState.saveSettings()
+
+        XCTAssertEqual(signatureScheduler.installedSchedules, [settings.updateSchedule])
+        XCTAssertEqual(signatureScheduler.removeCalls, 0)
+    }
+
+    func testSaveSettingsRemovesSignatureUpdateScheduleWhenDisabled() {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = false
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let signatureScheduler = AppStateMockSignatureUpdateScheduler()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            signatureUpdateScheduler: signatureScheduler
+        )
+
+        appState.saveSettings()
+
+        XCTAssertTrue(signatureScheduler.installedSchedules.isEmpty)
+        XCTAssertEqual(signatureScheduler.removeCalls, 1)
+    }
+
     func testStartCustomScanNotificationSwitchesToScanAndOpensPicker() {
         let mockConfig = AppStateMockConfigManager(settings: .default)
         let mockWatcher = MockFileWatcher()
@@ -982,6 +1021,23 @@ private final class AppStateMockConfigManager: ConfigManagerProtocol {
     func resetProtectionScoreInputCalls() {
         validateInstallationCalls = 0
         signatureInfoCalls = 0
+    }
+}
+
+private final class AppStateMockSignatureUpdateScheduler: SignatureUpdateSchedulerProtocol {
+    private(set) var installedSchedules: [ScanSchedule?] = []
+    private(set) var removeCalls = 0
+
+    func install(schedule: ScanSchedule) throws {
+        installedSchedules.append(schedule)
+    }
+
+    func remove() throws {
+        removeCalls += 1
+    }
+
+    func launchArguments(executablePath: String) -> [String] {
+        [executablePath, "--update-signatures"]
     }
 }
 

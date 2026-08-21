@@ -53,7 +53,7 @@ final class ScanSchedulerTests: XCTestCase {
         case .scheduledScan(let parsedJobID, let paths):
             XCTAssertEqual(parsedJobID, job.id)
             XCTAssertTrue(paths.isEmpty)
-        case .interactive:
+        case .interactive, .signatureUpdate:
             XCTFail("Expected launch arguments to parse as scheduled mode")
         }
     }
