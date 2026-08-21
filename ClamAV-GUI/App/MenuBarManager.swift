@@ -7,6 +7,7 @@ protocol ApplicationActivationPolicyApplying: AnyObject {
     func setActivationPolicy(_ activationPolicy: NSApplication.ActivationPolicy) -> Bool
     func activate(ignoringOtherApps: Bool)
     func closeMainWindows()
+    func focusMainWindow() -> Bool
 }
 
 extension NSApplication: ApplicationActivationPolicyApplying {
@@ -14,6 +15,14 @@ extension NSApplication: ApplicationActivationPolicyApplying {
         windows
             .filter(\.canBecomeMain)
             .forEach { $0.close() }
+    }
+
+    func focusMainWindow() -> Bool {
+        guard let window = windows.first(where: { $0.identifier?.rawValue == ClamAVApp.mainWindowID }) else {
+            return false
+        }
+        window.makeKeyAndOrderFront(nil)
+        return true
     }
 }
 
@@ -49,7 +58,9 @@ final class MenuBarManager: ObservableObject {
 
     func activateMainWindow(openWindow: () -> Void) {
         application.activate(ignoringOtherApps: true)
-        openWindow()
+        if !application.focusMainWindow() {
+            openWindow()
+        }
     }
 }
 

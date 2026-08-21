@@ -8,14 +8,15 @@ struct ClamAVApp: App {
     @NSApplicationDelegateAdaptor(MenuBarApplicationDelegate.self) private var applicationDelegate
     @StateObject private var appState = AppState()
     @StateObject private var menuBarManager = MenuBarManager()
+    @StateObject private var initialLaunchHandler = InitialLaunchHandler()
     @Environment(\.scenePhase) private var scenePhase
-    @State private var didHandleInitialLaunch = false
 
     var body: some Scene {
         WindowGroup("SafeMac AV", id: Self.mainWindowID) {
             ContentView()
                 .environmentObject(appState)
                 .preferredColorScheme(uiTestColorScheme)
+                .background(MainWindowIdentifier(identifier: Self.mainWindowID))
                 .task {
                     menuBarManager.applyDockVisibility(hidden: shouldHideDock)
                     await handleInitialLaunch()
@@ -45,6 +46,9 @@ struct ClamAVApp: App {
             Image(systemName: menuBarIcon)
                 .accessibilityLabel("SafeMac AV")
                 .accessibilityIdentifier("safe-mac-menu-bar-item")
+                .task {
+                    await handleInitialLaunch()
+                }
         }
         .menuBarExtraStyle(.window)
     }
@@ -78,14 +82,55 @@ struct ClamAVApp: App {
 
     @MainActor
     private func handleInitialLaunch() async {
+        await initialLaunchHandler.handle(
+            arguments: CommandLine.arguments,
+            drainExternalScanRequests: {
+                await appState.drainExternalScanRequests()
+            },
+            runScheduledScan: { jobID, paths in
+                await appState.runScheduledScan(jobID: jobID, paths: paths)
+            }
+        )
+    }
+}
+
+@MainActor
+final class InitialLaunchHandler: ObservableObject {
+    private var didHandleInitialLaunch = false
+
+    func handle(
+        arguments: [String],
+        drainExternalScanRequests: () async -> Void,
+        runScheduledScan: (UUID?, [URL]) async -> Void
+    ) async {
         guard !didHandleInitialLaunch else { return }
         didHandleInitialLaunch = true
 
-        switch LaunchModeParser.parse(arguments: CommandLine.arguments) {
+        switch LaunchModeParser.parse(arguments: arguments) {
         case .interactive:
-            await appState.drainExternalScanRequests()
+            await drainExternalScanRequests()
         case .scheduledScan(let jobID, let paths):
-            await appState.runScheduledScan(jobID: jobID, paths: paths)
+            await runScheduledScan(jobID, paths)
+        }
+    }
+}
+
+private struct MainWindowIdentifier: NSViewRepresentable {
+    let identifier: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        applyIdentifier(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        applyIdentifier(to: nsView)
+    }
+
+    private func applyIdentifier(to view: NSView) {
+        DispatchQueue.main.async {
+            view.window?.identifier = NSUserInterfaceItemIdentifier(identifier)
         }
     }
 }

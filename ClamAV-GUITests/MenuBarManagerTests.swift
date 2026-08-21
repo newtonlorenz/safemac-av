@@ -4,6 +4,50 @@ import XCTest
 
 @MainActor
 final class MenuBarManagerTests: XCTestCase {
+    func testInitialLaunchHandlerDrainsInteractiveRequestsOnce() async {
+        let handler = InitialLaunchHandler()
+        var drainCalls = 0
+        var scheduledCalls = 0
+
+        await handler.handle(
+            arguments: [],
+            drainExternalScanRequests: { drainCalls += 1 },
+            runScheduledScan: { _, _ in scheduledCalls += 1 }
+        )
+        await handler.handle(
+            arguments: [],
+            drainExternalScanRequests: { drainCalls += 1 },
+            runScheduledScan: { _, _ in scheduledCalls += 1 }
+        )
+
+        XCTAssertEqual(drainCalls, 1)
+        XCTAssertEqual(scheduledCalls, 0)
+    }
+
+    func testInitialLaunchHandlerRoutesScheduledScanOnce() async {
+        let handler = InitialLaunchHandler()
+        let jobID = UUID()
+        let scheduledPath = URL(fileURLWithPath: "/tmp/scheduled")
+        var drainCalls = 0
+        var scheduledCalls: [(UUID?, [URL])] = []
+
+        await handler.handle(
+            arguments: ["--scheduled-scan", "--job-id", jobID.uuidString, "--path", scheduledPath.path],
+            drainExternalScanRequests: { drainCalls += 1 },
+            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
+        )
+        await handler.handle(
+            arguments: ["--scheduled-scan", "--job-id", jobID.uuidString, "--path", scheduledPath.path],
+            drainExternalScanRequests: { drainCalls += 1 },
+            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
+        )
+
+        XCTAssertEqual(drainCalls, 0)
+        XCTAssertEqual(scheduledCalls.count, 1)
+        XCTAssertEqual(scheduledCalls.first?.0, jobID)
+        XCTAssertEqual(scheduledCalls.first?.1, [scheduledPath])
+    }
+
     func testApplicationDelegateSupportsRuntimeDefaultInitialization() {
         let delegateType: NSObject.Type = MenuBarApplicationDelegate.self
 
@@ -51,7 +95,20 @@ final class MenuBarManagerTests: XCTestCase {
         }
 
         XCTAssertEqual(application.activationCalls, [true])
-        XCTAssertEqual(application.events, [.activateApplication, .openWindow])
+        XCTAssertEqual(application.events, [.activateApplication, .focusMainWindow, .openWindow])
+    }
+
+    func testActivatingMainWindowFocusesExistingWindowWithoutOpeningAnother() {
+        let application = MenuBarApplicationMock()
+        application.focusMainWindowResult = true
+        let manager = MenuBarManager(application: application)
+
+        manager.activateMainWindow {
+            application.events.append(.openWindow)
+        }
+
+        XCTAssertEqual(application.activationCalls, [true])
+        XCTAssertEqual(application.events, [.activateApplication, .focusMainWindow])
     }
 
     func testHiddenDockLaunchSuppressesInitialMainWindowAfterAccessoryPolicyIsAccepted() {
@@ -113,6 +170,7 @@ final class MenuBarManagerTests: XCTestCase {
 
 private enum MenuBarApplicationEvent: Equatable {
     case activateApplication
+    case focusMainWindow
     case openWindow
 }
 
@@ -122,6 +180,7 @@ private final class MenuBarApplicationMock: ApplicationActivationPolicyApplying 
     private(set) var requestedPolicies: [NSApplication.ActivationPolicy] = []
     private(set) var activationCalls: [Bool] = []
     private(set) var closeMainWindowCalls = 0
+    var focusMainWindowResult = false
     var events: [MenuBarApplicationEvent] = []
 
     func setActivationPolicy(_ activationPolicy: NSApplication.ActivationPolicy) -> Bool {
@@ -136,5 +195,10 @@ private final class MenuBarApplicationMock: ApplicationActivationPolicyApplying 
 
     func closeMainWindows() {
         closeMainWindowCalls += 1
+    }
+
+    func focusMainWindow() -> Bool {
+        events.append(.focusMainWindow)
+        return focusMainWindowResult
     }
 }
