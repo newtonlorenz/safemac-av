@@ -34,7 +34,7 @@ class FinderSync: FIFinderSync {
         // Persist the request first; distributed notifications are only a wake signal.
         let paths = items.map { $0.path }
         do {
-            let request = try ExternalScanRequestStore().enqueue(paths: paths, source: "finder")
+            let request = try ExternalScanRequestStore().enqueue(paths: paths, source: ExternalScanRequestStore.finderSource)
             DistributedNotificationCenter.default().postNotificationName(
                 NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
                 object: nil,
@@ -42,14 +42,7 @@ class FinderSync: FIFinderSync {
                 deliverImmediately: true
             )
         } catch {
-            if let data = try? JSONEncoder().encode(paths) {
-                DistributedNotificationCenter.default().postNotificationName(
-                    NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
-                    object: nil,
-                    userInfo: ["paths": data],
-                    deliverImmediately: true
-                )
-            }
+            NSLog("SafeMac AV Finder request could not be persisted: \(error.localizedDescription)")
         }
 
         // Open main app
