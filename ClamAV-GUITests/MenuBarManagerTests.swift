@@ -174,6 +174,21 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(application.events, [.activateApplication, .focusMainWindow])
     }
 
+    func testPendingUnidentifiedMainWindowIsPreferredOverOpeningDuplicate() {
+        let pendingMainWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+
+        XCTAssertNil(pendingMainWindow.identifier)
+        XCTAssertTrue(pendingMainWindow.canBecomeMain)
+        XCTAssertTrue(
+            MenuBarManager.mainWindowCandidate(in: [pendingMainWindow]) === pendingMainWindow
+        )
+    }
+
     func testHiddenDockLaunchSuppressesInitialMainWindowAfterAccessoryPolicyIsAccepted() {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
