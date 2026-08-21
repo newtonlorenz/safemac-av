@@ -83,9 +83,9 @@ Schedules run in the logged-in user's context. Moving or deleting the built app 
 
 ### Finder request
 
-The Finder Sync extension receives the current Finder selection, writes a JSON request when a shared container is available, posts a distributed notification as a wake signal, and opens the main app when necessary. The main app drains requests serially and submits them through the same scan coordinator as interactive scans.
+The Finder Sync extension receives the current Finder selection, writes a JSON request to the shared App Group container, posts a distributed notification as a wake signal, and opens the main app when necessary. If the App Group container is unavailable, the extension fails closed, opens the main app, and posts only a generic handoff error. The main app drains requests through a single in-process queue and waits for any active scan before submitting Finder work through the same scan coordinator as interactive scans.
 
-A distributable build must sign the app and extension consistently and configure the matching app group. The notification and bundle identifiers are namespaced to the upstream project and must change together in a fork.
+A distributable build must sign the app and extension consistently and configure the matching App Group entitlement on both executables. The notification, bundle, and App Group identifiers are namespaced to the upstream project and must change together in a fork.
 
 ### Standalone menu-bar operation
 
@@ -105,7 +105,7 @@ Notification content is intentionally summary-only. It includes counts and gener
 | --- | --- | --- |
 | Settings | `~/Library/Application Support/ClamAV-GUI/settings.json` | Persistent |
 | Scheduled-job definitions | `~/Library/Application Support/ClamAV-GUI/scheduled_jobs.json` | Persistent |
-| Finder request queue | App-group container when configured, otherwise Application Support | Drained after processing |
+| Finder request queue | `~/Library/Group Containers/group.com.newtonlorenz.ClamAV-GUI/external-scan-requests/` | Drained after admission to the app queue |
 | LaunchAgent definitions | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.scan.*.plist` | Until job removal |
 | Signature-update LaunchAgent | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.signature-update.plist` | Until automatic updates are disabled |
 | Main-app login item | macOS System Settings › General › Login Items | Until disabled by the user or app |

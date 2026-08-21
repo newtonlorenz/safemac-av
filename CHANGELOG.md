@@ -9,6 +9,10 @@ All notable project changes will be documented in this file. The format follows 
 - A native macOS login-item control with enabled, disabled, approval-required, and unavailable status feedback in Settings.
 - Real daily or weekly per-user scheduling for automatic ClamAV malware-signature updates, with transactional rollback and privacy-safe result notifications.
 
+### Fixed
+
+- Finder scan requests now require the shared App Group container, surface generic handoff failures, and run queued selections after any active scan completes.
+
 ## [1.1.0] - 2026-08-21
 
 ### Added

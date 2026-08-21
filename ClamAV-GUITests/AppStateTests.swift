@@ -481,6 +481,46 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(notifications.scanCompleteReports.isEmpty)
     }
 
+    func testExternalScanRequestsWaitForActiveScanAndRunInOrder() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+        try store.enqueue(paths: ["/tmp/finder-one"], source: ExternalScanRequestStore.finderSource)
+        try store.enqueue(paths: ["/tmp/finder-two"], source: ExternalScanRequestStore.finderSource)
+        let runner = AppStateControlledRunner()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            externalScanRequestStore: store
+        )
+        let manualScan = Task {
+            await appState.startScan(paths: [URL(fileURLWithPath: "/tmp/manual")], options: .default, source: .manual)
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+
+        let drain = Task { await appState.drainExternalScanRequests() }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(runner.scanPaths, [[URL(fileURLWithPath: "/tmp/manual")]])
+
+        runner.resumeNextScan()
+        _ = await manualScan.value
+        try await waitUntil { runner.scanPaths.count == 2 }
+        XCTAssertEqual(runner.scanPaths[1], [URL(fileURLWithPath: "/tmp/finder-one")])
+
+        runner.resumeNextScan()
+        try await waitUntil { runner.scanPaths.count == 3 }
+        XCTAssertEqual(runner.scanPaths[2], [URL(fileURLWithPath: "/tmp/finder-two")])
+
+        runner.resumeNextScan()
+        let drainedRequestCount = await drain.value
+        XCTAssertEqual(drainedRequestCount, 2)
+        XCTAssertTrue(try store.drainRequests().isEmpty)
+    }
+
     func testSignatureUpdateSendsResultNotification() async throws {
         let mockConfig = AppStateMockConfigManager(settings: .default)
         let freshclamRunner = AppStateDelayedFreshclamRunner()

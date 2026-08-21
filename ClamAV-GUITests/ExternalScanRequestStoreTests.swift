@@ -58,4 +58,26 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         XCTAssertEqual(requests.first?.paths, ["/tmp/b"])
         XCTAssertEqual(try store.drainRequests().map(\.id), [first.id])
     }
+
+    func testDefaultStoreFailsClosedWhenAppGroupContainerIsUnavailable() {
+        let store = ExternalScanRequestStore(appGroupContainerResolver: { _ in nil })
+
+        XCTAssertThrowsError(
+            try store.enqueue(paths: ["/tmp/a"], source: ExternalScanRequestStore.finderSource)
+        ) { error in
+            XCTAssertEqual(error as? ExternalScanRequestStoreError, .appGroupUnavailable)
+        }
+    }
+
+    func testDefaultStoreUsesAppGroupContainerWhenAvailable() throws {
+        let appGroupContainer = tempDirectory.appendingPathComponent("GroupContainer", isDirectory: true)
+        let store = ExternalScanRequestStore(appGroupContainerResolver: { identifier in
+            XCTAssertEqual(identifier, ExternalScanRequestStore.appGroupIdentifier)
+            return appGroupContainer
+        })
+
+        try store.enqueue(paths: ["/tmp/a"], source: ExternalScanRequestStore.finderSource)
+
+        XCTAssertEqual(try store.drainRequests().first?.paths, ["/tmp/a"])
+    }
 }

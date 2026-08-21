@@ -48,6 +48,8 @@ final class AppState: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var pendingAutomaticDownloadPaths: [URL] = []
     private var isProcessingAutomaticDownloads = false
+    private var pendingExternalScanRequests: [ExternalScanRequest] = []
+    private var isProcessingExternalScanRequests = false
 
     init(
         configManager: ConfigManagerProtocol = ConfigManager(),
@@ -140,7 +142,7 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
 
         DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
+            forName: ExternalScanRequestStore.scanRequestNotificationName,
             object: nil,
             queue: .main
         ) { [weak self] notification in
@@ -152,6 +154,21 @@ final class AppState: ObservableObject {
                 } else {
                     await self.drainExternalScanRequests()
                 }
+            }
+        }
+
+        DistributedNotificationCenter.default().addObserver(
+            forName: ExternalScanRequestStore.scanRequestFailedNotificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                guard let self else { return }
+                let message = notification.userInfo?["message"] as? String
+                    ?? ExternalScanRequestStore.genericHandoffFailureMessage
+                self.selectedTab = .scan
+                self.scanError = message
+                self.addLog(.warning, message)
             }
         }
     }
@@ -556,13 +573,35 @@ final class AppState: ObservableObject {
     }
 
     private func runExternalScanRequests(_ requests: [ExternalScanRequest]) async {
-        for request in requests {
-            await startScan(
+        guard !requests.isEmpty else { return }
+
+        pendingExternalScanRequests.append(contentsOf: requests)
+        await processPendingExternalScanRequests()
+    }
+
+    private func processPendingExternalScanRequests() async {
+        guard !isProcessingExternalScanRequests else { return }
+        isProcessingExternalScanRequests = true
+        defer { isProcessingExternalScanRequests = false }
+
+        while !pendingExternalScanRequests.isEmpty {
+            if scanCoordinator.isScanning {
+                await scanCoordinator.waitUntilIdle()
+                continue
+            }
+
+            let request = pendingExternalScanRequests.removeFirst()
+            let outcome = await startScan(
                 paths: request.paths.map { URL(fileURLWithPath: $0) },
                 options: .default,
                 scanType: .custom,
                 source: ScanSource(rawValue: request.source) ?? .finder
             )
+
+            if case .skippedAlreadyRunning = outcome {
+                pendingExternalScanRequests.insert(request, at: 0)
+                await scanCoordinator.waitUntilIdle()
+            }
         }
     }
 

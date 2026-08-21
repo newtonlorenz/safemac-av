@@ -193,7 +193,7 @@ See [SECURITY.md](SECURITY.md) for the supported reporting process.
 - Folder monitoring is application-level FSEvents monitoring. It only runs while SafeMac AV is running and is not a kernel or system on-access scanner.
 - Scheduled scans are per-user `launchd` jobs. The app must remain at the path captured by the job, and the user must be logged in.
 - Automatic signature updates are a separate per-user `launchd` job that runs the configured local `freshclam`. They do not update the SafeMac AV app or the externally managed Homebrew ClamAV engine. Opening an installed build reconciles the job to that app's current executable path.
-- The Finder extension must be signed with the app and enabled manually in System Settings. Forks also need their own compatible bundle/app-group configuration.
+- The Finder extension must be signed with the app, share the same App Group entitlement, and be enabled manually in System Settings. Forks also need their own compatible bundle/app-group configuration.
 - Launch at login uses the macOS 13+ Login Items service. macOS may require the user to approve SafeMac AV in System Settings before it can open automatically.
 - Source builds are unsigned unless you configure an Apple Developer identity. A successful local build is not the same as a signed and notarized distribution.
 

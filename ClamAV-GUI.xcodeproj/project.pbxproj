@@ -173,6 +173,7 @@
 		A1000002200000000000057 /* FinderSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderSync.swift; sourceTree = "<group>"; };
 		A1000002200000000000058 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1000002200000000000059 /* ClamAV-GUI-Finder.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "ClamAV-GUI-Finder.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0DE00022000000000000079 /* ClamAV-GUI-Finder.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "ClamAV-GUI-Finder.entitlements"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -426,6 +427,7 @@
 			children = (
 				A1000002200000000000057 /* FinderSync.swift */,
 				A1000002200000000000058 /* Info.plist */,
+				C0DE00022000000000000079 /* ClamAV-GUI-Finder.entitlements */,
 			);
 			path = "ClamAV-GUI-Finder";
 			sourceTree = "<group>";
@@ -910,6 +912,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = "ClamAV-GUI-Finder/ClamAV-GUI-Finder.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = "";
@@ -929,6 +932,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = "ClamAV-GUI-Finder/ClamAV-GUI-Finder.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = "";

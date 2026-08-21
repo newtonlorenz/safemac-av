@@ -9,29 +9,40 @@ struct ExternalScanRequest: Codable, Equatable, Identifiable {
 
 final class ExternalScanRequestStore {
     static let finderSource = "finder"
+    static let appGroupIdentifier = "group.com.newtonlorenz.ClamAV-GUI"
+    static let scanRequestNotificationName = NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest")
+    static let scanRequestFailedNotificationName = NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequestFailed")
+    static let genericHandoffFailureMessage = "SafeMac AV could not receive the Finder scan request. Open the app and try again."
 
-    private let queueURL: URL
+    private let queueURL: URL?
     private let fileManager: FileManager
     private let maxPathCount = 128
     private let maxPathLength = 4_096
 
-    init(baseURL: URL? = nil, fileManager: FileManager = .default) {
+    init(
+        baseURL: URL? = nil,
+        appGroupIdentifier: String = ExternalScanRequestStore.appGroupIdentifier,
+        fileManager: FileManager = .default,
+        appGroupContainerResolver: ((String) -> URL?)? = nil
+    ) {
         self.fileManager = fileManager
 
         if let baseURL {
             self.queueURL = baseURL.appendingPathComponent("external-scan-requests", isDirectory: true)
-        } else if let appGroupURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: "group.com.newtonlorenz.ClamAV-GUI") {
-            self.queueURL = appGroupURL.appendingPathComponent("external-scan-requests", isDirectory: true)
         } else {
-            let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
-            self.queueURL = appSupport
-                .appendingPathComponent("ClamAV-GUI", isDirectory: true)
-                .appendingPathComponent("external-scan-requests", isDirectory: true)
+            let appGroupURL: URL?
+            if let appGroupContainerResolver {
+                appGroupURL = appGroupContainerResolver(appGroupIdentifier)
+            } else {
+                appGroupURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
+            }
+            self.queueURL = appGroupURL?.appendingPathComponent("external-scan-requests", isDirectory: true)
         }
     }
 
     @discardableResult
     func enqueue(paths: [String], source: String) throws -> ExternalScanRequest {
+        let queueURL = try resolvedQueueURL()
         try fileManager.createDirectory(at: queueURL, withIntermediateDirectories: true)
         let normalizedPaths = try validatedPaths(paths)
         let source = try validatedSource(source)
@@ -42,6 +53,7 @@ final class ExternalScanRequestStore {
     }
 
     func drainRequest(id: UUID) throws -> [ExternalScanRequest] {
+        let queueURL = try resolvedQueueURL()
         guard fileManager.fileExists(atPath: queueURL.path) else { return [] }
 
         let file = queueURL.appendingPathComponent("\(id.uuidString).json")
@@ -50,6 +62,7 @@ final class ExternalScanRequestStore {
     }
 
     func drainRequests() throws -> [ExternalScanRequest] {
+        let queueURL = try resolvedQueueURL()
         guard fileManager.fileExists(atPath: queueURL.path) else { return [] }
 
         let files = try fileManager.contentsOfDirectory(
@@ -58,6 +71,13 @@ final class ExternalScanRequestStore {
         ).filter { $0.pathExtension == "json" }
 
         return try drain(files: files)
+    }
+
+    private func resolvedQueueURL() throws -> URL {
+        guard let queueURL else {
+            throw ExternalScanRequestStoreError.appGroupUnavailable
+        }
+        return queueURL
     }
 
     private func drain(files: [URL]) throws -> [ExternalScanRequest] {
@@ -114,12 +134,15 @@ final class ExternalScanRequestStore {
 }
 
 enum ExternalScanRequestStoreError: LocalizedError {
+    case appGroupUnavailable
     case noValidPaths
     case tooManyPaths
     case invalidSource
 
     var errorDescription: String? {
         switch self {
+        case .appGroupUnavailable:
+            return "The SafeMac AV App Group container is unavailable."
         case .noValidPaths:
             return "External scan request did not contain any valid absolute paths."
         case .tooManyPaths:

@@ -36,18 +36,34 @@ class FinderSync: FIFinderSync {
         do {
             let request = try ExternalScanRequestStore().enqueue(paths: paths, source: ExternalScanRequestStore.finderSource)
             DistributedNotificationCenter.default().postNotificationName(
-                NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
+                ExternalScanRequestStore.scanRequestNotificationName,
                 object: nil,
                 userInfo: ["requestID": request.id.uuidString],
                 deliverImmediately: true
             )
         } catch {
-            NSLog("SafeMac AV Finder request could not be persisted: \(error.localizedDescription)")
+            NSLog("SafeMac AV Finder request could not be persisted: %@", error.localizedDescription)
+            openMainApp {
+                DistributedNotificationCenter.default().postNotificationName(
+                    ExternalScanRequestStore.scanRequestFailedNotificationName,
+                    object: nil,
+                    userInfo: ["message": ExternalScanRequestStore.genericHandoffFailureMessage],
+                    deliverImmediately: true
+                )
+            }
+            return
         }
 
-        // Open main app
+        openMainApp()
+    }
+
+    private func openMainApp(completion: (() -> Void)? = nil) {
         if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.newtonlorenz.ClamAV-GUI") {
-            NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+            NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration()) { _, _ in
+                completion?()
+            }
+        } else {
+            completion?()
         }
     }
 }
