@@ -1,0 +1,204 @@
+import AppKit
+import XCTest
+@testable import ClamAV_GUI
+
+@MainActor
+final class MenuBarManagerTests: XCTestCase {
+    func testInitialLaunchHandlerDrainsInteractiveRequestsOnce() async {
+        let handler = InitialLaunchHandler()
+        var drainCalls = 0
+        var scheduledCalls = 0
+
+        await handler.handle(
+            arguments: [],
+            drainExternalScanRequests: { drainCalls += 1 },
+            runScheduledScan: { _, _ in scheduledCalls += 1 }
+        )
+        await handler.handle(
+            arguments: [],
+            drainExternalScanRequests: { drainCalls += 1 },
+            runScheduledScan: { _, _ in scheduledCalls += 1 }
+        )
+
+        XCTAssertEqual(drainCalls, 1)
+        XCTAssertEqual(scheduledCalls, 0)
+    }
+
+    func testInitialLaunchHandlerRoutesScheduledScanOnce() async {
+        let handler = InitialLaunchHandler()
+        let jobID = UUID()
+        let scheduledPath = URL(fileURLWithPath: "/tmp/scheduled")
+        var drainCalls = 0
+        var scheduledCalls: [(UUID?, [URL])] = []
+
+        await handler.handle(
+            arguments: ["--scheduled-scan", "--job-id", jobID.uuidString, "--path", scheduledPath.path],
+            drainExternalScanRequests: { drainCalls += 1 },
+            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
+        )
+        await handler.handle(
+            arguments: ["--scheduled-scan", "--job-id", jobID.uuidString, "--path", scheduledPath.path],
+            drainExternalScanRequests: { drainCalls += 1 },
+            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
+        )
+
+        XCTAssertEqual(drainCalls, 0)
+        XCTAssertEqual(scheduledCalls.count, 1)
+        XCTAssertEqual(scheduledCalls.first?.0, jobID)
+        XCTAssertEqual(scheduledCalls.first?.1, [scheduledPath])
+    }
+
+    func testApplicationDelegateSupportsRuntimeDefaultInitialization() {
+        let delegateType: NSObject.Type = MenuBarApplicationDelegate.self
+
+        XCTAssertTrue(delegateType.init() is MenuBarApplicationDelegate)
+    }
+
+    func testHidingDockRequestsAccessoryActivationPolicy() {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+
+        manager.applyDockVisibility(hidden: true)
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertTrue(manager.isDockHidden)
+    }
+
+    func testShowingDockRequestsRegularActivationPolicy() {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        manager.applyDockVisibility(hidden: true)
+
+        manager.applyDockVisibility(hidden: false)
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory, .regular])
+        XCTAssertFalse(manager.isDockHidden)
+    }
+
+    func testRejectedActivationPolicyDoesNotPublishUnappliedState() {
+        let application = MenuBarApplicationMock()
+        application.shouldAcceptPolicy = false
+        let manager = MenuBarManager(application: application)
+
+        manager.applyDockVisibility(hidden: true)
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertFalse(manager.isDockHidden)
+    }
+
+    func testActivatingMainWindowOpensWindowAndRaisesApplication() {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+
+        manager.activateMainWindow {
+            application.events.append(.openWindow)
+        }
+
+        XCTAssertEqual(application.activationCalls, [true])
+        XCTAssertEqual(application.events, [.activateApplication, .focusMainWindow, .openWindow])
+    }
+
+    func testActivatingMainWindowFocusesExistingWindowWithoutOpeningAnother() {
+        let application = MenuBarApplicationMock()
+        application.focusMainWindowResult = true
+        let manager = MenuBarManager(application: application)
+
+        manager.activateMainWindow {
+            application.events.append(.openWindow)
+        }
+
+        XCTAssertEqual(application.activationCalls, [true])
+        XCTAssertEqual(application.events, [.activateApplication, .focusMainWindow])
+    }
+
+    func testHiddenDockLaunchSuppressesInitialMainWindowAfterAccessoryPolicyIsAccepted() {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+
+        let shouldSuppress = manager.prepareForLaunch(hidden: true)
+        manager.suppressInitialMainWindow(if: shouldSuppress)
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 1)
+    }
+
+    func testRegularLaunchKeepsInitialMainWindowVisible() {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+
+        let shouldSuppress = manager.prepareForLaunch(hidden: false)
+        manager.suppressInitialMainWindow(if: shouldSuppress)
+
+        XCTAssertEqual(application.requestedPolicies, [.regular])
+        XCTAssertEqual(application.closeMainWindowCalls, 0)
+    }
+
+    func testHiddenDockScheduledLaunchKeepsInitialWindowForScheduledTask() {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+
+        let shouldSuppress = manager.prepareForLaunch(
+            hidden: true,
+            suppressInitialMainWindow: false
+        )
+        manager.suppressInitialMainWindow(if: shouldSuppress)
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 0)
+    }
+
+    func testApplicationDelegateUsesPersistedHiddenDockSettingOnInteractiveRestart() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var settings = AppSettings.default
+        settings.hideFromDock = true
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { [] }
+        )
+
+        delegate.applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 1)
+    }
+}
+
+private enum MenuBarApplicationEvent: Equatable {
+    case activateApplication
+    case focusMainWindow
+    case openWindow
+}
+
+@MainActor
+private final class MenuBarApplicationMock: ApplicationActivationPolicyApplying {
+    var shouldAcceptPolicy = true
+    private(set) var requestedPolicies: [NSApplication.ActivationPolicy] = []
+    private(set) var activationCalls: [Bool] = []
+    private(set) var closeMainWindowCalls = 0
+    var focusMainWindowResult = false
+    var events: [MenuBarApplicationEvent] = []
+
+    func setActivationPolicy(_ activationPolicy: NSApplication.ActivationPolicy) -> Bool {
+        requestedPolicies.append(activationPolicy)
+        return shouldAcceptPolicy
+    }
+
+    func activate(ignoringOtherApps: Bool) {
+        activationCalls.append(ignoringOtherApps)
+        events.append(.activateApplication)
+    }
+
+    func closeMainWindows() {
+        closeMainWindowCalls += 1
+    }
+
+    func focusMainWindow() -> Bool {
+        events.append(.focusMainWindow)
+        return focusMainWindowResult
+    }
+}

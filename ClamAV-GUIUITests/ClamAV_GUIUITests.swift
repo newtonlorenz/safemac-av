@@ -109,6 +109,24 @@ final class ClamAV_GUIUITests: XCTestCase {
         add(screenshot)
     }
 
+    func testMenuBarExtraExposesStandaloneActions() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
+        app.launch()
+
+        let menuBarItem = app.menuBars.statusItems["SafeMac AV"]
+        XCTAssertTrue(menuBarItem.waitForExistence(timeout: 5), "Expected the SafeMac AV menu-bar item")
+        menuBarItem.click()
+
+        XCTAssertTrue(app.descendants(matching: .any)["menu-bar-popover"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["menu-bar-quick-scan"].exists)
+        XCTAssertTrue(app.buttons["menu-bar-update-signatures"].exists)
+        XCTAssertTrue(app.buttons["menu-bar-open-main-window"].exists)
+        XCTAssertTrue(app.buttons["menu-bar-open-settings"].exists)
+        XCTAssertTrue(app.buttons["menu-bar-quit"].exists)
+    }
+
     func testLaunchAtLoginSettingShowsCurrentStatus() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
