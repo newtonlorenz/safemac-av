@@ -181,6 +181,28 @@ final class SignatureUpdateAppStateTests: XCTestCase {
         XCTAssertEqual(notifications.signatureResults.map(\.status), [.upToDate])
     }
 
+    func testScheduledLaunchUsesAuthoritativeSettingsSnapshotWhenConfigLaterCorrupts() async {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = true
+        settings.freshclamPath = "/validated/bin/freshclam"
+        settings.configDirectory = "/validated/etc/clamav"
+        settings.signatureDirectory = "/validated/share/clamav"
+        let config = SignatureScheduleConfigMock(settings: settings)
+        let runner = SignatureScheduleFreshclamMock()
+        let appState = makeAppState(
+            config: config,
+            scheduler: SignatureScheduleMock(),
+            freshclamRunner: runner
+        )
+        config.settings = .default
+        config.lastSettingsLoadState = .fallbackDueToError(reason: "corrupt")
+
+        await appState.runScheduledSignatureUpdate()
+
+        XCTAssertEqual(runner.settingsSnapshots, [settings])
+        XCTAssertEqual(runner.updateCalls, 1)
+    }
+
     private func makeAppState(
         config: SignatureScheduleConfigMock,
         scheduler: SignatureScheduleMock,
@@ -270,8 +292,15 @@ private final class SignatureScheduleConfigMock: ConfigManagerProtocol {
 
 private final class SignatureScheduleFreshclamMock: FreshclamRunnerProtocol, @unchecked Sendable {
     private(set) var updateCalls = 0
+    private(set) var settingsSnapshots: [AppSettings] = []
 
     func update() async throws -> UpdateResult {
+        updateCalls += 1
+        return .alreadyUpToDate()
+    }
+
+    func update(using settings: AppSettings) async throws -> UpdateResult {
+        settingsSnapshots.append(settings)
         updateCalls += 1
         return .alreadyUpToDate()
     }
