@@ -3,6 +3,251 @@ import XCTest
 
 @MainActor
 final class AppStateTests: XCTestCase {
+    func testLaunchAtLoginManagerRegistersMainAppAndReportsEnabledStatus() throws {
+        let service = AppStateMockLoginItemService(status: .notRegistered)
+        service.statusAfterRegister = .enabled
+        let manager = LaunchAtLoginManager(service: service)
+
+        try manager.setEnabled(true)
+
+        XCTAssertEqual(service.registerCalls, 1)
+        XCTAssertEqual(service.unregisterCalls, 0)
+        XCTAssertEqual(manager.status, .enabled)
+    }
+
+    func testLaunchAtLoginManagerMapsSystemStatuses() {
+        let service = AppStateMockLoginItemService(status: .notRegistered)
+        let manager = LaunchAtLoginManager(service: service)
+
+        XCTAssertEqual(manager.status, .disabled)
+        service.serviceStatus = .enabled
+        XCTAssertEqual(manager.status, .enabled)
+        service.serviceStatus = .requiresApproval
+        XCTAssertEqual(manager.status, .requiresApproval)
+        service.serviceStatus = .notFound
+        XCTAssertEqual(manager.status, .unavailable)
+    }
+
+    func testLaunchAtLoginStatusesProvideClearSettingsPresentation() {
+        XCTAssertEqual(LaunchAtLoginStatus.disabled.title, "Off")
+        XCTAssertEqual(LaunchAtLoginStatus.enabled.title, "On")
+        XCTAssertEqual(LaunchAtLoginStatus.requiresApproval.title, "Approval required")
+        XCTAssertEqual(LaunchAtLoginStatus.unavailable.title, "Unavailable")
+
+        XCTAssertNil(LaunchAtLoginStatus.disabled.detail)
+        XCTAssertNil(LaunchAtLoginStatus.enabled.detail)
+        XCTAssertNotNil(LaunchAtLoginStatus.requiresApproval.detail)
+        XCTAssertNotNil(LaunchAtLoginStatus.unavailable.detail)
+
+        XCTAssertEqual(LaunchAtLoginStatus.disabled.symbolName, "circle")
+        XCTAssertEqual(LaunchAtLoginStatus.enabled.symbolName, "checkmark.circle.fill")
+        XCTAssertEqual(LaunchAtLoginStatus.requiresApproval.symbolName, "exclamationmark.triangle.fill")
+        XCTAssertEqual(LaunchAtLoginStatus.unavailable.symbolName, "xmark.circle")
+    }
+
+    func testLaunchAtLoginManagerAvoidsDuplicateRegistrationAndUnregisters() throws {
+        let service = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(service: service)
+
+        try manager.setEnabled(true)
+        try manager.setEnabled(false)
+        try manager.setEnabled(false)
+
+        XCTAssertEqual(service.registerCalls, 0)
+        XCTAssertEqual(service.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .disabled)
+    }
+
+    func testLaunchAtLoginStartupReconcilesSavedPreferenceWithSystemStatus() {
+        var settings = AppSettings.default
+        settings.launchAtLogin = true
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let service = AppStateMockLoginItemService(status: .notRegistered)
+
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+
+        XCTAssertFalse(appState.settings.launchAtLogin)
+        XCTAssertFalse(mockConfig.settings.launchAtLogin)
+        XCTAssertEqual(appState.launchAtLoginStatus, .disabled)
+    }
+
+    func testLaunchAtLoginStartupDoesNotPersistFallbackLoadedDefaults() {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        mockConfig.lastSettingsLoadState = .fallbackDueToError(reason: "The data is not in the correct format.")
+        let service = AppStateMockLoginItemService(status: .enabled)
+
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+
+        XCTAssertTrue(appState.settings.launchAtLogin)
+        XCTAssertFalse(mockConfig.settings.launchAtLogin)
+        XCTAssertEqual(mockConfig.saveSettingsCalls, 0)
+        XCTAssertEqual(appState.launchAtLoginStatus, .enabled)
+        XCTAssertNotNil(appState.settingsSaveError)
+        XCTAssertTrue(appState.logs.contains { entry in
+            entry.level == .error && entry.message == "Skipped launch-at-login reconciliation because settings could not be loaded safely"
+        })
+    }
+
+    func testLaunchAtLoginRefreshReconcilesExternalSystemChange() {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let service = AppStateMockLoginItemService(status: .notRegistered)
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+        service.serviceStatus = .enabled
+
+        appState.refreshLaunchAtLoginStatus()
+
+        XCTAssertEqual(appState.launchAtLoginStatus, .enabled)
+        XCTAssertTrue(appState.settings.launchAtLogin)
+        XCTAssertTrue(mockConfig.settings.launchAtLogin)
+    }
+
+    func testLaunchAtLoginRefreshClearsStaleServiceError() {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let service = AppStateMockLoginItemService(status: .notRegistered)
+        service.registerError = AppStateTestError.loginItemFailure
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+        appState.setLaunchAtLoginEnabled(true)
+        XCTAssertNotNil(appState.launchAtLoginError)
+        service.serviceStatus = .enabled
+
+        appState.refreshLaunchAtLoginStatus()
+
+        XCTAssertNil(appState.launchAtLoginError)
+        XCTAssertEqual(appState.launchAtLoginStatus, .enabled)
+    }
+
+    func testEnablingLaunchAtLoginPersistsRegisteredState() {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let service = AppStateMockLoginItemService(status: .notRegistered)
+        service.statusAfterRegister = .enabled
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+
+        appState.setLaunchAtLoginEnabled(true)
+
+        XCTAssertEqual(service.registerCalls, 1)
+        XCTAssertTrue(appState.settings.launchAtLogin)
+        XCTAssertTrue(mockConfig.settings.launchAtLogin)
+        XCTAssertEqual(appState.launchAtLoginStatus, .enabled)
+        XCTAssertNil(appState.launchAtLoginError)
+    }
+
+    func testLaunchAtLoginApprovalRequirementKeepsRequestedPreferenceEnabled() {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let service = AppStateMockLoginItemService(status: .notRegistered)
+        service.statusAfterRegister = .requiresApproval
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+
+        appState.setLaunchAtLoginEnabled(true)
+
+        XCTAssertTrue(appState.settings.launchAtLogin)
+        XCTAssertTrue(mockConfig.settings.launchAtLogin)
+        XCTAssertEqual(appState.launchAtLoginStatus, .requiresApproval)
+        XCTAssertNil(appState.launchAtLoginError)
+    }
+
+    func testDisablingApprovalRequiredLaunchAtLoginUnregistersIt() {
+        var settings = AppSettings.default
+        settings.launchAtLogin = true
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let service = AppStateMockLoginItemService(status: .requiresApproval)
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+
+        appState.setLaunchAtLoginEnabled(false)
+
+        XCTAssertEqual(service.unregisterCalls, 1)
+        XCTAssertFalse(appState.settings.launchAtLogin)
+        XCTAssertFalse(mockConfig.settings.launchAtLogin)
+        XCTAssertEqual(appState.launchAtLoginStatus, .disabled)
+    }
+
+    func testLaunchAtLoginUnregisterFailureKeepsApprovalRequiredPreference() {
+        var settings = AppSettings.default
+        settings.launchAtLogin = true
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let service = AppStateMockLoginItemService(status: .requiresApproval)
+        service.unregisterError = AppStateTestError.loginItemFailure
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+
+        appState.setLaunchAtLoginEnabled(false)
+
+        XCTAssertTrue(appState.settings.launchAtLogin)
+        XCTAssertTrue(mockConfig.settings.launchAtLogin)
+        XCTAssertEqual(appState.launchAtLoginStatus, .requiresApproval)
+        XCTAssertNotNil(appState.launchAtLoginError)
+    }
+
+    func testLaunchAtLoginServiceFailureKeepsPersistedPreferenceConsistent() {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let service = AppStateMockLoginItemService(status: .notRegistered)
+        service.registerError = AppStateTestError.loginItemFailure
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+
+        appState.setLaunchAtLoginEnabled(true)
+
+        XCTAssertFalse(appState.settings.launchAtLogin)
+        XCTAssertFalse(mockConfig.settings.launchAtLogin)
+        XCTAssertEqual(appState.launchAtLoginStatus, .disabled)
+        XCTAssertNotNil(appState.launchAtLoginError)
+    }
+
+    func testLaunchAtLoginPersistenceFailureRollsBackRegistration() {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let service = AppStateMockLoginItemService(status: .notRegistered)
+        service.statusAfterRegister = .enabled
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+        mockConfig.saveError = AppStateTestError.settingsFailure
+
+        appState.setLaunchAtLoginEnabled(true)
+
+        XCTAssertEqual(service.registerCalls, 1)
+        XCTAssertEqual(service.unregisterCalls, 1)
+        XCTAssertFalse(appState.settings.launchAtLogin)
+        XCTAssertFalse(mockConfig.settings.launchAtLogin)
+        XCTAssertEqual(appState.launchAtLoginStatus, .disabled)
+        XCTAssertNotNil(appState.launchAtLoginError)
+        XCTAssertNotNil(appState.settingsSaveError)
+    }
+
     func testSaveSettingsSurfacesPersistenceFailureAndLogsIt() throws {
         let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
@@ -571,9 +816,47 @@ final class AppStateTests: XCTestCase {
 
 private enum AppStateTestError: LocalizedError {
     case conditionTimedOut
+    case loginItemFailure
+    case settingsFailure
 
     var errorDescription: String? {
-        "Timed out waiting for an asynchronous AppState test condition."
+        switch self {
+        case .conditionTimedOut:
+            return "Timed out waiting for an asynchronous AppState test condition."
+        case .loginItemFailure:
+            return "The login item could not be registered."
+        case .settingsFailure:
+            return "The settings file could not be written."
+        }
+    }
+}
+
+private final class AppStateMockLoginItemService: LaunchAtLoginService {
+    var serviceStatus: LaunchAtLoginServiceStatus
+    var statusAfterRegister: LaunchAtLoginServiceStatus = .enabled
+    var registerError: Error?
+    var unregisterError: Error?
+    private(set) var registerCalls = 0
+    private(set) var unregisterCalls = 0
+
+    init(status: LaunchAtLoginServiceStatus) {
+        serviceStatus = status
+    }
+
+    func register() throws {
+        registerCalls += 1
+        if let registerError {
+            throw registerError
+        }
+        serviceStatus = statusAfterRegister
+    }
+
+    func unregister() throws {
+        unregisterCalls += 1
+        if let unregisterError {
+            throw unregisterError
+        }
+        serviceStatus = .notRegistered
     }
 }
 
@@ -618,7 +901,10 @@ private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol, @un
 
 private final class AppStateMockConfigManager: ConfigManagerProtocol {
     var settings: AppSettings
+    var saveError: Error?
     var validationStatus: ClamAVInstallationStatus?
+    var lastSettingsLoadState: SettingsLoadState = .loaded
+    private(set) var saveSettingsCalls = 0
     private(set) var validateInstallationCalls = 0
     private(set) var signatureInfoCalls = 0
 
@@ -631,6 +917,10 @@ private final class AppStateMockConfigManager: ConfigManagerProtocol {
     }
 
     func saveSettings(_ settings: AppSettings) throws {
+        saveSettingsCalls += 1
+        if let saveError {
+            throw saveError
+        }
         self.settings = settings
     }
 

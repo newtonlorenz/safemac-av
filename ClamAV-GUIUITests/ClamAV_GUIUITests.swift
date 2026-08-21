@@ -108,4 +108,27 @@ final class ClamAV_GUIUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
     }
+
+    func testLaunchAtLoginSettingShowsCurrentStatus() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
+        app.launch()
+
+        app.activate()
+        let fileMenu = app.menuBars.menuBarItems["File"]
+        XCTAssertTrue(fileMenu.waitForExistence(timeout: 5), "Expected the File menu")
+        fileMenu.click()
+
+        let newWindow = app.menuItems["New Window"]
+        XCTAssertTrue(newWindow.waitForExistence(timeout: 5), "Expected the default New Window command")
+        newWindow.click()
+
+        let settingsButton = app.buttons["sidebar-settings"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5), "Expected the Settings sidebar button")
+        settingsButton.click()
+
+        XCTAssertTrue(app.descendants(matching: .any)["launch-at-login-toggle"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["launch-at-login-status"].waitForExistence(timeout: 5))
+    }
 }
