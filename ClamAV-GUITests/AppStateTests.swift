@@ -227,11 +227,13 @@ final class AppStateTests: XCTestCase {
     func testScheduledScanSendsStartingNotificationBeforeRunning() async throws {
         let mockConfig = AppStateMockConfigManager(settings: .default)
         let runner = AppStateControlledRunner()
+        let coordinator = ScanCoordinator(clamAVRunner: runner)
         let notifications = AppStateMockNotificationManager()
+        notifications.blockScheduledNotification = true
         let appState = AppState(
             configManager: mockConfig,
             fileWatcher: MockFileWatcher(),
-            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            scanCoordinator: coordinator,
             notificationManager: notifications
         )
         let scheduledPath = URL(fileURLWithPath: "/tmp/scheduled")
@@ -239,13 +241,86 @@ final class AppStateTests: XCTestCase {
         let scan = Task {
             await appState.runScheduledScan(jobID: nil, paths: [scheduledPath])
         }
-        try await waitUntil {
-            notifications.scheduledJobNames == ["Scheduled scan"] && runner.scanPaths.count == 1
-        }
+        try await waitUntil { notifications.scheduledJobNames == ["Scheduled scan"] }
+
+        XCTAssertTrue(coordinator.isScanning)
+        XCTAssertTrue(runner.scanPaths.isEmpty)
+
+        notifications.resumeScheduledNotification()
+        try await waitUntil { runner.scanPaths.count == 1 }
         runner.resumeNextScan()
         await scan.value
 
         XCTAssertEqual(notifications.scheduledJobNames, ["Scheduled scan"])
+    }
+
+    func testScheduledScanWithNoPathsDoesNotSendStartingNotification() async {
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications
+        )
+
+        await appState.runScheduledScan(jobID: nil, paths: [])
+
+        XCTAssertTrue(notifications.scheduledJobNames.isEmpty)
+        XCTAssertTrue(runner.scanPaths.isEmpty)
+        XCTAssertEqual(appState.scanError, "No scan paths selected.")
+    }
+
+    func testScheduledScanWithInvalidClamAVDoesNotSendStartingNotification() async {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        mockConfig.validationStatus = .notInstalled
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications
+        )
+
+        await appState.runScheduledScan(
+            jobID: nil,
+            paths: [URL(fileURLWithPath: "/tmp/scheduled")]
+        )
+
+        XCTAssertTrue(notifications.scheduledJobNames.isEmpty)
+        XCTAssertTrue(runner.scanPaths.isEmpty)
+        XCTAssertEqual(appState.scanError, ClamAVInstallationStatus.notInstalled.message)
+    }
+
+    func testScheduledScanRejectedWhileAnotherScanRunsDoesNotSendStartingNotification() async throws {
+        let runner = AppStateControlledRunner()
+        let coordinator = ScanCoordinator(clamAVRunner: runner)
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: coordinator,
+            notificationManager: notifications
+        )
+        let manualPath = URL(fileURLWithPath: "/tmp/manual")
+
+        let manualScan = Task {
+            await appState.startScan(paths: [manualPath], options: .default, source: .manual)
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+
+        await appState.runScheduledScan(
+            jobID: nil,
+            paths: [URL(fileURLWithPath: "/tmp/scheduled")]
+        )
+
+        XCTAssertTrue(notifications.scheduledJobNames.isEmpty)
+        XCTAssertEqual(runner.scanPaths, [[manualPath]])
+        XCTAssertEqual(appState.scanError, "Skipped because a manual scan is already running.")
+
+        runner.resumeNextScan()
+        let _ = await manualScan.value
     }
 
     func testRequestNotificationPermissionPublishesManagerState() async {
@@ -543,6 +618,7 @@ private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol, @un
 
 private final class AppStateMockConfigManager: ConfigManagerProtocol {
     var settings: AppSettings
+    var validationStatus: ClamAVInstallationStatus?
     private(set) var validateInstallationCalls = 0
     private(set) var signatureInfoCalls = 0
 
@@ -564,11 +640,11 @@ private final class AppStateMockConfigManager: ConfigManagerProtocol {
 
     func validateClamAVInstallation() -> ClamAVInstallationStatus {
         validateInstallationCalls += 1
-        return .ready(clamscanPath: settings.clamScanPath)
+        return validationStatus ?? .ready(clamscanPath: settings.clamScanPath)
     }
 
     func validateClamAVInstallation(using settings: AppSettings) -> ClamAVInstallationStatus {
-        .ready(clamscanPath: settings.clamScanPath)
+        validationStatus ?? .ready(clamscanPath: settings.clamScanPath)
     }
 
     func getSignatureInfo() -> SignatureInfo {
@@ -689,11 +765,13 @@ private final class AppStateMockNotificationManager: NotificationManaging {
     var permissionStatus: NotificationPermissionStatus = .authorized
     var permissionError: String?
     var statusAfterRequest: NotificationPermissionStatus?
+    var blockScheduledNotification = false
     private(set) var threatNotifications: [[ScanResult]] = []
     private(set) var scanCompleteReports: [ScanReport] = []
     private(set) var cleanFileURLs: [URL] = []
     private(set) var signatureResults: [UpdateResult] = []
     private(set) var scheduledJobNames: [String] = []
+    private var scheduledContinuation: CheckedContinuation<Void, Never>?
 
     func setupNotificationCategories() {}
     func refreshPermissionStatus() async {}
@@ -722,5 +800,15 @@ private final class AppStateMockNotificationManager: NotificationManaging {
 
     func sendScheduledScanStarting(jobName: String, settings: AppSettings) async {
         scheduledJobNames.append(jobName)
+        if blockScheduledNotification {
+            await withCheckedContinuation { continuation in
+                scheduledContinuation = continuation
+            }
+        }
+    }
+
+    func resumeScheduledNotification() {
+        scheduledContinuation?.resume()
+        scheduledContinuation = nil
     }
 }
