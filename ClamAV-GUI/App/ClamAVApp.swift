@@ -2,6 +2,75 @@ import AppKit
 import Combine
 import SwiftUI
 
+@MainActor
+struct ApplicationLaunchConfiguration {
+    let manager: MenuBarManager
+    let settingsProvider: () -> AppSettings
+    let argumentsProvider: () -> [String]
+    let runInitialApplicationLaunch: (LaunchMode) async -> Void
+    let runActiveInteractiveMaintenance: (LaunchMode) async -> Void
+    let runScheduledSignatureUpdate: () async -> Void
+}
+
+@MainActor
+final class ApplicationLaunchConfigurationRegistry {
+    static let shared = ApplicationLaunchConfigurationRegistry()
+
+    private final class Subscription {
+        weak var owner: AnyObject?
+        let deliver: (AnyObject, ApplicationLaunchConfiguration) -> Void
+        var didReceiveConfiguration = false
+
+        init<Owner: AnyObject>(
+            owner: Owner,
+            operation: @escaping (Owner, ApplicationLaunchConfiguration) -> Void
+        ) {
+            self.owner = owner
+            deliver = { owner, configuration in
+                guard let owner = owner as? Owner else { return }
+                operation(owner, configuration)
+            }
+        }
+    }
+
+    private var configuration: ApplicationLaunchConfiguration?
+    private var subscriptions: [ObjectIdentifier: Subscription] = [:]
+
+    func install(_ configuration: ApplicationLaunchConfiguration) {
+        self.configuration = configuration
+        removeReleasedSubscriptions()
+        let deliveries = subscriptions.values.filter { !$0.didReceiveConfiguration }
+        deliveries.forEach { $0.didReceiveConfiguration = true }
+        deliveries.forEach { subscription in
+            guard let owner = subscription.owner else { return }
+            subscription.deliver(owner, configuration)
+        }
+    }
+
+    func whenAvailable<Owner: AnyObject>(
+        for owner: Owner,
+        _ operation: @escaping (Owner, ApplicationLaunchConfiguration) -> Void
+    ) {
+        removeReleasedSubscriptions()
+        let identifier = ObjectIdentifier(owner)
+        guard subscriptions[identifier] == nil else { return }
+        let subscription = Subscription(owner: owner, operation: operation)
+        subscriptions[identifier] = subscription
+        guard let configuration else { return }
+        subscription.didReceiveConfiguration = true
+        subscription.deliver(owner, configuration)
+    }
+
+    func resetForTesting() {
+        configuration = nil
+        subscriptions.removeAll()
+    }
+
+    private func removeReleasedSubscriptions() {
+        subscriptions = subscriptions.filter { $0.value.owner != nil }
+    }
+}
+
 @main
 struct ClamAVApp: App {
     static let mainWindowID = "main-window"
@@ -34,35 +103,37 @@ struct ClamAVApp: App {
             isUITesting: arguments.contains("--ui-testing"),
             manager: menuBarManager
         )
-        applicationDelegate.configure(
-            manager: menuBarManager,
-            settingsProvider: { appState.settings },
-            argumentsProvider: { arguments },
-            runInitialApplicationLaunch: { mode in
-                switch mode {
-                case .interactive:
-                    if SignatureScheduleReconciliationPolicy.shouldReconcile(
-                        bundleURL: bundleURL,
-                        isAutomatedTest: isAutomatedTestLaunch
-                    ) {
-                        appState.reconcileSignatureUpdateSchedule()
+        ApplicationLaunchConfigurationRegistry.shared.install(
+            ApplicationLaunchConfiguration(
+                manager: menuBarManager,
+                settingsProvider: { appState.settings },
+                argumentsProvider: { arguments },
+                runInitialApplicationLaunch: { mode in
+                    switch mode {
+                    case .interactive:
+                        if SignatureScheduleReconciliationPolicy.shouldReconcile(
+                            bundleURL: bundleURL,
+                            isAutomatedTest: isAutomatedTestLaunch
+                        ) {
+                            appState.reconcileSignatureUpdateSchedule()
+                        }
+                        await appState.drainExternalScanRequests()
+                    case .scheduledScan(let jobID, let paths):
+                        await appState.runScheduledScan(jobID: jobID, paths: paths)
+                    case .scheduledSignatureUpdate:
+                        break
                     }
+                },
+                runActiveInteractiveMaintenance: { mode in
+                    guard mode.isInteractive else { return }
+                    appState.refreshProtectionScore()
+                    appState.refreshLaunchAtLoginStatus()
                     await appState.drainExternalScanRequests()
-                case .scheduledScan(let jobID, let paths):
-                    await appState.runScheduledScan(jobID: jobID, paths: paths)
-                case .scheduledSignatureUpdate:
-                    break
+                },
+                runScheduledSignatureUpdate: {
+                    await appState.runScheduledSignatureUpdate()
                 }
-            },
-            runActiveInteractiveMaintenance: { mode in
-                guard mode.isInteractive else { return }
-                appState.refreshProtectionScore()
-                appState.refreshLaunchAtLoginStatus()
-                await appState.drainExternalScanRequests()
-            },
-            runScheduledSignatureUpdate: {
-                await appState.runScheduledSignatureUpdate()
-            }
+            )
         )
         MainWindowControllerRegistry.shared.installFactory {
             MainWindowController(

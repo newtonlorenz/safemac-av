@@ -75,7 +75,8 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     private var shouldStartInitialLaunchAfterPresentation = false
     private var didStartInitialApplicationLaunch = false
     private var isConfiguredForLaunch: Bool
-    private var hasPendingLaunchUntilConfigured = false
+    private var didReceiveWillFinishLaunching = false
+    private var didPrepareApplicationLaunch = false
     private var launchMode: LaunchMode = .interactive
     private var canRunScheduledSignatureUpdate = false
     private var shouldPresentMainWindowAtLaunch = false
@@ -105,6 +106,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         }
         isConfiguredForLaunch = false
         super.init()
+        subscribeToLaunchConfiguration(ApplicationLaunchConfigurationRegistry.shared)
     }
 
     init(
@@ -120,7 +122,8 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         runActiveInteractiveMaintenance: @escaping (LaunchMode) async -> Void = { _ in },
         runScheduledSignatureUpdate: @escaping () async -> Void = {},
         finishScheduledLaunch: @escaping () -> Void = {},
-        startsConfigured: Bool = true
+        startsConfigured: Bool = true,
+        launchConfigurationRegistry: ApplicationLaunchConfigurationRegistry? = nil
     ) {
         providedManager = manager
         self.settingsProvider = settingsProvider
@@ -132,35 +135,41 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         self.runActiveInteractiveMaintenance = runActiveInteractiveMaintenance
         self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
         self.finishScheduledLaunch = finishScheduledLaunch
-        isConfiguredForLaunch = startsConfigured
+        isConfiguredForLaunch = startsConfigured && launchConfigurationRegistry == nil
         super.init()
+        if let launchConfigurationRegistry {
+            subscribeToLaunchConfiguration(launchConfigurationRegistry)
+        }
     }
 
-    func configure(
-        manager: MenuBarManager,
-        settingsProvider: @escaping () -> AppSettings,
-        argumentsProvider: @escaping () -> [String],
-        runInitialApplicationLaunch: @escaping (LaunchMode) async -> Void,
-        runActiveInteractiveMaintenance: @escaping (LaunchMode) async -> Void,
-        runScheduledSignatureUpdate: @escaping () async -> Void
+    private func subscribeToLaunchConfiguration(
+        _ registry: ApplicationLaunchConfigurationRegistry
     ) {
-        providedManager = manager
-        self.settingsProvider = settingsProvider
-        self.argumentsProvider = argumentsProvider
-        mainWindowControllerFactory = {
-            MainWindowControllerRegistry.shared.makeController()
+        registry.whenAvailable(for: self) { delegate, configuration in
+            delegate.applyLaunchConfiguration(configuration)
         }
-        self.runInitialApplicationLaunch = runInitialApplicationLaunch
-        self.runActiveInteractiveMaintenance = runActiveInteractiveMaintenance
-        self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
+    }
+
+    private func applyLaunchConfiguration(_ configuration: ApplicationLaunchConfiguration) {
+        providedManager = configuration.manager
+        settingsProvider = configuration.settingsProvider
+        argumentsProvider = configuration.argumentsProvider
+        runInitialApplicationLaunch = configuration.runInitialApplicationLaunch
+        runActiveInteractiveMaintenance = configuration.runActiveInteractiveMaintenance
+        runScheduledSignatureUpdate = configuration.runScheduledSignatureUpdate
         isConfiguredForLaunch = true
-        if hasPendingLaunchUntilConfigured {
-            hasPendingLaunchUntilConfigured = false
-            continueApplicationLaunch()
-        }
+        prepareApplicationLaunchIfReady()
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        didReceiveWillFinishLaunching = true
+        prepareApplicationLaunchIfReady()
+    }
+
+    private func prepareApplicationLaunchIfReady() {
+        guard isConfiguredForLaunch, didReceiveWillFinishLaunching else { return }
+        guard !didPrepareApplicationLaunch else { return }
+        didPrepareApplicationLaunch = true
         let manager = providedManager ?? MenuBarManager()
         let settings = settingsProvider()
         let arguments = argumentsProvider()
@@ -184,17 +193,19 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         MainWindowControllerRegistry.shared.installRouter { [weak self] selection in
             self?.showMainWindow(selecting: selection)
         }
+        continueApplicationLaunchIfReady()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !didHandleApplicationLaunch else { return }
         didHandleApplicationLaunch = true
+        continueApplicationLaunchIfReady()
+    }
+
+    private func continueApplicationLaunchIfReady() {
+        guard didHandleApplicationLaunch, didPrepareApplicationLaunch else { return }
         if launchMode == .scheduledSignatureUpdate, !canRunScheduledSignatureUpdate {
             finishScheduledLaunch()
-            return
-        }
-        guard isConfiguredForLaunch else {
-            hasPendingLaunchUntilConfigured = true
             return
         }
         continueApplicationLaunch()
@@ -261,6 +272,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
 
     @discardableResult
     func showMainWindow(selecting selection: NavigationTab?) -> Bool {
+        guard didPrepareApplicationLaunch else { return false }
         guard launchMode.presentsUserInterface else { return false }
         if mainWindowController == nil {
             mainWindowController = mainWindowControllerFactory()

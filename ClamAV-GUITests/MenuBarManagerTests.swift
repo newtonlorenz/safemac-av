@@ -184,9 +184,12 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertFalse(source.contains("OpenWindowAction"))
         XCTAssertTrue(source.contains("MenuBarExtra"))
         XCTAssertFalse(source.contains("@StateObject private var initialLaunchHandler"))
-        let configureDelegate = try XCTUnwrap(source.range(of: "applicationDelegate.configure"))
+        XCTAssertFalse(source.contains("applicationDelegate.configure"))
+        let installConfiguration = try XCTUnwrap(
+            source.range(of: "ApplicationLaunchConfigurationRegistry.shared.install")
+        )
         let installFactory = try XCTUnwrap(source.range(of: "MainWindowControllerRegistry.shared.installFactory"))
-        XCTAssertLessThan(configureDelegate.lowerBound, installFactory.lowerBound)
+        XCTAssertLessThan(installConfiguration.lowerBound, installFactory.lowerBound)
     }
 
     func testVisibleInteractiveDelegateLazilyCreatesAndRetainsOneMainWindowController() async {
@@ -378,6 +381,7 @@ final class MenuBarManagerTests: XCTestCase {
     }
 
     func testHiddenInteractiveLaunchDefersMaintenanceUntilDelegateIsConfigured() async {
+        let configurationRegistry = ApplicationLaunchConfigurationRegistry()
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
         var settings = AppSettings.default
@@ -393,7 +397,7 @@ final class MenuBarManagerTests: XCTestCase {
             mainWindowControllerFactory: { MainWindowControllerMock() },
             waitForMainWindowControllerFactory: { _ in waiterCalls += 1 },
             runInitialApplicationLaunch: { _ in placeholderCalls += 1 },
-            startsConfigured: false
+            launchConfigurationRegistry: configurationRegistry
         )
 
         delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
@@ -405,7 +409,7 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(configuredCalls, 0)
         XCTAssertEqual(waiterCalls, 0)
 
-        delegate.configure(
+        let configuration = ApplicationLaunchConfiguration(
             manager: manager,
             settingsProvider: { settings },
             argumentsProvider: { [] },
@@ -416,17 +420,8 @@ final class MenuBarManagerTests: XCTestCase {
             runActiveInteractiveMaintenance: { _ in },
             runScheduledSignatureUpdate: {}
         )
-        delegate.configure(
-            manager: manager,
-            settingsProvider: { settings },
-            argumentsProvider: { [] },
-            runInitialApplicationLaunch: { _ in
-                configuredCalls += 1
-                maintenanceRan.fulfill()
-            },
-            runActiveInteractiveMaintenance: { _ in },
-            runScheduledSignatureUpdate: {}
-        )
+        configurationRegistry.install(configuration)
+        configurationRegistry.install(configuration)
         await fulfillment(of: [maintenanceRan], timeout: 1)
         await Task.yield()
 
@@ -436,6 +431,7 @@ final class MenuBarManagerTests: XCTestCase {
     }
 
     func testScheduledSignatureUpdateDefersUntilDelegateIsConfigured() async {
+        let configurationRegistry = ApplicationLaunchConfigurationRegistry()
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
         var placeholderCalls = 0
@@ -455,7 +451,7 @@ final class MenuBarManagerTests: XCTestCase {
                 finishCalls += 1
                 launchFinished.fulfill()
             },
-            startsConfigured: false
+            launchConfigurationRegistry: configurationRegistry
         )
 
         delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
@@ -468,7 +464,7 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(finishCalls, 0)
         XCTAssertEqual(waiterCalls, 0)
 
-        delegate.configure(
+        let configuration = ApplicationLaunchConfiguration(
             manager: manager,
             settingsProvider: { .default },
             argumentsProvider: { ["--scheduled-signature-update"] },
@@ -479,17 +475,8 @@ final class MenuBarManagerTests: XCTestCase {
                 updateRan.fulfill()
             }
         )
-        delegate.configure(
-            manager: manager,
-            settingsProvider: { .default },
-            argumentsProvider: { ["--scheduled-signature-update"] },
-            runInitialApplicationLaunch: { _ in },
-            runActiveInteractiveMaintenance: { _ in },
-            runScheduledSignatureUpdate: {
-                configuredCalls += 1
-                updateRan.fulfill()
-            }
-        )
+        configurationRegistry.install(configuration)
+        configurationRegistry.install(configuration)
         await fulfillment(of: [updateRan, launchFinished], timeout: 1)
         await Task.yield()
 

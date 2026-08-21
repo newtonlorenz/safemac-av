@@ -284,7 +284,7 @@ final class ApplicationLaunchConfigurationTests: XCTestCase {
         XCTAssertEqual(application.events, [])
     }
 
-    func testRejectedScheduledSignatureIsolationFinishesWithoutWaitingForConfiguration() async {
+    func testRejectedScheduledSignatureIsolationFinishesOnceAndIgnoresReplacementConfiguration() async {
         let configurationRegistry = ApplicationLaunchConfigurationRegistry()
         let application = LaunchConfigurationApplicationMock()
         application.shouldAcceptPolicy = false
