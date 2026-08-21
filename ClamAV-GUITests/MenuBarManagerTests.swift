@@ -14,42 +14,71 @@ final class MenuBarManagerTests: XCTestCase {
 
     func testInitialLaunchHandlerDrainsInteractiveRequestsOnce() async {
         let handler = InitialLaunchHandler()
+        var presentMainWindowCalls = 0
         var drainCalls = 0
         var scheduledCalls = 0
 
         await handler.handle(
             launchMode: .interactive,
+            shouldPresentInteractiveMainWindow: true,
+            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { _, _ in scheduledCalls += 1 }
         )
         await handler.handle(
             launchMode: .interactive,
+            shouldPresentInteractiveMainWindow: true,
+            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { _, _ in scheduledCalls += 1 }
         )
 
+        XCTAssertEqual(presentMainWindowCalls, 1)
         XCTAssertEqual(drainCalls, 1)
         XCTAssertEqual(scheduledCalls, 0)
+    }
+
+    func testInitialLaunchHandlerPreservesHiddenDockInteractiveLaunch() async {
+        let handler = InitialLaunchHandler()
+        var presentMainWindowCalls = 0
+        var drainCalls = 0
+
+        await handler.handle(
+            launchMode: .interactive,
+            shouldPresentInteractiveMainWindow: false,
+            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
+            drainExternalScanRequests: { drainCalls += 1 },
+            runScheduledScan: { _, _ in }
+        )
+
+        XCTAssertEqual(presentMainWindowCalls, 0)
+        XCTAssertEqual(drainCalls, 1)
     }
 
     func testInitialLaunchHandlerRoutesScheduledScanOnce() async {
         let handler = InitialLaunchHandler()
         let jobID = UUID()
         let scheduledPath = URL(fileURLWithPath: "/tmp/scheduled")
+        var presentMainWindowCalls = 0
         var drainCalls = 0
         var scheduledCalls: [(UUID?, [URL])] = []
 
         await handler.handle(
             launchMode: .scheduledScan(jobID: jobID, paths: [scheduledPath]),
+            shouldPresentInteractiveMainWindow: true,
+            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
         )
         await handler.handle(
             launchMode: .scheduledScan(jobID: jobID, paths: [scheduledPath]),
+            shouldPresentInteractiveMainWindow: true,
+            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
         )
 
+        XCTAssertEqual(presentMainWindowCalls, 0)
         XCTAssertEqual(drainCalls, 0)
         XCTAssertEqual(scheduledCalls.count, 1)
         XCTAssertEqual(scheduledCalls.first?.0, jobID)
@@ -58,20 +87,26 @@ final class MenuBarManagerTests: XCTestCase {
 
     func testInitialLaunchHandlerLeavesScheduledSignatureUpdateToApplicationLifecycle() async {
         let handler = InitialLaunchHandler()
+        var presentMainWindowCalls = 0
         var drainCalls = 0
         var scheduledScanCalls = 0
 
         await handler.handle(
             launchMode: .scheduledSignatureUpdate,
+            shouldPresentInteractiveMainWindow: true,
+            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { _, _ in scheduledScanCalls += 1 }
         )
         await handler.handle(
             launchMode: .scheduledSignatureUpdate,
+            shouldPresentInteractiveMainWindow: true,
+            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { _, _ in scheduledScanCalls += 1 }
         )
 
+        XCTAssertEqual(presentMainWindowCalls, 0)
         XCTAssertEqual(drainCalls, 0)
         XCTAssertEqual(scheduledScanCalls, 0)
     }
