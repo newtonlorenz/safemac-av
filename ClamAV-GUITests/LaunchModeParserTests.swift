@@ -18,6 +18,14 @@ final class LaunchModeParserTests: XCTestCase {
         XCTAssertFalse(mode.presentsUserInterface)
     }
 
+    func testOnlyInteractiveModeRunsActiveSceneMaintenance() {
+        XCTAssertTrue(LaunchMode.interactive.runsActiveSceneMaintenance)
+        XCTAssertFalse(LaunchMode.scheduledSignatureUpdate.runsActiveSceneMaintenance)
+        XCTAssertFalse(
+            LaunchMode.scheduledScan(jobID: UUID(), paths: []).runsActiveSceneMaintenance
+        )
+    }
+
     func testParsesScheduledScanWithRepeatedPaths() {
         let jobID = UUID()
         let mode = LaunchModeParser.parse(arguments: [

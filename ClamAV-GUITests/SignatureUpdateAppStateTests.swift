@@ -41,6 +41,7 @@ final class SignatureUpdateAppStateTests: XCTestCase {
         XCTAssertEqual(config.saveCalls, 0)
         XCTAssertNotNil(appState.signatureUpdateScheduleError)
         XCTAssertFalse(appState.signatureUpdateScheduleError?.contains("/Users/private") == true)
+        XCTAssertFalse(appState.logs.contains { $0.message.contains("/Users/private") })
     }
 
     func testPersistenceFailureRollsLaunchAgentBackToPreviousSchedule() {
@@ -66,6 +67,7 @@ final class SignatureUpdateAppStateTests: XCTestCase {
         XCTAssertEqual(config.settings, settings)
         XCTAssertNotNil(appState.settingsSaveError)
         XCTAssertNotNil(appState.signatureUpdateScheduleError)
+        XCTAssertFalse(appState.logs.contains { $0.message.contains("/Users/private") })
     }
 
     func testPersistenceAndRollbackFailurePublishesIndeterminateScheduleState() {

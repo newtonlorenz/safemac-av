@@ -330,6 +330,19 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture.plistURL), oldData)
     }
 
+    func testLaunchctlPrintFailsClosedUnlessServiceIsKnownMissing() throws {
+        XCTAssertTrue(try SignatureUpdateScheduler.loadedState(forPrintStatus: 0))
+        XCTAssertFalse(try SignatureUpdateScheduler.loadedState(forPrintStatus: 3))
+        XCTAssertFalse(try SignatureUpdateScheduler.loadedState(forPrintStatus: 113))
+        XCTAssertThrowsError(try SignatureUpdateScheduler.loadedState(forPrintStatus: 5)) { error in
+            guard case SignatureUpdateSchedulerError.launchctlFailed(let command, let status) = error else {
+                return XCTFail("Expected launchctlFailed, got \(error)")
+            }
+            XCTAssertEqual(command, "print")
+            XCTAssertEqual(status, 5)
+        }
+    }
+
     private var domain: String { "gui/\(userID)" }
     private var serviceTarget: String { "\(domain)/\(SignatureUpdateScheduler.label)" }
 
