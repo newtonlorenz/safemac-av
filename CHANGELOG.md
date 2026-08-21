@@ -4,7 +4,23 @@ All notable project changes will be documented in this file. The format follows 
 
 ## [Unreleased]
 
-The project is preparing its first public source release.
+## [1.1.0] - 2026-08-21
+
+### Added
+
+- Native macOS 26 Liquid Glass surfaces with accessible material and opaque fallbacks for earlier macOS versions and increased-contrast settings.
+- Expanded macOS UI smoke coverage for the application shell, appearance modes, and sidebar navigation.
+
+### Changed
+
+- The product and public repository are now branded SafeMac AV, with a new app icon, README presentation, Finder action, and release package name.
+- The interface now uses a responsive split-view shell and clearer dashboard, scan, update, scheduling, quarantine, history, log, and settings surfaces.
+
+### Fixed
+
+- Signature updates started from the Updates screen now show shared in-progress feedback on the Dashboard.
+
+## [1.0.0] - 2026-08-19
 
 ### Added
 
@@ -17,7 +33,6 @@ The project is preparing its first public source release.
 
 ### Changed
 
-- The macOS interface now uses a responsive split-view shell, native Liquid Glass surfaces on macOS 26, and accessible material or opaque fallbacks on earlier systems.
 - Quarantine, restore, and delete operations now keep payload and metadata changes transactional when storage operations fail.
 - Settings and scheduled-job metadata now use atomic writes, report failures, and preserve existing state during failed updates.
 - User-facing quarantine, scheduling, and export failures now appear as actionable alerts instead of being silently ignored.
@@ -26,3 +41,7 @@ The project is preparing its first public source release.
 ### Security
 
 - Public distribution guidance distinguishes unsigned source builds from signed and notarized artifacts.
+
+[Unreleased]: https://github.com/newtonlorenz/safemac-av/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/newtonlorenz/safemac-av/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/newtonlorenz/safemac-av/releases/tag/v1.0.0

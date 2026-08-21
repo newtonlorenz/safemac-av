@@ -1,5 +1,5 @@
 name: Bug report
-description: Report reproducible incorrect behavior in ClamAV GUI.
+description: Report reproducible incorrect behavior in SafeMac AV.
 title: "bug: "
 labels: [bug]
 body:

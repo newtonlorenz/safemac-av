@@ -1,6 +1,6 @@
 # Architecture
 
-ClamAV GUI is a native macOS SwiftUI application that coordinates local ClamAV command-line tools. It does not embed or reimplement the antivirus engine.
+SafeMac AV is a native macOS SwiftUI application that coordinates local ClamAV command-line tools. It does not embed or reimplement the antivirus engine.
 
 ## System overview
 

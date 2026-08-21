@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -86,23 +87,20 @@ struct Sidebar: View {
 private struct SidebarBrand: View {
     var body: some View {
         HStack(spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor.gradient)
-
-                Image(systemName: "checkmark.shield.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 38, height: 38)
-            .shadow(color: Color.accentColor.opacity(0.28), radius: 9, y: 4)
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .accessibilityHidden(true)
+                .frame(width: 38, height: 38)
+                .shadow(color: Color.accentColor.opacity(0.28), radius: 9, y: 4)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("ClamAV")
+                Text("SafeMac AV")
                     .font(.headline)
-                Text("Security Center")
+                Text("Scan locally. Stay in control.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
         .padding(.horizontal, 6)

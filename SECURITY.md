@@ -1,6 +1,6 @@
 # Security Policy
 
-ClamAV GUI handles untrusted filenames, launches local security tools, moves files into quarantine, and can create per-user scheduled jobs. Security reports are taken seriously.
+SafeMac AV handles untrusted filenames, launches local security tools, moves files into quarantine, and can create per-user scheduled jobs. Security reports are taken seriously.
 
 ## Supported versions
 
@@ -10,7 +10,7 @@ Security fixes target the latest release and the current `main` branch. Older so
 
 Do not open a public issue for a suspected vulnerability.
 
-Use GitHub's [private vulnerability reporting](https://github.com/newtonlorenz/clamav-gui/security/advisories/new) to send the maintainers:
+Use GitHub's [private vulnerability reporting](https://github.com/newtonlorenz/safemac-av/security/advisories/new) to send the maintainers:
 
 - the affected commit or version;
 - impact and realistic attack scenario;
@@ -49,8 +49,8 @@ ClamAV engine or signature vulnerabilities should also be reported to the [ClamA
 For a signed release, inspect the app and notarization ticket before use:
 
 ```bash
-codesign --verify --deep --strict --verbose=2 /Applications/ClamAV-GUI.app
-spctl --assess --type execute --verbose=2 /Applications/ClamAV-GUI.app
+codesign --verify --deep --strict --verbose=2 "/Applications/SafeMac AV.app"
+spctl --assess --type execute --verbose=2 "/Applications/SafeMac AV.app"
 ```
 
 Checksums, tags, and release notes should be obtained from the upstream GitHub repository. Source builds should be reviewed and built locally with a trusted Xcode installation.

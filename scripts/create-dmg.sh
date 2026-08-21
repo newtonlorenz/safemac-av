@@ -1,21 +1,23 @@
 #!/bin/bash
 
-# Build a local ClamAV-GUI DMG. Set SIGNING_IDENTITY to produce a signed DMG,
+# Build a local SafeMac AV DMG. Set SIGNING_IDENTITY to produce a signed DMG,
 # and also set NOTARY_PROFILE to submit it with a notarytool Keychain profile.
 
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-APP_NAME="ClamAV-GUI"
+PROJECT_NAME="ClamAV-GUI"
+PRODUCT_NAME="SafeMac AV"
+DMG_NAME="SafeMac-AV"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 BUILD_DIR="$PROJECT_DIR/build"
-ARCHIVE_PATH="$BUILD_DIR/$APP_NAME.xcarchive"
+ARCHIVE_PATH="$BUILD_DIR/$PROJECT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
-APP_PATH="$EXPORT_PATH/$APP_NAME.app"
-DMG_PATH="$BUILD_DIR/$APP_NAME.dmg"
+APP_PATH="$EXPORT_PATH/$PRODUCT_NAME.app"
+DMG_PATH="$BUILD_DIR/$DMG_NAME.dmg"
 TEMP_DMG_DIR="$BUILD_DIR/dmg-contents"
 BUILD_LOG="$BUILD_DIR/archive.log"
-ENTITLEMENTS_PATH="$PROJECT_DIR/$APP_NAME/ClamAV_GUI.entitlements"
+ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME/ClamAV_GUI.entitlements"
 
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
@@ -74,8 +76,8 @@ check_requirements() {
     require_command hdiutil "This script must run on macOS."
     require_command ditto "This script must run on macOS."
 
-    [[ -f "$PROJECT_DIR/$APP_NAME.xcodeproj/project.pbxproj" ]] \
-        || fail "Xcode project not found at $PROJECT_DIR/$APP_NAME.xcodeproj"
+    [[ -f "$PROJECT_DIR/$PROJECT_NAME.xcodeproj/project.pbxproj" ]] \
+        || fail "Xcode project not found at $PROJECT_DIR/$PROJECT_NAME.xcodeproj"
 
     if [[ -n "$NOTARY_PROFILE" && -z "$SIGNING_IDENTITY" ]]; then
         fail "NOTARY_PROFILE requires SIGNING_IDENTITY; unsigned builds cannot be notarized."
@@ -110,8 +112,8 @@ build_app() {
     print_step "Building an unsigned Release archive"
 
     xcodebuild archive \
-        -project "$PROJECT_DIR/$APP_NAME.xcodeproj" \
-        -scheme "$APP_NAME" \
+        -project "$PROJECT_DIR/$PROJECT_NAME.xcodeproj" \
+        -scheme "$PROJECT_NAME" \
         -configuration Release \
         -archivePath "$ARCHIVE_PATH" \
         CODE_SIGN_IDENTITY="" \
@@ -123,7 +125,7 @@ build_app() {
 }
 
 export_app() {
-    local archived_app="$ARCHIVE_PATH/Products/Applications/$APP_NAME.app"
+    local archived_app="$ARCHIVE_PATH/Products/Applications/$PROJECT_NAME.app"
 
     print_step "Exporting the app"
     [[ -d "$archived_app" ]] || fail "Archived app not found: $archived_app"
@@ -166,12 +168,12 @@ create_dmg() {
     print_step "Creating the DMG"
     remove_tree "$TEMP_DMG_DIR"
     mkdir -p "$TEMP_DMG_DIR"
-    ditto "$APP_PATH" "$TEMP_DMG_DIR/$APP_NAME.app"
+    ditto "$APP_PATH" "$TEMP_DMG_DIR/$PRODUCT_NAME.app"
     ln -s /Applications "$TEMP_DMG_DIR/Applications"
 
     remove_file "$DMG_PATH"
     hdiutil create \
-        -volname "$APP_NAME" \
+        -volname "$PRODUCT_NAME" \
         -srcfolder "$TEMP_DMG_DIR" \
         -ov \
         -format UDZO \
@@ -210,7 +212,7 @@ print_mode() {
 }
 
 main() {
-    printf '\n%s DMG Builder\n\n' "$APP_NAME"
+    printf '\n%s DMG Builder\n\n' "$PRODUCT_NAME"
     check_requirements
     print_mode
     clean

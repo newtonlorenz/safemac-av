@@ -1,29 +1,39 @@
-# ClamAV GUI for macOS
+<p align="center">
+  <img src="docs/images/safemac-av-logo.png" width="152" alt="SafeMac AV logo">
+</p>
 
-[![CI](https://github.com/newtonlorenz/clamav-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/newtonlorenz/clamav-gui/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/newtonlorenz/clamav-gui)](https://github.com/newtonlorenz/clamav-gui/releases/latest)
-[![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black?logo=apple)](https://support.apple.com/macos)
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<h1 align="center">SafeMac AV</h1>
 
-An unofficial, native SwiftUI front end for running [ClamAV](https://www.clamav.net/) on macOS. Scan files without assembling long shell commands, update signatures with `freshclam`, review results, quarantine detections, and automate repeat scans from one local app.
+<p align="center"><strong>Scan locally. Stay in control.</strong></p>
 
-![ClamAV GUI dashboard](docs/images/dashboard.png)
+<p align="center">
+  <a href="https://github.com/newtonlorenz/safemac-av/actions/workflows/ci.yml"><img src="https://github.com/newtonlorenz/safemac-av/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/newtonlorenz/safemac-av/releases/latest"><img src="https://img.shields.io/github/v/release/newtonlorenz/safemac-av" alt="Latest release"></a>
+  <a href="https://support.apple.com/macos"><img src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple" alt="macOS 13+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+</p>
+
+**Free, private malware scanning and monitoring for macOS. Powered by [ClamAV](https://www.clamav.net/).**
+
+SafeMac AV turns ClamAV's command-line engine into a complete local malware-scanning workflow. Scan on demand, watch folders, update signatures, quarantine detections, and schedule repeat checks. Review history and start scans from Finder. There are no subscriptions, telemetry, or cloud uploads.
+
+**[Download the latest signed and notarized release →](https://github.com/newtonlorenz/safemac-av/releases/latest)** *(v1.0.0 uses the previous ClamAV GUI package name; v1.1.0 and later use SafeMac AV)*
+
+![SafeMac AV dashboard](docs/images/dashboard.png)
 
 > [!IMPORTANT]
-> This project is an independent community interface. It is not affiliated with, endorsed by, or supported by Cisco, Talos, or the ClamAV project. ClamAV is installed separately and remains the scanning engine.
+> This project is an independent community app. It is not affiliated with, endorsed by, or supported by Cisco, Talos, or the ClamAV project. ClamAV is installed separately and remains the scanning engine.
 
-## What it does
+## More than a scan button
 
-- Quick scans of Downloads and Desktop, plus custom file or folder scans
-- Configurable `clamscan` options, exclusions, limits, and optional local `clamdscan`
-- Signature status and updates through the installed `freshclam` executable
-- Transactional quarantine metadata, hash verification on restore, and explicit deletion confirmation
-- Daily, weekly, or monthly scans through per-user `launchd` jobs
-- FSEvents-based folder monitoring while the application is running
-- Scan history, operational logs, pause, resume, and cancellation controls
-- Optional Finder context-menu requests through the bundled Finder Sync extension
+- **Scan on demand.** Run quick scans, choose any file or folder, or start from Finder.
+- **Watch important folders.** Monitor selected locations and automatically scan new downloads while the app runs.
+- **Respond to detections.** Review findings, quarantine suspicious files, verify restores, and confirm permanent deletion.
+- **Automate routine checks.** Schedule daily, weekly, or monthly scans and keep signatures current with `freshclam`.
+- **Stay in control.** Configure exclusions and limits, inspect history and logs, and pause, resume, or cancel scans.
+- **Use your preferred engine mode.** Run `clamscan` directly or connect to an optional local `clamdscan` service.
 
-The app has no analytics or telemetry SDK. Its own state stays on the Mac; `freshclam` accesses ClamAV's update infrastructure when you request a signature update.
+Everything the app stores stays on your Mac. There are no analytics or telemetry SDKs. `freshclam` only contacts ClamAV's infrastructure when you request a signature update.
 
 ## Requirements
 
@@ -35,7 +45,10 @@ Both Apple silicon (`/opt/homebrew`) and Intel Homebrew (`/usr/local`) defaults 
 
 ## Releases
 
-Download the latest compiled build from [GitHub Releases](https://github.com/newtonlorenz/clamav-gui/releases/latest).
+Download the latest compiled build from [GitHub Releases](https://github.com/newtonlorenz/safemac-av/releases/latest).
+
+> [!NOTE]
+> v1.0.0 predates the SafeMac AV rename and is distributed as `ClamAV-GUI-1.0.0.dmg` containing `ClamAV-GUI.app`. Releases from v1.1.0 use a `SafeMac-AV` DMG containing `SafeMac AV.app`.
 
 Each release provides:
 
@@ -56,7 +69,9 @@ Download the DMG and checksum file into the same folder. Verify the download:
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-Open the DMG and drag `ClamAV-GUI` into `Applications`.
+Open the DMG and drag the included app into `Applications`. It is named `ClamAV-GUI` in v1.0.0 and `SafeMac AV` from v1.1.0.
+
+When upgrading from an older ClamAV GUI build, launch SafeMac AV and re-save any enabled schedules so their LaunchAgents point to the renamed app. Remove the old app after confirming the new build works.
 
 ## Quick start
 
@@ -81,8 +96,8 @@ Open the DMG and drag `ClamAV-GUI` into `Applications`.
 3. Clone and open the project:
 
    ```bash
-   git clone https://github.com/newtonlorenz/clamav-gui.git
-   cd clamav-gui
+   git clone https://github.com/newtonlorenz/safemac-av.git
+   cd safemac-av
    open ClamAV-GUI.xcodeproj
    ```
 
@@ -129,7 +144,7 @@ The hosted CI workflow intentionally omits UI automation because macOS UI tests 
 
 ## Local packages and releases
 
-The distribution helper has three explicit modes:
+The distribution helper creates `build/SafeMac-AV.dmg` in three explicit modes:
 
 ```bash
 # Unsigned local DMG for testing
@@ -141,7 +156,7 @@ SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 
 # Signed, submitted with a notarytool Keychain profile, and stapled
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
-NOTARY_PROFILE='clamav-gui-notary' \
+NOTARY_PROFILE='safemac-av-notary' \
   ./scripts/create-dmg.sh
 ```
 
@@ -149,7 +164,7 @@ Create the Keychain profile separately with `xcrun notarytool store-credentials`
 
 ## Security and privacy model
 
-ClamAV GUI launches executables at the paths configured in Settings and passes selected local paths as process arguments. It does not upload files, scan results, or usage data. A local `clamdscan` backend is supported; remote TCP `clamd` is not configured by this app.
+SafeMac AV launches executables at the paths configured in Settings and passes selected local paths as process arguments. It does not upload files, scan results, or usage data. A local `clamdscan` backend is supported; remote TCP `clamd` is not configured by this app.
 
 The app sandbox is deliberately disabled. Scanning arbitrary user-selected folders, observing configured folders with FSEvents, writing a user-selected quarantine location, installing per-user LaunchAgents, and coordinating with Finder all require filesystem/process access that the current design cannot provide from the App Sandbox. Review source builds before running them, and only configure trusted ClamAV executable paths.
 
@@ -160,12 +175,14 @@ Local state can contain sensitive path names and threat results:
 - Quarantine by default: `~/.clamav-quarantine/`
 - Logs and scan history: held in application memory for the current run
 
+The existing `ClamAV-GUI` support paths, scheduled-job metadata and labels, bundle identifiers, target, and scheme remain unchanged for compatibility with installed settings, Finder integration, and existing build automation.
+
 See [SECURITY.md](SECURITY.md) for the supported reporting process.
 
 ## Current limitations
 
 - This is a user-facing ClamAV client, not a replacement for endpoint security or macOS platform protections.
-- Folder monitoring is application-level FSEvents monitoring. It only runs while ClamAV GUI is running and is not a kernel or system on-access scanner.
+- Folder monitoring is application-level FSEvents monitoring. It only runs while SafeMac AV is running and is not a kernel or system on-access scanner.
 - Scheduled scans are per-user `launchd` jobs. The app must remain at the path captured by the job, and the user must be logged in.
 - The Finder extension must be signed with the app and enabled manually in System Settings. Forks also need their own compatible bundle/app-group configuration.
 - Launch-at-login, user notifications, and a standalone menu-bar experience are not complete yet.
@@ -192,7 +209,7 @@ The checked-in `com.newtonlorenz.*` identifiers identify the upstream project. I
 
 ## License and credit
 
-ClamAV GUI is available under the [MIT License](LICENSE). You may use, modify, and distribute it, including commercially. The license requires copies or substantial portions to retain the copyright and permission notice:
+SafeMac AV is available under the [MIT License](LICENSE). You may use, modify, and distribute it, including commercially. The license requires copies or substantial portions to retain the copyright and permission notice:
 
 ```text
 Copyright (c) 2026 Daniel Graetzer and Newton Lorenz
@@ -200,6 +217,6 @@ Copyright (c) 2026 Daniel Graetzer and Newton Lorenz
 
 That retained notice is the required credit. A visible acknowledgement in your product or documentation is appreciated, but the MIT License does not require additional advertising.
 
-ClamAV GUI was originally developed by **Daniel Graetzer** for **Newton Lorenz**. See [AUTHORS.md](AUTHORS.md) for project credits.
+SafeMac AV was originally developed by **Daniel Graetzer** for **Newton Lorenz**. See [AUTHORS.md](AUTHORS.md) for project credits.
 
 ClamAV itself is a separate project under its own license and trademarks.
