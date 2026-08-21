@@ -11,15 +11,7 @@ final class ClamAV_GUIUITests: XCTestCase {
         app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
         app.launch()
 
-        app.activate()
-        let fileMenu = app.menuBars.menuBarItems["File"]
-        XCTAssertTrue(fileMenu.waitForExistence(timeout: 5), "Expected the File menu")
-        fileMenu.click()
-
-        let newWindow = app.menuItems["New Window"]
-        XCTAssertTrue(newWindow.waitForExistence(timeout: 5), "Expected the default New Window command")
-        newWindow.click()
-        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5), "Expected a visible application window")
+        openMainWindow(in: app)
 
         let tabs: [(button: String, title: String)] = [
             ("sidebar-dashboard", "screen-title-dashboard"),
@@ -56,14 +48,7 @@ final class ClamAV_GUIUITests: XCTestCase {
         app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
         app.launch()
 
-        app.activate()
-        let fileMenu = app.menuBars.menuBarItems["File"]
-        XCTAssertTrue(fileMenu.waitForExistence(timeout: 5), "Expected the File menu")
-        fileMenu.click()
-
-        let newWindow = app.menuItems["New Window"]
-        XCTAssertTrue(newWindow.waitForExistence(timeout: 5), "Expected the default New Window command")
-        newWindow.click()
+        openMainWindow(in: app)
 
         let appShell = app.descendants(matching: .any)["app-shell"]
         XCTAssertTrue(appShell.waitForExistence(timeout: 5))
@@ -89,14 +74,7 @@ final class ClamAV_GUIUITests: XCTestCase {
         app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
         app.launch()
 
-        app.activate()
-        let fileMenu = app.menuBars.menuBarItems["File"]
-        XCTAssertTrue(fileMenu.waitForExistence(timeout: 5), "Expected the File menu")
-        fileMenu.click()
-
-        let newWindow = app.menuItems["New Window"]
-        XCTAssertTrue(newWindow.waitForExistence(timeout: 5), "Expected the default New Window command")
-        newWindow.click()
+        openMainWindow(in: app)
 
         let appShell = app.descendants(matching: .any)["app-shell"]
         XCTAssertTrue(appShell.waitForExistence(timeout: 5))
@@ -133,14 +111,7 @@ final class ClamAV_GUIUITests: XCTestCase {
         app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
         app.launch()
 
-        app.activate()
-        let fileMenu = app.menuBars.menuBarItems["File"]
-        XCTAssertTrue(fileMenu.waitForExistence(timeout: 5), "Expected the File menu")
-        fileMenu.click()
-
-        let newWindow = app.menuItems["New Window"]
-        XCTAssertTrue(newWindow.waitForExistence(timeout: 5), "Expected the default New Window command")
-        newWindow.click()
+        openMainWindow(in: app)
 
         let settingsButton = app.buttons["sidebar-settings"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 5), "Expected the Settings sidebar button")
@@ -148,5 +119,48 @@ final class ClamAV_GUIUITests: XCTestCase {
 
         XCTAssertTrue(app.descendants(matching: .any)["launch-at-login-toggle"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["launch-at-login-status"].waitForExistence(timeout: 5))
+    }
+
+    private func openMainWindow(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        app.activate()
+        let mainWindow = app.windows["main-window"]
+
+        if mainWindow.waitForExistence(timeout: 2) {
+            return
+        }
+
+        app.typeKey("n", modifierFlags: .command)
+        if mainWindow.waitForExistence(timeout: 5) {
+            return
+        }
+
+        let menuBarItem = app.menuBars.statusItems["SafeMac AV"]
+        XCTAssertTrue(
+            menuBarItem.waitForExistence(timeout: 5),
+            "Expected the SafeMac AV menu-bar item while opening the main window",
+            file: file,
+            line: line
+        )
+        menuBarItem.click()
+
+        let openMainWindowButton = app.buttons["menu-bar-open-main-window"]
+        XCTAssertTrue(
+            openMainWindowButton.waitForExistence(timeout: 3),
+            "Expected the menu-bar Open SafeMac AV action",
+            file: file,
+            line: line
+        )
+        openMainWindowButton.click()
+
+        XCTAssertTrue(
+            mainWindow.waitForExistence(timeout: 5),
+            "Expected the identified main window to be visible",
+            file: file,
+            line: line
+        )
     }
 }
