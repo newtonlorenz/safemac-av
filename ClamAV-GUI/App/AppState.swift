@@ -137,7 +137,8 @@ final class AppState: ObservableObject {
         options: ScanOptions,
         scanType: ScanType = .custom,
         source: ScanSource = .custom,
-        jobID: UUID? = nil
+        jobID: UUID? = nil,
+        onAdmitted: (() async -> Void)? = nil
     ) async -> ScanOutcome {
         guard !paths.isEmpty else {
             scanError = "No scan paths selected."
@@ -165,7 +166,7 @@ final class AppState: ObservableObject {
         currentScanProgress = ScanProgress(status: .preparing, currentFile: nil, filesScanned: 0, infectedCount: 0, startTime: Date())
 
         let request = ScanRequest(source: source, paths: paths, options: options, jobID: jobID)
-        let outcome = await scanCoordinator.run(request) { [weak self] progress in
+        let outcome = await scanCoordinator.run(request, onAdmitted: onAdmitted) { [weak self] progress in
             Task { @MainActor in
                 self?.currentScanProgress = progress
             }
@@ -330,14 +331,21 @@ final class AppState: ObservableObject {
         let job = jobID.flatMap { scanScheduler.scheduledScan(jobID: $0) }
         let scanPaths = job?.paths.map { URL(fileURLWithPath: $0) } ?? paths
         let options = job?.options ?? .default
-        if settings.showNotifications {
-            await notificationManager.sendScheduledScanStarting(
-                jobName: job?.name ?? "Scheduled scan",
-                settings: settings
+        let jobName = job?.name ?? "Scheduled scan"
+        let outcome = await startScan(
+            paths: scanPaths,
+            options: options,
+            scanType: .scheduled,
+            source: .scheduled,
+            jobID: jobID
+        ) { [weak self] in
+            guard let self, self.settings.showNotifications else { return }
+            await self.notificationManager.sendScheduledScanStarting(
+                jobName: jobName,
+                settings: self.settings
             )
-            updateNotificationPermissionState()
+            self.updateNotificationPermissionState()
         }
-        let outcome = await startScan(paths: scanPaths, options: options, scanType: .scheduled, source: .scheduled, jobID: jobID)
 
         if let jobID {
             scanScheduler.markScheduledScanRun(jobID: jobID, result: outcome.scheduledResultMessage, at: Date())
