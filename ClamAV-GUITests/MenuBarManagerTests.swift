@@ -17,12 +17,22 @@ final class MenuBarManagerTests: XCTestCase {
         var presentMainWindowCalls = 0
         var drainCalls = 0
         var scheduledCalls = 0
+        var presentationCompleted = false
+        var drainedBeforePresentationCompleted = false
 
         await handler.handle(
             launchMode: .interactive,
             shouldPresentInteractiveMainWindow: true,
-            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
-            drainExternalScanRequests: { drainCalls += 1 },
+            presentInteractiveMainWindow: {
+                presentMainWindowCalls += 1
+                DispatchQueue.main.async {
+                    presentationCompleted = true
+                }
+            },
+            drainExternalScanRequests: {
+                drainCalls += 1
+                drainedBeforePresentationCompleted = !presentationCompleted
+            },
             runScheduledScan: { _, _ in scheduledCalls += 1 }
         )
         await handler.handle(
@@ -36,6 +46,7 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(presentMainWindowCalls, 1)
         XCTAssertEqual(drainCalls, 1)
         XCTAssertEqual(scheduledCalls, 0)
+        XCTAssertFalse(drainedBeforePresentationCompleted)
     }
 
     func testInitialLaunchHandlerPreservesHiddenDockInteractiveLaunch() async {
@@ -181,12 +192,72 @@ final class MenuBarManagerTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        pendingMainWindow.title = "SafeMac AV"
 
         XCTAssertNil(pendingMainWindow.identifier)
         XCTAssertTrue(pendingMainWindow.canBecomeMain)
         XCTAssertTrue(
             MenuBarManager.mainWindowCandidate(in: [pendingMainWindow]) === pendingMainWindow
         )
+    }
+
+    func testPendingMainWindowRequiresPositiveIdentityWhenUnrelatedWindowComesFirst() {
+        let unrelatedWindow = MainCapableTestWindow(
+            contentRect: .zero,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        unrelatedWindow.title = "Import"
+        let pendingMainWindow = MainCapableTestWindow(
+            contentRect: .zero,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        pendingMainWindow.title = "SafeMac AV"
+
+        XCTAssertTrue(
+            MenuBarManager.mainWindowCandidate(
+                in: [unrelatedWindow, pendingMainWindow]
+            ) === pendingMainWindow
+        )
+    }
+
+    func testMainWindowCandidateIgnoresUnidentifiedUtilityWindowBeforePendingMain() {
+        let utilityWindow = NSWindow(
+            contentRect: .zero,
+            styleMask: [.titled, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        utilityWindow.title = "SafeMac AV"
+        let pendingMainWindow = MainCapableTestWindow(
+            contentRect: .zero,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        pendingMainWindow.title = "SafeMac AV"
+
+        XCTAssertTrue(
+            MenuBarManager.mainWindowCandidate(
+                in: [utilityWindow, pendingMainWindow]
+            ) === pendingMainWindow
+        )
+    }
+
+    func testApplicationDeclaresSingleInstanceMainWindowScene() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("ClamAV-GUI/App/ClamAVApp.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("Window(Self.mainWindowTitle, id: Self.mainWindowID)"))
+        XCTAssertFalse(source.contains("WindowGroup(Self.mainWindowTitle, id: Self.mainWindowID)"))
     }
 
     func testMainWindowCandidateIgnoresUnrelatedAndPanelWindows() {
