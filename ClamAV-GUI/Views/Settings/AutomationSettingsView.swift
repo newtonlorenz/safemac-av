@@ -15,7 +15,6 @@ struct AutomationSettingsView: View {
                             set: { appState.setLaunchAtLoginEnabled($0) }
                         )
                     )
-                    .disabled(appState.launchAtLoginStatus == .unavailable)
                     .accessibilityIdentifier("launch-at-login-toggle")
 
                     HStack(spacing: 6) {
