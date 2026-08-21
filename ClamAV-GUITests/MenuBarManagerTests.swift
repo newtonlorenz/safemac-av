@@ -74,7 +74,8 @@ final class MenuBarManagerTests: XCTestCase {
         let controller = MainWindowController(
             appState: appState,
             menuBarManager: manager,
-            preferredColorScheme: nil
+            preferredColorScheme: nil,
+            scheduleActivation: { _ in }
         )
         let window = try XCTUnwrap(controller.windowController.window)
 
@@ -90,13 +91,13 @@ final class MenuBarManagerTests: XCTestCase {
 
         controller.showMainWindow(selecting: .settings)
         XCTAssertEqual(appState.selectedTab, .settings)
-        XCTAssertEqual(application.activationCalls, [true])
+        XCTAssertTrue(application.activationCalls.isEmpty)
         window.close()
 
         controller.showMainWindow(selecting: .dashboard)
         XCTAssertTrue(controller.windowController.window === window)
         XCTAssertEqual(appState.selectedTab, .dashboard)
-        XCTAssertEqual(application.activationCalls, [true, true])
+        XCTAssertTrue(application.activationCalls.isEmpty)
         window.close()
     }
 
@@ -111,7 +112,7 @@ final class MenuBarManagerTests: XCTestCase {
             presentationEvents: presentationEvents
         )
         let windowController = NSWindowController(window: window)
-        var scheduledActivations: [() -> Void] = []
+        var scheduledActivations: [MainWindowActivationOperation] = []
         let controller = MainWindowController(
             appState: appState,
             menuBarManager: manager,
@@ -163,7 +164,7 @@ final class MenuBarManagerTests: XCTestCase {
             presentationEvents: presentationEvents,
             allowsKeyStatus: false
         )
-        var scheduledActivations: [() -> Void] = []
+        var scheduledActivations: [MainWindowActivationOperation] = []
         let controller = MainWindowController(
             appState: appState,
             menuBarManager: manager,

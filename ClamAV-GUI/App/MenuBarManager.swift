@@ -29,9 +29,29 @@ protocol ApplicationActivationPolicyApplying: AnyObject {
     @discardableResult
     func setActivationPolicy(_ activationPolicy: NSApplication.ActivationPolicy) -> Bool
     func activate(ignoringOtherApps: Bool)
+    var isActive: Bool { get }
+    @discardableResult
+    func activateApplication() -> Bool
 }
 
-extension NSApplication: ApplicationActivationPolicyApplying {}
+extension ApplicationActivationPolicyApplying {
+    var isActive: Bool { true }
+
+    @discardableResult
+    func activateApplication() -> Bool {
+        activate(ignoringOtherApps: true)
+        return true
+    }
+}
+
+extension NSApplication: ApplicationActivationPolicyApplying {
+    @discardableResult
+    func activateApplication() -> Bool {
+        NSRunningApplication.current.activate(
+            options: [.activateAllWindows, .activateIgnoringOtherApps]
+        )
+    }
+}
 
 @MainActor
 final class MenuBarManager: ObservableObject {
@@ -47,12 +67,19 @@ final class MenuBarManager: ObservableObject {
     func applyDockVisibility(hidden: Bool) -> Bool {
         let activationPolicy: NSApplication.ActivationPolicy = hidden ? .accessory : .regular
         guard application.setActivationPolicy(activationPolicy) else { return false }
-        isDockHidden = hidden
+        if isDockHidden != hidden {
+            isDockHidden = hidden
+        }
         return true
     }
 
-    func activateApplication() {
-        application.activate(ignoringOtherApps: true)
+    @discardableResult
+    func activateApplication() -> Bool {
+        application.activateApplication()
+    }
+
+    var isApplicationActive: Bool {
+        application.isActive
     }
 }
 

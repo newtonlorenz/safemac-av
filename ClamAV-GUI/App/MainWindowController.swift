@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 
+typealias MainWindowActivationOperation = @MainActor @Sendable () -> Void
+
 @MainActor
 protocol MainWindowControlling: AnyObject {
     func showMainWindow(selecting selection: NavigationTab?)
@@ -47,15 +49,17 @@ final class MainWindowController: MainWindowControlling {
     let appState: AppState
     let menuBarManager: MenuBarManager
     let windowController: NSWindowController
+    private let scheduleActivation: (@escaping MainWindowActivationOperation) -> Void
+    private var isActivationPending = false
 
-    init(
+    convenience init(
         appState: AppState,
         menuBarManager: MenuBarManager,
-        preferredColorScheme: ColorScheme?
+        preferredColorScheme: ColorScheme?,
+        scheduleActivation: @escaping (@escaping MainWindowActivationOperation) -> Void = { operation in
+            DispatchQueue.main.async(execute: operation)
+        }
     ) {
-        self.appState = appState
-        self.menuBarManager = menuBarManager
-
         let root = MainWindowRootView(
             appState: appState,
             preferredColorScheme: preferredColorScheme
@@ -78,17 +82,62 @@ final class MainWindowController: MainWindowControlling {
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         window.center()
-        windowController = NSWindowController(window: window)
+        self.init(
+            appState: appState,
+            menuBarManager: menuBarManager,
+            windowController: NSWindowController(window: window),
+            scheduleActivation: scheduleActivation
+        )
+    }
+
+    init(
+        appState: AppState,
+        menuBarManager: MenuBarManager,
+        windowController: NSWindowController,
+        scheduleActivation: @escaping (@escaping MainWindowActivationOperation) -> Void
+    ) {
+        self.appState = appState
+        self.menuBarManager = menuBarManager
+        self.windowController = windowController
+        self.scheduleActivation = scheduleActivation
     }
 
     func showMainWindow(selecting selection: NavigationTab?) {
         if let selection {
             appState.selectedTab = selection
         }
-        menuBarManager.activateApplication()
         windowController.showWindow(nil)
-        windowController.window?.deminiaturize(nil)
-        windowController.window?.makeKeyAndOrderFront(nil)
+        guard let window = windowController.window else { return }
+        window.deminiaturize(nil)
+        window.orderFront(nil)
+        scheduleActivationIfNeeded()
+    }
+
+    private func scheduleActivationIfNeeded() {
+        guard !isActivationPending else { return }
+        isActivationPending = true
+        scheduleActivation { [weak self] in
+            self?.activateAndFocus(allowsRetry: true)
+        }
+    }
+
+    private func activateAndFocus(allowsRetry: Bool) {
+        guard let window = windowController.window else {
+            isActivationPending = false
+            return
+        }
+        let didActivate = menuBarManager.activateApplication()
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
+
+        let isFocused = didActivate && menuBarManager.isApplicationActive && window.isKeyWindow
+        guard allowsRetry, !isFocused else {
+            isActivationPending = false
+            return
+        }
+        scheduleActivation { [weak self] in
+            self?.activateAndFocus(allowsRetry: false)
+        }
     }
 }
 
