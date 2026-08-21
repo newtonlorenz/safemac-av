@@ -94,9 +94,9 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         let manager = providedManager ?? MenuBarManager()
         let settings = settingsProvider()
         let arguments = argumentsProvider()
-        let shouldHideDock = settings.hideFromDock && !arguments.contains("--ui-testing")
+        let mode = LaunchModeParser.parse(arguments: arguments)
         let shouldSuppressWindow: Bool
-        switch LaunchModeParser.parse(arguments: arguments) {
+        switch mode {
         case .interactive:
             shouldSuppressWindow = true
         case .scheduledScan:
@@ -106,7 +106,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         }
 
         shouldSuppressInitialMainWindow = manager.prepareForLaunch(
-            hidden: shouldHideDock,
+            hidden: mode.hidesDock(settings: settings, isUITesting: arguments.contains("--ui-testing")),
             suppressInitialMainWindow: shouldSuppressWindow
         )
         launchManager = manager

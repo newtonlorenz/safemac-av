@@ -9,6 +9,19 @@ enum LaunchMode: Equatable {
         if case .interactive = self { return true }
         return false
     }
+
+    var presentsUserInterface: Bool {
+        self != .signatureUpdate
+    }
+
+    func hidesDock(settings: AppSettings, isUITesting: Bool) -> Bool {
+        switch self {
+        case .interactive, .scheduledScan:
+            settings.hideFromDock && !isUITesting
+        case .signatureUpdate:
+            true
+        }
+    }
 }
 
 enum LaunchModeParser {

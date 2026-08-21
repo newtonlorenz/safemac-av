@@ -24,47 +24,71 @@ private struct NoopSignatureUpdateScheduler: SignatureUpdateSchedulerProtocol {
 }
 
 final class SignatureUpdateScheduler: SignatureUpdateSchedulerProtocol {
+    typealias DataWriter = (Data, URL, Data.WritingOptions) throws -> Void
+    typealias LaunchctlRunner = ([String]) throws -> Void
+
     private let fileManager: FileManager
     private let launchAgentsDir: URL
     private let appBundleURL: URL
+    private let dataWriter: DataWriter
+    private let launchctlRunner: LaunchctlRunner
     private let label = "com.newtonlorenz.ClamAV-GUI.signature-update"
 
     init(
         fileManager: FileManager = .default,
         homeDirectory: URL? = nil,
-        appBundleURL: URL = Bundle.main.bundleURL
+        appBundleURL: URL = Bundle.main.bundleURL,
+        dataWriter: @escaping DataWriter = { data, url, options in
+            try data.write(to: url, options: options)
+        },
+        launchctlRunner: LaunchctlRunner? = nil
     ) {
         self.fileManager = fileManager
         let homeDirectory = homeDirectory ?? fileManager.homeDirectoryForCurrentUser
         self.launchAgentsDir = homeDirectory.appendingPathComponent("Library/LaunchAgents")
         self.appBundleURL = appBundleURL
+        self.dataWriter = dataWriter
+        self.launchctlRunner = launchctlRunner ?? Self.runLaunchctl(arguments:)
     }
 
     func install(schedule: ScanSchedule) throws {
         try fileManager.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
 
         let plistURL = launchAgentURL
-        let temporaryURL = plistURL.appendingPathExtension("tmp")
-        let plistContent = buildLaunchAgentPlist(schedule: schedule)
+        let snapshot = try snapshot(at: plistURL)
+        let plistData = Data(buildLaunchAgentPlist(schedule: schedule).utf8)
+        var replacementWritten = false
 
-        try plistContent.write(to: temporaryURL, atomically: true, encoding: .utf8)
-        try fileManager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: temporaryURL.path)
+        do {
+            if snapshot != nil {
+                try? bootout(plistURL: plistURL)
+            }
 
-        if fileManager.fileExists(atPath: plistURL.path) {
-            _ = try? bootout(plistURL: plistURL)
-            try fileManager.removeItem(at: plistURL)
+            try dataWriter(plistData, plistURL, .atomic)
+            replacementWritten = true
+            try fileManager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: plistURL.path)
+            try bootstrap(plistURL: plistURL)
+        } catch {
+            if replacementWritten {
+                try? bootout(plistURL: plistURL)
+            }
+            restore(snapshot, at: plistURL)
+            throw error
         }
-
-        try fileManager.moveItem(at: temporaryURL, to: plistURL)
-        try bootstrap(plistURL: plistURL)
     }
 
     func remove() throws {
         let plistURL = launchAgentURL
-        guard fileManager.fileExists(atPath: plistURL.path) else { return }
+        let snapshot = try snapshot(at: plistURL)
+        guard snapshot != nil else { return }
 
-        _ = try? bootout(plistURL: plistURL)
-        try fileManager.removeItem(at: plistURL)
+        do {
+            try? bootout(plistURL: plistURL)
+            try fileManager.removeItem(at: plistURL)
+        } catch {
+            restore(snapshot, at: plistURL)
+            throw error
+        }
     }
 
     func launchArguments(executablePath: String) -> [String] {
@@ -96,10 +120,6 @@ final class SignatureUpdateScheduler: SignatureUpdateSchedulerProtocol {
             </dict>
             <key>RunAtLoad</key>
             <false/>
-            <key>StandardOutPath</key>
-            <string>/tmp/clamav-gui-signature-update.log</string>
-            <key>StandardErrorPath</key>
-            <string>/tmp/clamav-gui-signature-update.err</string>
         </dict>
         </plist>
         """
@@ -118,6 +138,10 @@ final class SignatureUpdateScheduler: SignatureUpdateSchedulerProtocol {
     }
 
     private func runLaunchctl(arguments: [String]) throws {
+        try launchctlRunner(arguments)
+    }
+
+    private static func runLaunchctl(arguments: [String]) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         process.arguments = arguments
@@ -126,6 +150,25 @@ final class SignatureUpdateScheduler: SignatureUpdateSchedulerProtocol {
 
         guard process.terminationStatus == 0 else {
             throw SignatureUpdateSchedulerError.launchctlFailed(arguments: arguments, status: process.terminationStatus)
+        }
+    }
+
+    private func snapshot(at url: URL) throws -> Data? {
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        return try Data(contentsOf: url)
+    }
+
+    private func restore(_ snapshot: Data?, at url: URL) {
+        do {
+            if let snapshot {
+                try dataWriter(snapshot, url, .atomic)
+                try fileManager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+                try? bootstrap(plistURL: url)
+            } else if fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+            }
+        } catch {
+            NSLog("Unable to restore automatic signature update schedule: %@", error.localizedDescription)
         }
     }
 

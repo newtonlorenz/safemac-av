@@ -16,6 +16,7 @@ final class AppState: ObservableObject {
     @Published var scanError: String?
     @Published var settingsSaveError: String?
     @Published var launchAtLoginError: String?
+    @Published var signatureUpdateScheduleError: String?
     @Published private(set) var notificationPermissionStatus: NotificationPermissionStatus = .unknown
     @Published private(set) var notificationPermissionError: String?
     @Published var shouldOpenCustomScanPicker = false
@@ -34,6 +35,7 @@ final class AppState: ObservableObject {
     let protectionScoreManager: ProtectionScoreManager
     private let launchAtLoginManager: any LaunchAtLoginManaging
     private let signatureUpdateScheduler: any SignatureUpdateSchedulerProtocol
+    private let allowsSignatureScheduleStartupReconciliation: Bool
     let notificationManager: NotificationManaging
 
     private let logManager = LogManager()
@@ -77,6 +79,7 @@ final class AppState: ObservableObject {
         self.scanHistoryManager = scanHistoryManager
         self.launchAtLoginManager = launchAtLoginManager
         self.signatureUpdateScheduler = signatureUpdateScheduler
+        self.allowsSignatureScheduleStartupReconciliation = settingsLoadState.allowsStartupReconciliationPersistence
         self.launchAtLoginStatus = initialLaunchAtLoginStatus
         let scoreManager = ProtectionScoreManager(configManager: configManager)
         self.protectionScoreManager = scoreManager
@@ -302,9 +305,11 @@ final class AppState: ObservableObject {
     }
 
     func saveSettings() {
+        var didSaveSettings = false
         do {
             try configManager.saveSettings(settings)
             settingsSaveError = nil
+            didSaveSettings = true
         } catch {
             settingsSaveError = "Your settings could not be saved. Check that the app can write to Application Support, then try again."
             addLog(.error, "Failed to save settings: \(error.localizedDescription)")
@@ -312,9 +317,37 @@ final class AppState: ObservableObject {
         if !settings.autoScanDownloads {
             pendingAutomaticDownloadPaths.removeAll()
         }
-        configureSignatureUpdateSchedule()
+        if didSaveSettings {
+            configureSignatureUpdateSchedule()
+        }
         configureMonitoring()
         refreshProtectionScore()
+    }
+
+    func setAutomaticSignatureUpdates(enabled: Bool, schedule: ScanSchedule) {
+        let previousSettings = settings
+        var updatedSettings = settings
+        updatedSettings.autoUpdateSignatures = enabled
+        updatedSettings.updateSchedule = schedule
+        signatureUpdateScheduleError = nil
+
+        do {
+            try applySignatureUpdateSchedule(settings: updatedSettings)
+        } catch {
+            signatureUpdateScheduleError = "SafeMac AV could not update the automatic signature schedule. Try again."
+            addLog(.error, "Failed to update automatic signature schedule: \(error.localizedDescription)")
+            return
+        }
+
+        do {
+            try configManager.saveSettings(updatedSettings)
+            settings = updatedSettings
+            settingsSaveError = nil
+            addLog(.info, enabled ? "Enabled automatic signature updates" : "Disabled automatic signature updates")
+        } catch {
+            settingsSaveError = "Your settings could not be saved. Check that the app can write to Application Support, then try again."
+            rollbackSignatureUpdateSchedule(to: previousSettings, persistenceError: error)
+        }
     }
 
     func setLaunchAtLoginEnabled(_ enabled: Bool) {
@@ -414,16 +447,46 @@ final class AppState: ObservableObject {
 
     func configureSignatureUpdateSchedule() {
         do {
-            if settings.autoUpdateSignatures {
-                try signatureUpdateScheduler.install(schedule: settings.updateSchedule ?? .daily9am)
-                addLog(.info, "Automatic signature updates scheduled")
-            } else {
-                try signatureUpdateScheduler.remove()
-                addLog(.info, "Automatic signature updates disabled")
-            }
+            try applySignatureUpdateSchedule(settings: settings)
+            signatureUpdateScheduleError = nil
         } catch {
+            signatureUpdateScheduleError = "SafeMac AV could not activate the automatic signature schedule. Open Updates and try again."
             addLog(.error, "Failed to configure automatic signature updates: \(error.localizedDescription)")
         }
+    }
+
+    func reconcileSignatureUpdateScheduleOnStartup() {
+        guard allowsSignatureScheduleStartupReconciliation else {
+            signatureUpdateScheduleError = "SafeMac AV could not load your saved automatic signature schedule. Review and save it again."
+            addLog(.error, "Skipped automatic signature schedule reconciliation because settings could not be loaded safely")
+            return
+        }
+
+        configureSignatureUpdateSchedule()
+    }
+
+    private func applySignatureUpdateSchedule(settings: AppSettings) throws {
+        if settings.autoUpdateSignatures {
+            try signatureUpdateScheduler.install(schedule: settings.updateSchedule ?? .daily9am)
+            addLog(.info, "Automatic signature updates scheduled")
+        } else {
+            try signatureUpdateScheduler.remove()
+            addLog(.info, "Automatic signature updates disabled")
+        }
+    }
+
+    private func rollbackSignatureUpdateSchedule(to previousSettings: AppSettings, persistenceError: Error) {
+        do {
+            try applySignatureUpdateSchedule(settings: previousSettings)
+            settings = previousSettings
+            signatureUpdateScheduleError = "The automatic signature schedule was not changed because your settings could not be saved."
+        } catch {
+            settings = previousSettings
+            signatureUpdateScheduleError = "SafeMac AV could not save or roll back the automatic signature schedule. Review the schedule and try again."
+            addLog(.error, "Failed to roll back automatic signature schedule: \(error.localizedDescription)")
+        }
+
+        addLog(.error, "Failed to save automatic signature schedule: \(persistenceError.localizedDescription)")
     }
 
     private func addLog(_ level: LogLevel, _ message: String) {
@@ -476,6 +539,14 @@ final class AppState: ObservableObject {
     }
 
     func runScheduledSignatureUpdate() async {
+        guard allowsSignatureScheduleStartupReconciliation else {
+            addLog(.error, "Skipped scheduled signature update because settings could not be loaded safely")
+            return
+        }
+        guard settings.autoUpdateSignatures else {
+            addLog(.info, "Skipped scheduled signature update because automatic updates are disabled")
+            return
+        }
         await updateSignatures()
     }
 

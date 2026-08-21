@@ -10,13 +10,13 @@ final class MenuBarManagerTests: XCTestCase {
         var scheduledCalls = 0
 
         await handler.handle(
-            arguments: [],
+            launchMode: .interactive,
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { _, _ in scheduledCalls += 1 },
             runSignatureUpdate: {}
         )
         await handler.handle(
-            arguments: [],
+            launchMode: .interactive,
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { _, _ in scheduledCalls += 1 },
             runSignatureUpdate: {}
@@ -34,13 +34,13 @@ final class MenuBarManagerTests: XCTestCase {
         var scheduledCalls: [(UUID?, [URL])] = []
 
         await handler.handle(
-            arguments: ["--scheduled-scan", "--job-id", jobID.uuidString, "--path", scheduledPath.path],
+            launchMode: .scheduledScan(jobID: jobID, paths: [scheduledPath]),
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) },
             runSignatureUpdate: {}
         )
         await handler.handle(
-            arguments: ["--scheduled-scan", "--job-id", jobID.uuidString, "--path", scheduledPath.path],
+            launchMode: .scheduledScan(jobID: jobID, paths: [scheduledPath]),
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) },
             runSignatureUpdate: {}
@@ -59,13 +59,13 @@ final class MenuBarManagerTests: XCTestCase {
         var signatureUpdateCalls = 0
 
         await handler.handle(
-            arguments: ["--update-signatures"],
+            launchMode: .signatureUpdate,
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { _, _ in scheduledCalls += 1 },
             runSignatureUpdate: { signatureUpdateCalls += 1 }
         )
         await handler.handle(
-            arguments: ["--update-signatures"],
+            launchMode: .signatureUpdate,
             drainExternalScanRequests: { drainCalls += 1 },
             runScheduledScan: { _, _ in scheduledCalls += 1 },
             runSignatureUpdate: { signatureUpdateCalls += 1 }
@@ -193,6 +193,44 @@ final class MenuBarManagerTests: XCTestCase {
 
         XCTAssertEqual(application.requestedPolicies, [.accessory])
         XCTAssertEqual(application.closeMainWindowCalls, 1)
+    }
+
+    func testSignatureUpdateLaunchUsesAccessoryModeAndClosesMainWindow() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var settings = AppSettings.default
+        settings.hideFromDock = false
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { ["--update-signatures"] }
+        )
+
+        delegate.applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 1)
+    }
+
+    func testSignatureUpdateModeAlwaysHidesDockEvenWhenUserPrefersDock() {
+        var settings = AppSettings.default
+        settings.hideFromDock = false
+
+        XCTAssertTrue(LaunchMode.signatureUpdate.hidesDock(settings: settings, isUITesting: false))
+        XCTAssertFalse(LaunchMode.signatureUpdate.presentsUserInterface)
+    }
+
+    func testInteractiveAndScheduledScanModesRespectDockPreferenceAndUITesting() {
+        var settings = AppSettings.default
+        settings.hideFromDock = true
+
+        XCTAssertTrue(LaunchMode.interactive.hidesDock(settings: settings, isUITesting: false))
+        XCTAssertTrue(LaunchMode.scheduledScan(jobID: nil, paths: []).hidesDock(settings: settings, isUITesting: false))
+        XCTAssertFalse(LaunchMode.interactive.hidesDock(settings: settings, isUITesting: true))
+        XCTAssertFalse(LaunchMode.scheduledScan(jobID: nil, paths: []).hidesDock(settings: settings, isUITesting: true))
     }
 }
 
