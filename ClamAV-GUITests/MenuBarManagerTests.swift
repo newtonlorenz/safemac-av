@@ -185,7 +185,7 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(application.events, [.activateApplication, .focusMainWindow])
     }
 
-    func testPendingUnidentifiedMainWindowIsPreferredOverOpeningDuplicate() {
+    func testUnidentifiedTitledWindowDoesNotMasqueradeAsMainWindow() {
         let pendingMainWindow = MainCapableTestWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
             styleMask: [.titled, .closable],
@@ -196,9 +196,7 @@ final class MenuBarManagerTests: XCTestCase {
 
         XCTAssertNil(pendingMainWindow.identifier)
         XCTAssertTrue(pendingMainWindow.canBecomeMain)
-        XCTAssertTrue(
-            MenuBarManager.mainWindowCandidate(in: [pendingMainWindow]) === pendingMainWindow
-        )
+        XCTAssertNil(MenuBarManager.mainWindowCandidate(in: [pendingMainWindow]))
     }
 
     func testPendingMainWindowRequiresPositiveIdentityWhenUnrelatedWindowComesFirst() {
@@ -216,6 +214,7 @@ final class MenuBarManagerTests: XCTestCase {
             defer: false
         )
         pendingMainWindow.title = "SafeMac AV"
+        pendingMainWindow.identifier = NSUserInterfaceItemIdentifier(ClamAVApp.mainWindowID)
 
         XCTAssertTrue(
             MenuBarManager.mainWindowCandidate(
@@ -239,6 +238,7 @@ final class MenuBarManagerTests: XCTestCase {
             defer: false
         )
         pendingMainWindow.title = "SafeMac AV"
+        pendingMainWindow.identifier = NSUserInterfaceItemIdentifier(ClamAVApp.mainWindowID)
 
         XCTAssertTrue(
             MenuBarManager.mainWindowCandidate(
