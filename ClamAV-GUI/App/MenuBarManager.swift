@@ -53,7 +53,12 @@ final class MenuBarManager: ObservableObject {
 
     static func mainWindowCandidate(in windows: [NSWindow]) -> NSWindow? {
         windows.first { $0.identifier?.rawValue == ClamAVApp.mainWindowID }
-            ?? windows.first { $0.identifier == nil && $0.canBecomeMain }
+            ?? windows.first {
+                $0.identifier == nil
+                    && $0.canBecomeMain
+                    && !($0 is NSPanel)
+                    && $0.styleMask.contains(.titled)
+            }
     }
 
     @discardableResult
