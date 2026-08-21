@@ -59,7 +59,7 @@
 			A1000001200000000000064 /* ScanCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000064 /* ScanCoordinatorTests.swift */; };
 			A1000001200000000000065 /* ExternalScanRequestStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000065 /* ExternalScanRequestStoreTests.swift */; };
 		A1000001200000000000072 /* GlassAppearancePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000072 /* GlassAppearancePolicyTests.swift */; };
-		A1000001200000000000074 /* MenuBarManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000074 /* MenuBarManagerTests.swift */; };
+		C0DE00012000000000000075 /* MenuBarManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000075 /* MenuBarManagerTests.swift */; };
 			A1000001200000000000070 /* ClamAV_GUIUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000070 /* ClamAV_GUIUITests.swift */; };
 			A1000001200000000000057 /* FinderSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000057 /* FinderSync.swift */; };
 			A1000001200000000000058 /* ClamAV-GUI-Finder.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A1000002200000000000059 /* ClamAV-GUI-Finder.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -159,7 +159,7 @@
 		A1000002200000000000064 /* ScanCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanCoordinatorTests.swift; sourceTree = "<group>"; };
 		A1000002200000000000065 /* ExternalScanRequestStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalScanRequestStoreTests.swift; sourceTree = "<group>"; };
 		A1000002200000000000072 /* GlassAppearancePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassAppearancePolicyTests.swift; sourceTree = "<group>"; };
-		A1000002200000000000074 /* MenuBarManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarManagerTests.swift; sourceTree = "<group>"; };
+		C0DE00022000000000000075 /* MenuBarManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarManagerTests.swift; sourceTree = "<group>"; };
 		A1000002200000000000070 /* ClamAV_GUIUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClamAV_GUIUITests.swift; sourceTree = "<group>"; };
 		A1000002200000000000071 /* ClamAV-GUIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "ClamAV-GUIUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000002200000000000057 /* FinderSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderSync.swift; sourceTree = "<group>"; };
@@ -404,7 +404,7 @@
 				A1000002200000000000064 /* ScanCoordinatorTests.swift */,
 				A1000002200000000000065 /* ExternalScanRequestStoreTests.swift */,
 				A1000002200000000000072 /* GlassAppearancePolicyTests.swift */,
-				A1000002200000000000074 /* MenuBarManagerTests.swift */,
+				C0DE00022000000000000075 /* MenuBarManagerTests.swift */,
 			);
 			path = "ClamAV-GUITests";
 			sourceTree = "<group>";
@@ -642,7 +642,7 @@
 				A1000001200000000000064 /* ScanCoordinatorTests.swift in Sources */,
 				A1000001200000000000065 /* ExternalScanRequestStoreTests.swift in Sources */,
 				A1000001200000000000072 /* GlassAppearancePolicyTests.swift in Sources */,
-				A1000001200000000000074 /* MenuBarManagerTests.swift in Sources */,
+				C0DE00012000000000000075 /* MenuBarManagerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
