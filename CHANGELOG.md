@@ -8,6 +8,10 @@ All notable project changes will be documented in this file. The format follows 
 
 - A native macOS login-item control with enabled, disabled, approval-required, and unavailable status feedback in Settings.
 
+### Security
+
+- Hardened Finder scan handoff so file paths move only through the signed app-group queue with freshness, size, symlink, permission, and absolute-path validation.
+
 ## [1.1.0] - 2026-08-21
 
 ### Added

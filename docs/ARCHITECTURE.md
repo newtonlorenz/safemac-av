@@ -72,7 +72,7 @@ Schedules run in the logged-in user's context. Moving or deleting the built app 
 
 ### Finder request
 
-The Finder Sync extension receives the current Finder selection, writes a JSON request when a shared container is available, posts a distributed notification as a wake signal, and opens the main app when necessary. The main app drains requests serially and submits them through the same scan coordinator as interactive scans.
+The Finder Sync extension receives the current Finder selection, writes a bounded JSON request into the signed app group's shared container, posts a distributed notification as a wake signal, and opens the main app when necessary. The notification never carries file paths. The main app validates freshness and absolute paths while draining requests serially, then submits accepted requests through the same scan coordinator as interactive scans. If the shared container is unavailable or a request is stale, oversized, symlinked, or malformed, the handoff fails closed.
 
 A distributable build must sign the app and extension consistently and configure the matching app group. The notification and bundle identifiers are namespaced to the upstream project and must change together in a fork.
 
@@ -94,7 +94,7 @@ Notification content is intentionally summary-only. It includes counts and gener
 | --- | --- | --- |
 | Settings | `~/Library/Application Support/ClamAV-GUI/settings.json` | Persistent |
 | Scheduled-job definitions | `~/Library/Application Support/ClamAV-GUI/scheduled_jobs.json` | Persistent |
-| Finder request queue | App-group container when configured, otherwise Application Support | Drained after processing |
+| Finder request queue | App-group container `group.com.newtonlorenz.ClamAV-GUI` | Drained after processing |
 | LaunchAgent definitions | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.scan.*.plist` | Until job removal |
 | Main-app login item | macOS System Settings › General › Login Items | Until disabled by the user or app |
 | Quarantine payload and metadata | `~/.clamav-quarantine/` | Until restore or deletion |

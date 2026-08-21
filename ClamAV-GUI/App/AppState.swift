@@ -130,16 +130,10 @@ final class AppState: ObservableObject {
             forName: NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
             object: nil,
             queue: .main
-        ) { [weak self] notification in
+        ) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                let drainedCount = await self.drainExternalScanRequests()
-                guard drainedCount == 0,
-                      let data = notification.userInfo?["paths"] as? Data,
-                      let paths = try? JSONDecoder().decode([String].self, from: data) else {
-                    return
-                }
-                await self.startScan(paths: paths.map { URL(fileURLWithPath: $0) }, options: .default, scanType: .custom, source: .finder)
+                await self.drainExternalScanRequests()
             }
         }
     }

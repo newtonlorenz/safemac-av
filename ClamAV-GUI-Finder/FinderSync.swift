@@ -42,14 +42,12 @@ class FinderSync: FIFinderSync {
                 deliverImmediately: true
             )
         } catch {
-            if let data = try? JSONEncoder().encode(paths) {
-                DistributedNotificationCenter.default().postNotificationName(
-                    NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
-                    object: nil,
-                    userInfo: ["paths": data],
-                    deliverImmediately: true
-                )
-            }
+            DistributedNotificationCenter.default().postNotificationName(
+                NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
+                object: nil,
+                userInfo: nil,
+                deliverImmediately: true
+            )
         }
 
         // Open main app
