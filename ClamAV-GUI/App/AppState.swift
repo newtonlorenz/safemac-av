@@ -15,6 +15,8 @@ final class AppState: ObservableObject {
     @Published var logs: [LogEntry] = []
     @Published var scanError: String?
     @Published var settingsSaveError: String?
+    @Published private(set) var notificationPermissionStatus: NotificationPermissionStatus = .unknown
+    @Published private(set) var notificationPermissionError: String?
     @Published var shouldOpenCustomScanPicker = false
     @Published private(set) var protectionScore: ProtectionScore
 
@@ -28,6 +30,7 @@ final class AppState: ObservableObject {
     let externalScanRequestStore: ExternalScanRequestStore
     let scanHistoryManager: ScanHistoryManager
     let protectionScoreManager: ProtectionScoreManager
+    let notificationManager: NotificationManaging
 
     private let logManager = LogManager()
     private var cancellables = Set<AnyCancellable>()
@@ -40,16 +43,19 @@ final class AppState: ObservableObject {
         fileWatcher: FileWatcherProtocol? = nil,
         scanCoordinator: ScanCoordinator? = nil,
         freshclamRunner: FreshclamRunnerProtocol? = nil,
+        notificationManager: NotificationManaging? = nil,
         externalScanRequestStore: ExternalScanRequestStore = ExternalScanRequestStore(),
         scanHistoryManager: ScanHistoryManager = ScanHistoryManager()
     ) {
         let loadedSettings = configManager.loadSettings()
         let runner = ClamAVRunner(configManager: configManager)
+        let resolvedNotificationManager = notificationManager ?? NotificationManager.shared
 
         self.configManager = configManager
         self.settings = loadedSettings
         self.clamAVRunner = runner
         self.freshclamRunner = freshclamRunner ?? FreshclamRunner(configManager: configManager)
+        self.notificationManager = resolvedNotificationManager
         self.quarantineManager = QuarantineManager(configManager: configManager)
         self.scanScheduler = scanScheduler
         self.fileWatcher = fileWatcher ?? FileWatcher(
@@ -66,11 +72,17 @@ final class AppState: ObservableObject {
             monitoringEnabled: loadedSettings.monitoringEnabled,
             finderExtensionEnabled: FinderExtensionManager.isEnabled
         )
+        self.notificationPermissionStatus = resolvedNotificationManager.permissionStatus
+        self.notificationPermissionError = resolvedNotificationManager.permissionError
 
         loadQuarantinedFiles()
+        resolvedNotificationManager.setupNotificationCategories()
         setupNotifications()
         setupFileWatcherAutoScan()
         configureMonitoring()
+        Task { [weak self] in
+            await self?.refreshNotificationPermissionStatus()
+        }
     }
 
     private func setupNotifications() {
@@ -125,7 +137,8 @@ final class AppState: ObservableObject {
         options: ScanOptions,
         scanType: ScanType = .custom,
         source: ScanSource = .custom,
-        jobID: UUID? = nil
+        jobID: UUID? = nil,
+        onAdmitted: (() async -> Void)? = nil
     ) async -> ScanOutcome {
         guard !paths.isEmpty else {
             scanError = "No scan paths selected."
@@ -153,7 +166,7 @@ final class AppState: ObservableObject {
         currentScanProgress = ScanProgress(status: .preparing, currentFile: nil, filesScanned: 0, infectedCount: 0, startTime: Date())
 
         let request = ScanRequest(source: source, paths: paths, options: options, jobID: jobID)
-        let outcome = await scanCoordinator.run(request) { [weak self] progress in
+        let outcome = await scanCoordinator.run(request, onAdmitted: onAdmitted) { [weak self] progress in
             Task { @MainActor in
                 self?.currentScanProgress = progress
             }
@@ -176,6 +189,7 @@ final class AppState: ObservableObject {
 
             scanHistoryManager.addEntry(ScanHistoryEntry(from: report, scanType: scanType))
             addLog(.info, "Scan completed: \(report.filesScanned) files scanned, \(report.infectedFiles.count) threats found")
+            await sendScanNotification(report: report, source: source, requestedPaths: paths)
         case .failed(let message):
             scanError = message
             addLog(.error, "Scan failed: \(message)")
@@ -242,6 +256,10 @@ final class AppState: ObservableObject {
         } catch {
             lastUpdateResult = .failed(error: error.localizedDescription)
             addLog(.error, "Signature update failed: \(error.localizedDescription)")
+        }
+        if settings.showNotifications, let result = lastUpdateResult {
+            await notificationManager.sendSignaturesUpdated(result: result, settings: settings)
+            updateNotificationPermissionState()
         }
         refreshProtectionScore()
     }
@@ -313,7 +331,21 @@ final class AppState: ObservableObject {
         let job = jobID.flatMap { scanScheduler.scheduledScan(jobID: $0) }
         let scanPaths = job?.paths.map { URL(fileURLWithPath: $0) } ?? paths
         let options = job?.options ?? .default
-        let outcome = await startScan(paths: scanPaths, options: options, scanType: .scheduled, source: .scheduled, jobID: jobID)
+        let jobName = job?.name ?? "Scheduled scan"
+        let outcome = await startScan(
+            paths: scanPaths,
+            options: options,
+            scanType: .scheduled,
+            source: .scheduled,
+            jobID: jobID
+        ) { [weak self] in
+            guard let self, self.settings.showNotifications else { return }
+            await self.notificationManager.sendScheduledScanStarting(
+                jobName: jobName,
+                settings: self.settings
+            )
+            self.updateNotificationPermissionState()
+        }
 
         if let jobID {
             scanScheduler.markScheduledScanRun(jobID: jobID, result: outcome.scheduledResultMessage, at: Date())
@@ -415,6 +447,41 @@ final class AppState: ObservableObject {
         options.recursive = false
         options.excludedPaths = settings.allExclusions
         return options
+    }
+
+    func refreshNotificationPermissionStatus() async {
+        await notificationManager.refreshPermissionStatus()
+        updateNotificationPermissionState()
+    }
+
+    func requestNotificationPermission() async {
+        await notificationManager.requestPermission()
+        updateNotificationPermissionState()
+    }
+
+    private func sendScanNotification(
+        report: ScanReport,
+        source: ScanSource,
+        requestedPaths: [URL]
+    ) async {
+        guard settings.showNotifications else { return }
+
+        if !report.infectedFiles.isEmpty {
+            await notificationManager.sendThreatDetected(
+                threats: report.infectedFiles,
+                settings: settings
+            )
+        } else if source == .download, settings.notifyOnCleanFiles, let firstPath = requestedPaths.first {
+            await notificationManager.sendFileClean(url: firstPath, settings: settings)
+        } else if source != .download {
+            await notificationManager.sendScanComplete(report: report, settings: settings)
+        }
+        updateNotificationPermissionState()
+    }
+
+    private func updateNotificationPermissionState() {
+        notificationPermissionStatus = notificationManager.permissionStatus
+        notificationPermissionError = notificationManager.permissionError
     }
 }
 

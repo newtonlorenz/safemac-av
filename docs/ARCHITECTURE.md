@@ -16,6 +16,7 @@ SwiftUI views
      +------ ScanScheduler --------------------------- per-user launchd jobs
      +------ FileWatcher ----------------------------- macOS FSEvents
      +------ ConfigManager --------------------------- local JSON settings
+     +------ NotificationManager --------------------- macOS local notifications
 ```
 
 `AppState` is the `@MainActor` composition root for user-visible state. It owns service instances, coordinates scan lifecycle, and maps service outcomes into SwiftUI-observable values. Core classes isolate process launching, filesystem persistence, scheduling, and event streams from the view layer.
@@ -63,6 +64,12 @@ The Finder Sync extension receives the current Finder selection, writes a JSON r
 
 A distributable build must sign the app and extension consistently and configure the matching app group. The notification and bundle identifiers are namespaced to the upstream project and must change together in a fork.
 
+### Local notifications
+
+`NotificationManager` wraps `UNUserNotificationCenter` behind an injectable protocol and installs a retained delegate during initialization so authorized alerts remain visible while the app is active. `AppState` maps completed scans, detections, signature-update results, clean automatic download scans, and scheduled-scan starts into local notification requests. The master notification preference gates every request; detection sounds and clean-download notices have separate preferences.
+
+Notification content is intentionally summary-only. It includes counts and generic outcomes but excludes file names, filesystem paths, threat signatures, schedule names, and raw process errors. Permission state and safe delivery errors are surfaced in Settings. macOS remains the final authority on whether an authorized request is displayed.
+
 ## Local state
 
 | Data | Default location | Lifetime |
@@ -82,6 +89,7 @@ Paths can expose user information and should be redacted from bug reports.
 - User-selected files and Finder requests are untrusted inputs.
 - Configured scanner executable paths are trusted configuration.
 - ClamAV output is external process output and must be parsed defensively.
+- Scan paths, threat details, schedule names, and update errors must not cross into local notification content.
 - Filesystem mutations can fail between steps and must preserve recoverable state.
 - The app is not sandboxed, does not request root, and runs processes with the current user's privileges.
 - A local source build has not been authenticated by Apple. Signing, hardened runtime, notarization, and stapling are separate release responsibilities.
