@@ -7,9 +7,23 @@ final class LaunchModeParserTests: XCTestCase {
         XCTAssertEqual(mode, .interactive)
     }
 
-    func testParsesSignatureUpdateMode() {
-        let mode = LaunchModeParser.parse(arguments: ["ClamAV-GUI", "--update-signatures"])
-        XCTAssertEqual(mode, .signatureUpdate)
+    func testParsesScheduledSignatureUpdateMode() {
+        let mode = LaunchModeParser.parse(arguments: [
+            "ClamAV-GUI",
+            "--scheduled-signature-update"
+        ])
+
+        XCTAssertEqual(mode, .scheduledSignatureUpdate)
+        XCTAssertFalse(mode.isInteractive)
+        XCTAssertFalse(mode.presentsUserInterface)
+    }
+
+    func testOnlyInteractiveModeRunsActiveSceneMaintenance() {
+        XCTAssertTrue(LaunchMode.interactive.runsActiveSceneMaintenance)
+        XCTAssertFalse(LaunchMode.scheduledSignatureUpdate.runsActiveSceneMaintenance)
+        XCTAssertFalse(
+            LaunchMode.scheduledScan(jobID: UUID(), paths: []).runsActiveSceneMaintenance
+        )
     }
 
     func testParsesScheduledScanWithRepeatedPaths() {
@@ -26,8 +40,10 @@ final class LaunchModeParserTests: XCTestCase {
         case .scheduledScan(let parsedJobID, let paths):
             XCTAssertEqual(parsedJobID, jobID)
             XCTAssertEqual(paths.map(\.path).sorted(), ["/tmp/with space", "/tmp/with,comma"].sorted())
-        case .interactive, .signatureUpdate:
+        case .interactive:
             XCTFail("Expected scheduled scan mode")
+        case .scheduledSignatureUpdate:
+            XCTFail("Expected scheduled scan mode, not signature update mode")
         }
     }
 
@@ -48,8 +64,10 @@ final class LaunchModeParserTests: XCTestCase {
         case .scheduledScan(let parsedJobID, let paths):
             XCTAssertEqual(parsedJobID, jobID)
             XCTAssertTrue(paths.isEmpty)
-        case .interactive, .signatureUpdate:
+        case .interactive:
             XCTFail("Expected scheduled scan mode")
+        case .scheduledSignatureUpdate:
+            XCTFail("Expected scheduled scan mode, not signature update mode")
         }
     }
 }

@@ -121,6 +121,23 @@ final class ClamAV_GUIUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["launch-at-login-status"].waitForExistence(timeout: 5))
     }
 
+    func testAutomaticSignatureScheduleExposesSemanticControls() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
+        app.launch()
+
+        openMainWindow(in: app)
+
+        let updatesButton = app.buttons["sidebar-updates"]
+        XCTAssertTrue(updatesButton.waitForExistence(timeout: 5), "Expected the Updates sidebar button")
+        updatesButton.click()
+
+        XCTAssertTrue(app.descendants(matching: .any)["automatic-signature-updates-toggle"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["signature-update-frequency"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["signature-update-time"].waitForExistence(timeout: 5))
+    }
+
     private func openMainWindow(
         in app: XCUIApplication,
         file: StaticString = #filePath,

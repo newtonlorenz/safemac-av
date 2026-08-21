@@ -4,6 +4,14 @@ import XCTest
 
 @MainActor
 final class MenuBarManagerTests: XCTestCase {
+    func testApplicationBundleStartsAsUIElement() {
+        XCTAssertEqual(
+            Bundle(for: MenuBarApplicationDelegate.self)
+                .object(forInfoDictionaryKey: "LSUIElement") as? Bool,
+            true
+        )
+    }
+
     func testInitialLaunchHandlerDrainsInteractiveRequestsOnce() async {
         let handler = InitialLaunchHandler()
         var drainCalls = 0
@@ -12,14 +20,12 @@ final class MenuBarManagerTests: XCTestCase {
         await handler.handle(
             launchMode: .interactive,
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in scheduledCalls += 1 },
-            runSignatureUpdate: {}
+            runScheduledScan: { _, _ in scheduledCalls += 1 }
         )
         await handler.handle(
             launchMode: .interactive,
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in scheduledCalls += 1 },
-            runSignatureUpdate: {}
+            runScheduledScan: { _, _ in scheduledCalls += 1 }
         )
 
         XCTAssertEqual(drainCalls, 1)
@@ -36,14 +42,12 @@ final class MenuBarManagerTests: XCTestCase {
         await handler.handle(
             launchMode: .scheduledScan(jobID: jobID, paths: [scheduledPath]),
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) },
-            runSignatureUpdate: {}
+            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
         )
         await handler.handle(
             launchMode: .scheduledScan(jobID: jobID, paths: [scheduledPath]),
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) },
-            runSignatureUpdate: {}
+            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
         )
 
         XCTAssertEqual(drainCalls, 0)
@@ -52,28 +56,24 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(scheduledCalls.first?.1, [scheduledPath])
     }
 
-    func testInitialLaunchHandlerRoutesSignatureUpdateOnce() async {
+    func testInitialLaunchHandlerLeavesScheduledSignatureUpdateToApplicationLifecycle() async {
         let handler = InitialLaunchHandler()
         var drainCalls = 0
-        var scheduledCalls = 0
-        var signatureUpdateCalls = 0
+        var scheduledScanCalls = 0
 
         await handler.handle(
-            launchMode: .signatureUpdate,
+            launchMode: .scheduledSignatureUpdate,
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in scheduledCalls += 1 },
-            runSignatureUpdate: { signatureUpdateCalls += 1 }
+            runScheduledScan: { _, _ in scheduledScanCalls += 1 }
         )
         await handler.handle(
-            launchMode: .signatureUpdate,
+            launchMode: .scheduledSignatureUpdate,
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in scheduledCalls += 1 },
-            runSignatureUpdate: { signatureUpdateCalls += 1 }
+            runScheduledScan: { _, _ in scheduledScanCalls += 1 }
         )
 
         XCTAssertEqual(drainCalls, 0)
-        XCTAssertEqual(scheduledCalls, 0)
-        XCTAssertEqual(signatureUpdateCalls, 1)
+        XCTAssertEqual(scheduledScanCalls, 0)
     }
 
     func testApplicationDelegateSupportsRuntimeDefaultInitialization() {
@@ -195,7 +195,7 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(application.closeMainWindowCalls, 1)
     }
 
-    func testSignatureUpdateLaunchUsesAccessoryModeAndClosesMainWindow() async {
+    func testApplicationDelegatePromotesVisibleInteractiveLaunchToRegularPolicy() {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
         var settings = AppSettings.default
@@ -203,7 +203,26 @@ final class MenuBarManagerTests: XCTestCase {
         let delegate = MenuBarApplicationDelegate(
             manager: manager,
             settingsProvider: { settings },
-            argumentsProvider: { ["--update-signatures"] }
+            argumentsProvider: { [] }
+        )
+
+        delegate.applicationWillFinishLaunching(
+            Notification(name: NSApplication.willFinishLaunchingNotification)
+        )
+
+        XCTAssertEqual(application.requestedPolicies, [.regular])
+        XCTAssertFalse(manager.isDockHidden)
+    }
+
+    func testScheduledSignatureUpdateLaunchUsesAccessoryModeAndClosesMainWindow() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var settings = AppSettings.default
+        settings.hideFromDock = false
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { ["--scheduled-signature-update"] }
         )
 
         delegate.applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
@@ -215,12 +234,69 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(application.closeMainWindowCalls, 1)
     }
 
-    func testSignatureUpdateModeAlwaysHidesDockEvenWhenUserPrefersDock() {
+    func testApplicationDelegateRetainsDelayedScheduledUpdateUntilItFinishesThenExits() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        let updateStarted = expectation(description: "scheduled update started")
+        let launchFinished = expectation(description: "scheduled launch finished")
+        let gate = MenuBarAsyncGate()
+        var finishCalls = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { ["--scheduled-signature-update"] },
+            runScheduledSignatureUpdate: {
+                updateStarted.fulfill()
+                await gate.wait()
+            },
+            finishScheduledLaunch: {
+                finishCalls += 1
+                launchFinished.fulfill()
+            }
+        )
+
+        delegate.applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        await fulfillment(of: [updateStarted], timeout: 1)
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 1)
+        XCTAssertEqual(finishCalls, 0)
+
+        await gate.open()
+        await fulfillment(of: [launchFinished], timeout: 1)
+        XCTAssertEqual(finishCalls, 1)
+    }
+
+    func testScheduledUpdateAbortsWhenAccessoryIsolationCannotBeEstablished() async {
+        let application = MenuBarApplicationMock()
+        application.shouldAcceptPolicy = false
+        let manager = MenuBarManager(application: application)
+        var updateCalls = 0
+        var finishCalls = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { ["--scheduled-signature-update"] },
+            runScheduledSignatureUpdate: { updateCalls += 1 },
+            finishScheduledLaunch: { finishCalls += 1 }
+        )
+
+        delegate.applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 0)
+        XCTAssertEqual(updateCalls, 0)
+        XCTAssertEqual(finishCalls, 1)
+    }
+
+    func testScheduledSignatureUpdateModeAlwaysHidesDockEvenWhenUserPrefersDock() {
         var settings = AppSettings.default
         settings.hideFromDock = false
 
-        XCTAssertTrue(LaunchMode.signatureUpdate.hidesDock(settings: settings, isUITesting: false))
-        XCTAssertFalse(LaunchMode.signatureUpdate.presentsUserInterface)
+        XCTAssertTrue(LaunchMode.scheduledSignatureUpdate.hidesDock(settings: settings, isUITesting: false))
     }
 
     func testInteractiveAndScheduledScanModesRespectDockPreferenceAndUITesting() {
@@ -231,6 +307,43 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertTrue(LaunchMode.scheduledScan(jobID: nil, paths: []).hidesDock(settings: settings, isUITesting: false))
         XCTAssertFalse(LaunchMode.interactive.hidesDock(settings: settings, isUITesting: true))
         XCTAssertFalse(LaunchMode.scheduledScan(jobID: nil, paths: []).hidesDock(settings: settings, isUITesting: true))
+    }
+
+    func testOnlyCanonicalInstalledAppMayAutomaticallyReconcileSignatureSchedule() {
+        XCTAssertTrue(SignatureScheduleReconciliationPolicy.shouldReconcile(
+            bundleURL: URL(fileURLWithPath: "/Applications/SafeMac AV.app"),
+            isAutomatedTest: false
+        ))
+
+        let unsafePaths = [
+            "/Users/test/Library/Developer/Xcode/DerivedData/SafeMac/Build/Products/Debug/SafeMac AV.app",
+            "/private/var/folders/xx/AppTranslocation/123/d/SafeMac AV.app",
+            "/Users/test/Downloads/SafeMac AV.app",
+            "/Applications/SafeMac AV Backup.app"
+        ]
+        for path in unsafePaths {
+            XCTAssertFalse(SignatureScheduleReconciliationPolicy.shouldReconcile(
+                bundleURL: URL(fileURLWithPath: path),
+                isAutomatedTest: false
+            ), path)
+        }
+        XCTAssertFalse(SignatureScheduleReconciliationPolicy.shouldReconcile(
+            bundleURL: URL(fileURLWithPath: "/Applications/SafeMac AV.app"),
+            isAutomatedTest: true
+        ))
+    }
+}
+
+private actor MenuBarAsyncGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func open() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 

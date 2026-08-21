@@ -238,19 +238,36 @@ struct AutoUpdateSettingsCard: View {
                 Image(systemName: "calendar.badge.clock")
                     .font(.title2)
                     .foregroundColor(.blue)
-                Text("Automatic Updates")
+                Text("Malware Signature Updates")
                     .font(.headline)
             }
 
-            Toggle("Enable automatic signature updates", isOn: Binding(
-                get: { appState.settings.autoUpdateSignatures },
-                set: { enabled in
-                    appState.setAutomaticSignatureUpdates(enabled: enabled, schedule: currentSchedule)
-                }
-            ))
-            .accessibilityIdentifier("automatic-signature-updates-toggle")
+            if let configuredEnabled {
+                Toggle("Enable automatic signature updates", isOn: Binding(
+                    get: { configuredEnabled },
+                    set: { enabled in
+                        apply(enabled: enabled, schedule: currentSchedule)
+                    }
+                ))
+                .accessibilityLabel("Automatically update malware signatures")
+                .accessibilityIdentifier("automatic-signature-updates-toggle")
+            } else {
+                Label(
+                    "The malware signature schedule needs review before its status can be shown.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundColor(.orange)
+                .accessibilityLabel("Malware signature schedule status needs review")
 
-            if appState.settings.autoUpdateSignatures {
+                Button("Review Schedule") {
+                    appState.reconcileSignatureUpdateSchedule()
+                }
+                .accessibilityLabel("Review malware signature update schedule")
+                .accessibilityIdentifier("signature-update-schedule-review")
+            }
+
+            if configuredEnabled == true {
                 HStack {
                     Text("Update frequency:")
                     Picker("", selection: Binding(
@@ -261,14 +278,51 @@ struct AutoUpdateSettingsCard: View {
                             if frequency == .weekly, schedule.dayOfWeek == nil {
                                 schedule.dayOfWeek = 2
                             }
-                            appState.setAutomaticSignatureUpdates(enabled: true, schedule: schedule)
+                            apply(enabled: true, schedule: schedule)
                         }
                     )) {
                         Text("Daily").tag(ScheduleFrequency.daily)
                         Text("Weekly").tag(ScheduleFrequency.weekly)
                     }
                     .frame(width: 120)
+                    .accessibilityLabel("Malware signature update frequency")
                     .accessibilityIdentifier("signature-update-frequency")
+                }
+
+                DatePicker(
+                    "Update time:",
+                    selection: Binding(
+                        get: { scheduleDate },
+                        set: { date in
+                            var schedule = currentSchedule
+                            schedule.time = Calendar.current.dateComponents([.hour, .minute], from: date)
+                            apply(enabled: true, schedule: schedule)
+                        }
+                    ),
+                    displayedComponents: .hourAndMinute
+                )
+                .accessibilityLabel("Malware signature update time")
+                .accessibilityIdentifier("signature-update-time")
+
+                if currentSchedule.frequency == .weekly {
+                    HStack {
+                        Text("Update day:")
+                        Picker("", selection: Binding(
+                            get: { currentSchedule.dayOfWeek ?? 2 },
+                            set: { weekday in
+                                var schedule = currentSchedule
+                                schedule.dayOfWeek = weekday
+                                apply(enabled: true, schedule: schedule)
+                            }
+                        )) {
+                            ForEach(Array(Calendar.current.weekdaySymbols.enumerated()), id: \.offset) { index, name in
+                                Text(name).tag(index + 1)
+                            }
+                        }
+                        .frame(width: 150)
+                        .accessibilityLabel("Malware signature update day")
+                        .accessibilityIdentifier("signature-update-weekday")
+                    }
                 }
             }
 
@@ -276,6 +330,7 @@ struct AutoUpdateSettingsCard: View {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundColor(.red)
+                    .accessibilityLabel("Malware signature schedule error: \(error)")
                     .accessibilityIdentifier("signature-update-schedule-error")
             }
         }
@@ -284,8 +339,23 @@ struct AutoUpdateSettingsCard: View {
         .adaptiveGlassSurface()
     }
 
+    private var configuredEnabled: Bool? {
+        guard case .configured(let enabled) = appState.signatureUpdateScheduleState else {
+            return nil
+        }
+        return enabled
+    }
+
     private var currentSchedule: ScanSchedule {
         appState.settings.updateSchedule ?? .daily9am
+    }
+
+    private var scheduleDate: Date {
+        Calendar.current.date(from: currentSchedule.time) ?? Date()
+    }
+
+    private func apply(enabled: Bool, schedule: ScanSchedule) {
+        appState.setAutomaticSignatureUpdates(enabled: enabled, schedule: schedule)
     }
 }
 

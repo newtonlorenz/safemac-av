@@ -3,7 +3,7 @@ import Foundation
 enum LaunchMode: Equatable {
     case interactive
     case scheduledScan(jobID: UUID?, paths: [URL])
-    case signatureUpdate
+    case scheduledSignatureUpdate
 
     var isInteractive: Bool {
         if case .interactive = self { return true }
@@ -11,14 +11,22 @@ enum LaunchMode: Equatable {
     }
 
     var presentsUserInterface: Bool {
-        self != .signatureUpdate
+        self != .scheduledSignatureUpdate
+    }
+
+    var runsActiveSceneMaintenance: Bool {
+        isInteractive
+    }
+
+    var startsInteractiveBackgroundServices: Bool {
+        self != .scheduledSignatureUpdate
     }
 
     func hidesDock(settings: AppSettings, isUITesting: Bool) -> Bool {
         switch self {
         case .interactive, .scheduledScan:
             settings.hideFromDock && !isUITesting
-        case .signatureUpdate:
+        case .scheduledSignatureUpdate:
             true
         }
     }
@@ -26,10 +34,9 @@ enum LaunchMode: Equatable {
 
 enum LaunchModeParser {
     static func parse(arguments: [String]) -> LaunchMode {
-        if arguments.contains("--update-signatures") {
-            return .signatureUpdate
+        if arguments.contains("--scheduled-signature-update") {
+            return .scheduledSignatureUpdate
         }
-
         guard arguments.contains("--scheduled-scan") else { return .interactive }
 
         var jobID: UUID?
@@ -57,5 +64,21 @@ enum LaunchModeParser {
 
         guard jobID != nil || !paths.isEmpty else { return .interactive }
         return .scheduledScan(jobID: jobID, paths: paths)
+    }
+}
+
+enum SignatureScheduleReconciliationPolicy {
+    private static let canonicalInstalledBundleURL = URL(
+        fileURLWithPath: "/Applications/SafeMac AV.app",
+        isDirectory: true
+    )
+
+    static func shouldReconcile(bundleURL: URL, isAutomatedTest: Bool) -> Bool {
+        guard !isAutomatedTest else { return false }
+        return normalized(bundleURL) == normalized(canonicalInstalledBundleURL)
+    }
+
+    private static func normalized(_ url: URL) -> URL {
+        url.standardizedFileURL.resolvingSymlinksInPath()
     }
 }

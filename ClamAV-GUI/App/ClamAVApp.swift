@@ -6,14 +6,26 @@ struct ClamAVApp: App {
     static let mainWindowID = "main-window"
 
     @NSApplicationDelegateAdaptor(MenuBarApplicationDelegate.self) private var applicationDelegate
-    @StateObject private var appState = AppState()
+    @StateObject private var appState: AppState
     @StateObject private var menuBarManager = MenuBarManager()
     @StateObject private var initialLaunchHandler = InitialLaunchHandler()
-    private let launchMode = LaunchModeParser.parse(arguments: CommandLine.arguments)
-    @State private var presentsMenuBarExtra = LaunchModeParser
-        .parse(arguments: CommandLine.arguments)
-        .presentsUserInterface
+    private let launchMode: LaunchMode
+    @State private var presentsMenuBarExtra: Bool
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let launchMode = LaunchModeParser.parse(arguments: CommandLine.arguments)
+        self.launchMode = launchMode
+        _presentsMenuBarExtra = State(initialValue: launchMode.presentsUserInterface)
+
+        let appState = AppState(
+            startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices
+        )
+        _appState = StateObject(wrappedValue: appState)
+        ScheduledSignatureUpdateLifecycle.shared.install {
+            await appState.runScheduledSignatureUpdate()
+        }
+    }
 
     var body: some Scene {
         WindowGroup("SafeMac AV", id: Self.mainWindowID) {
@@ -32,7 +44,7 @@ struct ClamAVApp: App {
                     ))
                 }
                 .onChange(of: scenePhase) { phase in
-                    guard phase == .active else { return }
+                    guard phase == .active, launchMode.runsActiveSceneMaintenance else { return }
                     appState.refreshProtectionScore()
                     appState.refreshLaunchAtLoginStatus()
                     Task { await appState.drainExternalScanRequests() }
@@ -103,17 +115,16 @@ struct ClamAVApp: App {
         await initialLaunchHandler.handle(
             launchMode: launchMode,
             drainExternalScanRequests: {
-                if !isAutomatedTestLaunch {
-                    appState.reconcileSignatureUpdateScheduleOnStartup()
+                if SignatureScheduleReconciliationPolicy.shouldReconcile(
+                    bundleURL: Bundle.main.bundleURL,
+                    isAutomatedTest: isAutomatedTestLaunch
+                ) {
+                    appState.reconcileSignatureUpdateSchedule()
                 }
                 await appState.drainExternalScanRequests()
             },
             runScheduledScan: { jobID, paths in
                 await appState.runScheduledScan(jobID: jobID, paths: paths)
-            },
-            runSignatureUpdate: {
-                await appState.runScheduledSignatureUpdate()
-                NSApplication.shared.terminate(nil)
             }
         )
     }
@@ -126,8 +137,7 @@ final class InitialLaunchHandler: ObservableObject {
     func handle(
         launchMode: LaunchMode,
         drainExternalScanRequests: () async -> Void,
-        runScheduledScan: (UUID?, [URL]) async -> Void,
-        runSignatureUpdate: () async -> Void
+        runScheduledScan: (UUID?, [URL]) async -> Void
     ) async {
         guard !didHandleInitialLaunch else { return }
         didHandleInitialLaunch = true
@@ -137,8 +147,8 @@ final class InitialLaunchHandler: ObservableObject {
             await drainExternalScanRequests()
         case .scheduledScan(let jobID, let paths):
             await runScheduledScan(jobID, paths)
-        case .signatureUpdate:
-            await runSignatureUpdate()
+        case .scheduledSignatureUpdate:
+            break
         }
     }
 }

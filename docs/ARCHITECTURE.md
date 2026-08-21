@@ -14,6 +14,7 @@ SwiftUI views
      +------ FreshclamRunner ------------------------- freshclam
      +------ QuarantineManager ----------------------- quarantine payload + metadata
      +------ ScanScheduler --------------------------- per-user launchd jobs
+     +------ SignatureUpdateScheduler ---------------- one per-user LaunchAgent
      +------ FileWatcher ----------------------------- macOS FSEvents
      +------ ConfigManager --------------------------- local JSON settings
      +------ LaunchAtLoginManager -------------------- SMAppService.mainApp
@@ -23,6 +24,12 @@ WindowGroup + MenuBarExtra
      |
      +------ shared AppState
      +------ MenuBarManager -------------------------- AppKit activation policy
+
+per-user launchd
+     |
+     +------ --scheduled-signature-update
+                    |
+                    +------ application delegate ---- AppState ---- FreshclamRunner
 ```
 
 `AppState` is the `@MainActor` composition root for user-visible state. It owns service instances, coordinates scan lifecycle, and maps service outcomes into SwiftUI-observable values. Core classes isolate process launching, filesystem persistence, scheduling, and event streams from the view layer.
@@ -41,6 +48,10 @@ WindowGroup + MenuBarExtra
 ### Signature update
 
 `FreshclamRunner` launches the configured `freshclam` executable with the local config and signature-data paths. Its output is parsed into success, already-current, or failure status. Network access belongs to `freshclam`; the Swift application does not implement an update client.
+
+`SignatureUpdateScheduler` owns the single per-user LaunchAgent `com.newtonlorenz.ClamAV-GUI.signature-update`. Its property list contains only the current app executable and `--scheduled-signature-update`; configured ClamAV paths remain in app settings rather than launchd arguments. Daily and weekly calendar changes atomically replace the property list using modern per-user `launchctl bootstrap` and `bootout` operations. Reconciliation observes both the property list and launchd's loaded state so it repairs either kind of drift. A failed change restores the previous property list and runtime state; if restoration also fails, the app reports an indeterminate schedule instead of displaying a false enabled or disabled state.
+
+Only the canonical `/Applications/SafeMac AV.app` install automatically reconciles the captured executable path; development, translocated, downloaded, and backup copies cannot take over the installed schedule. A scheduled invocation uses accessory mode, suppresses normal scenes, and runs from an application-delegate-owned task rather than a window lifecycle. It calls the same single-flight `AppState.updateSignatures()` path as manual updates, emits the same privacy-safe local result notification, and exits only after the update completes. If automatic updates were disabled after launchd queued an invocation, it exits without running `freshclam`. Malware-signature updates are distinct from SafeMac AV application updates and from Homebrew-managed ClamAV engine upgrades.
 
 ### Quarantine
 
@@ -80,7 +91,7 @@ A distributable build must sign the app and extension consistently and configure
 
 The app creates both a normal main `WindowGroup` and a persistent SwiftUI `MenuBarExtra` using the popover-like window style available on macOS 13 and later. Both scenes observe the same `AppState`, so protection, scan, and signature-update progress remain current when the main window is closed. The menu-bar surface can start a quick scan, update signatures, reopen the main window or its Settings tab, and quit the app.
 
-`MenuBarManager` isolates AppKit activation-policy changes behind a testable protocol. The persisted `hideFromDock` preference selects `.accessory` to hide the Dock icon or `.regular` to restore it. On a hidden-Dock interactive restart, an application delegate applies accessory mode before launch finishes and closes the automatically created initial main window on the next main-queue turn; the `MenuBarExtra` remains available and can create and activate the window on demand. Scheduled launches retain their initial window long enough for the existing scene task to start the requested scan. The app deliberately does not set `LSUIElement`: Dock hiding stays reversible at runtime, and accessory apps can still be activated programmatically and present their normal windows.
+`MenuBarManager` isolates AppKit activation-policy changes behind a testable protocol. The app declares `LSUIElement` so background and scheduled launches never acquire a transient Dock item before the delegate runs. During launch, the persisted `hideFromDock` preference still selects `.accessory` to remain hidden or promotes an interactive app to `.regular` before launch finishes so normal Dock behavior remains reversible at runtime. On a hidden-Dock interactive restart, the delegate closes the automatically created initial main window; the `MenuBarExtra` remains available and can create and activate the window on demand. Scheduled scans retain their initial window long enough for the existing scene task to start the requested scan. Scheduled signature updates remain in accessory mode, close the initial window, and use an application-lifetime task that is not cancelled with the scene.
 
 ### Local notifications
 
@@ -96,6 +107,7 @@ Notification content is intentionally summary-only. It includes counts and gener
 | Scheduled-job definitions | `~/Library/Application Support/ClamAV-GUI/scheduled_jobs.json` | Persistent |
 | Finder request queue | App-group container when configured, otherwise Application Support | Drained after processing |
 | LaunchAgent definitions | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.scan.*.plist` | Until job removal |
+| Signature-update LaunchAgent | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.signature-update.plist` | Until automatic updates are disabled |
 | Main-app login item | macOS System Settings › General › Login Items | Until disabled by the user or app |
 | Quarantine payload and metadata | `~/.clamav-quarantine/` | Until restore or deletion |
 | Scan history and application logs | Process memory | Current app run |
