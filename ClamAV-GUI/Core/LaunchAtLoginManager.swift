@@ -33,7 +33,7 @@ enum LaunchAtLoginStatus: Equatable {
         case .requiresApproval:
             return "Allow SafeMac AV in System Settings › General › Login Items to finish enabling it."
         case .unavailable:
-            return "This build cannot register SafeMac AV as a login item."
+            return "macOS did not find the login item registration. Try enabling it again; SafeMac AV will show any registration error."
         case .disabled, .enabled:
             return nil
         }
@@ -118,7 +118,7 @@ final class LaunchAtLoginManager: LaunchAtLoginManaging {
 
     func setEnabled(_ enabled: Bool) throws {
         if enabled {
-            guard !status.isRequested else { return }
+            guard service.serviceStatus != .enabled, service.serviceStatus != .requiresApproval else { return }
             try service.register()
         } else {
             guard status.isRequested else { return }
