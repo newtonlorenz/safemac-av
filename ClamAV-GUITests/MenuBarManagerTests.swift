@@ -377,7 +377,7 @@ final class MenuBarManagerTests: XCTestCase {
 
         XCTAssertEqual(presentationRequests, 0)
         XCTAssertEqual(application.activationCalls, [])
-        XCTAssertEqual(application.events, [.nextMainRunLoopTurn])
+        XCTAssertEqual(application.events, [])
         XCTAssertEqual(application.closeMainWindowCalls, 1)
     }
 
