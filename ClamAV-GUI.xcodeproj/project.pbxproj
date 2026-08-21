@@ -65,6 +65,7 @@
 		A1000001200000000000074 /* NotificationManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000074 /* NotificationManagerTests.swift */; };
 		C0DE00012000000000000076 /* SignatureUpdateSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000076 /* SignatureUpdateSchedulerTests.swift */; };
 		C0DE00012000000000000077 /* SignatureUpdateAppStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000077 /* SignatureUpdateAppStateTests.swift */; };
+		C0DE00012000000000000095 /* ApplicationLaunchConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000095 /* ApplicationLaunchConfigurationTests.swift */; };
 			A1000001200000000000070 /* ClamAV_GUIUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000070 /* ClamAV_GUIUITests.swift */; };
 			A1000001200000000000057 /* FinderSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000057 /* FinderSync.swift */; };
 			A1000001200000000000058 /* ClamAV-GUI-Finder.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A1000002200000000000059 /* ClamAV-GUI-Finder.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -126,6 +127,7 @@
 		A1000002200000000000012 /* UpdateModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateModels.swift; sourceTree = "<group>"; };
 		C0DE00022000000000000076 /* SignatureUpdateSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureUpdateSchedulerTests.swift; sourceTree = "<group>"; };
 		C0DE00022000000000000077 /* SignatureUpdateAppStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureUpdateAppStateTests.swift; sourceTree = "<group>"; };
+		C0DE00022000000000000095 /* ApplicationLaunchConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationLaunchConfigurationTests.swift; sourceTree = "<group>"; };
 		A1000002200000000000013 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		A1000002200000000000014 /* LogModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogModels.swift; sourceTree = "<group>"; };
 		A1000002200000000000015 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
@@ -420,6 +422,7 @@
 				A1000002200000000000074 /* NotificationManagerTests.swift */,
 				C0DE00022000000000000076 /* SignatureUpdateSchedulerTests.swift */,
 				C0DE00022000000000000077 /* SignatureUpdateAppStateTests.swift */,
+				C0DE00022000000000000095 /* ApplicationLaunchConfigurationTests.swift */,
 			);
 			path = "ClamAV-GUITests";
 			sourceTree = "<group>";
@@ -663,6 +666,7 @@
 				A1000001200000000000074 /* NotificationManagerTests.swift in Sources */,
 				C0DE00012000000000000076 /* SignatureUpdateSchedulerTests.swift in Sources */,
 				C0DE00012000000000000077 /* SignatureUpdateAppStateTests.swift in Sources */,
+				C0DE00012000000000000095 /* ApplicationLaunchConfigurationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
