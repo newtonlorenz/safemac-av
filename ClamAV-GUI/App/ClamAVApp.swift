@@ -1,18 +1,26 @@
+import AppKit
 import SwiftUI
 
 @main
 struct ClamAVApp: App {
+    static let mainWindowID = "main-window"
+
     @StateObject private var appState = AppState()
+    @StateObject private var menuBarManager = MenuBarManager()
     @Environment(\.scenePhase) private var scenePhase
     @State private var didHandleInitialLaunch = false
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("SafeMac AV", id: Self.mainWindowID) {
             ContentView()
                 .environmentObject(appState)
                 .preferredColorScheme(uiTestColorScheme)
                 .task {
+                    menuBarManager.applyDockVisibility(hidden: appState.settings.hideFromDock)
                     await handleInitialLaunch()
+                }
+                .onChange(of: appState.settings.hideFromDock) { isHidden in
+                    menuBarManager.applyDockVisibility(hidden: isHidden)
                 }
                 .onChange(of: scenePhase) { phase in
                     guard phase == .active else { return }
@@ -25,6 +33,25 @@ struct ClamAVApp: App {
         .commands {
             ScanCommands()
         }
+
+        MenuBarExtra {
+            MenuBarPopoverView()
+                .environmentObject(appState)
+                .environmentObject(menuBarManager)
+                .preferredColorScheme(uiTestColorScheme)
+        } label: {
+            Image(systemName: menuBarIcon)
+                .accessibilityLabel("SafeMac AV")
+                .accessibilityIdentifier("safe-mac-menu-bar-item")
+        }
+        .menuBarExtraStyle(.window)
+    }
+
+    private var menuBarIcon: String {
+        if appState.isScanning || appState.isUpdatingSignatures {
+            return "shield.lefthalf.filled"
+        }
+        return appState.protectionScore.score >= 80 ? "checkmark.shield.fill" : "shield.fill"
     }
 
     private var uiTestColorScheme: ColorScheme? {

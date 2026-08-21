@@ -16,6 +16,11 @@ SwiftUI views
      +------ ScanScheduler --------------------------- per-user launchd jobs
      +------ FileWatcher ----------------------------- macOS FSEvents
      +------ ConfigManager --------------------------- local JSON settings
+
+WindowGroup + MenuBarExtra
+     |
+     +------ shared AppState
+     +------ MenuBarManager -------------------------- AppKit activation policy
 ```
 
 `AppState` is the `@MainActor` composition root for user-visible state. It owns service instances, coordinates scan lifecycle, and maps service outcomes into SwiftUI-observable values. Core classes isolate process launching, filesystem persistence, scheduling, and event streams from the view layer.
@@ -63,6 +68,12 @@ The Finder Sync extension receives the current Finder selection, writes a JSON r
 
 A distributable build must sign the app and extension consistently and configure the matching app group. The notification and bundle identifiers are namespaced to the upstream project and must change together in a fork.
 
+### Standalone menu-bar operation
+
+The app creates both a normal main `WindowGroup` and a persistent SwiftUI `MenuBarExtra` using the popover-like window style available on macOS 13 and later. Both scenes observe the same `AppState`, so protection, scan, and signature-update progress remain current when the main window is closed. The menu-bar surface can start a quick scan, update signatures, reopen the main window or its Settings tab, and quit the app.
+
+`MenuBarManager` isolates AppKit activation-policy changes behind a testable protocol. The persisted `hideFromDock` preference selects `.accessory` to hide the Dock icon or `.regular` to restore it. The app deliberately does not set `LSUIElement`: Dock hiding stays reversible at runtime, and accessory apps can still be activated programmatically and present their normal windows.
+
 ## Local state
 
 | Data | Default location | Lifetime |
@@ -90,6 +101,6 @@ Paths can expose user information and should be redacted from bug reports.
 
 The `ClamAV-GUI` scheme runs unit and integration coverage for configuration migration and validation, argument construction and output parsing, scan coordination, external request persistence, scheduling, and quarantine rollback behavior. Services accept test-specific storage URLs or protocols where isolation is necessary.
 
-The `ClamAV-GUI-UI` scheme is a small interactive smoke suite for window creation and sidebar navigation. It runs locally rather than in hosted CI because macOS UI automation depends on a locally signable test host and a stable logged-in window session. Disabling code signing causes the UI runner to be terminated before test execution.
+The `ClamAV-GUI-UI` scheme is a small interactive smoke suite for window creation, sidebar navigation, and the standalone menu-bar controls. It runs locally rather than in hosted CI because macOS UI automation depends on a locally signable test host and a stable logged-in window session. Disabling code signing causes the UI runner to be terminated before test execution.
 
 New behavior should be introduced with a failing test, implemented minimally, then refactored with the full suite green. Security-sensitive filesystem and process behavior needs both success and failure-path coverage.

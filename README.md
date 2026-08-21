@@ -30,6 +30,7 @@ SafeMac AV turns ClamAV's command-line engine into a complete local malware-scan
 - **Watch important folders.** Monitor selected locations and automatically scan new downloads while the app runs.
 - **Respond to detections.** Review findings, quarantine suspicious files, verify restores, and confirm permanent deletion.
 - **Automate routine checks.** Schedule daily, weekly, or monthly scans and keep signatures current with `freshclam`.
+- **Work from the menu bar.** Check protection, scan, update signatures, reopen the app, or quit even after closing the main window.
 - **Stay in control.** Configure exclusions and limits, inspect history and logs, and pause, resume, or cancel scans.
 - **Use your preferred engine mode.** Run `clamscan` directly or connect to an optional local `clamdscan` service.
 
@@ -102,6 +103,8 @@ When upgrading from an older ClamAV GUI build, launch SafeMac AV and re-save any
    ```
 
 4. Select the `ClamAV-GUI` scheme and run it. The Settings screen can auto-detect Homebrew paths; update signatures before the first scan.
+
+SafeMac AV remains available from its shield in the menu bar after the main window closes. Settings can optionally hide the Dock icon; this is reversible from **Settings → Menu Bar & Dock**, and the full window remains available from the menu bar.
 
 For a guided environment check, run `./setup.sh`. It is read-only by default; installation and configuration changes require explicit flags shown by `./setup.sh --help`.
 
@@ -185,7 +188,7 @@ See [SECURITY.md](SECURITY.md) for the supported reporting process.
 - Folder monitoring is application-level FSEvents monitoring. It only runs while SafeMac AV is running and is not a kernel or system on-access scanner.
 - Scheduled scans are per-user `launchd` jobs. The app must remain at the path captured by the job, and the user must be logged in.
 - The Finder extension must be signed with the app and enabled manually in System Settings. Forks also need their own compatible bundle/app-group configuration.
-- Launch-at-login, user notifications, and a standalone menu-bar experience are not complete yet.
+- Launch-at-login and user notifications are not complete yet.
 - Source builds are unsigned unless you configure an Apple Developer identity. A successful local build is not the same as a signed and notarized distribution.
 
 ## Project layout
