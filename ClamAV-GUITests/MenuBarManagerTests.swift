@@ -321,7 +321,7 @@ final class MenuBarManagerTests: XCTestCase {
 
     func testVisibleInteractiveDelegateRequestsWindowThenFocusesBeforeMaintenance() async {
         let application = MenuBarApplicationMock()
-        application.focusMainWindowResults = [false, true]
+        application.focusMainWindowResults = [false, false, true]
         let manager = MenuBarManager(application: application)
         let maintenanceRan = expectation(description: "initial maintenance ran")
         var presentationRequests = 0
@@ -350,6 +350,7 @@ final class MenuBarManagerTests: XCTestCase {
             application.events,
             [.nextMainRunLoopTurn, .activateApplication, .focusMainWindow,
              .requestMainWindow, .nextMainRunLoopTurn, .activateApplication,
+             .focusMainWindow, .nextMainRunLoopTurn, .activateApplication,
              .focusMainWindow, .runInitialMaintenance]
         )
     }
@@ -380,8 +381,43 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(application.closeMainWindowCalls, 1)
     }
 
-    func testScheduledScanDelegateRunsAppLifetimeScanWithoutPresentingWindow() async {
+    func testActiveMaintenanceWaitsForInitialInteractiveLaunchToFinish() async {
         let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var settings = AppSettings.default
+        settings.hideFromDock = true
+        let initialStarted = expectation(description: "initial launch started")
+        let activeRan = expectation(description: "active maintenance ran")
+        let initialGate = MenuBarAsyncGate()
+        var activeCalls = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { [] },
+            runInitialApplicationLaunch: { _ in
+                initialStarted.fulfill()
+                await initialGate.wait()
+            },
+            runActiveInteractiveMaintenance: { _ in
+                activeCalls += 1
+                activeRan.fulfill()
+            }
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await fulfillment(of: [initialStarted], timeout: 1)
+        delegate.applicationDidBecomeActive(.init(name: NSApplication.didBecomeActiveNotification))
+
+        XCTAssertEqual(activeCalls, 0)
+        await initialGate.open()
+        await fulfillment(of: [activeRan], timeout: 1)
+        XCTAssertEqual(activeCalls, 1)
+    }
+
+    func testScheduledScanDelegatePresentsWindowThenRunsAppLifetimeScan() async {
+        let application = MenuBarApplicationMock()
+        application.focusMainWindowResults = [false, true]
         let manager = MenuBarManager(application: application)
         let launchRan = expectation(description: "scheduled scan launch ran")
         var receivedMode: LaunchMode?
@@ -390,9 +426,14 @@ final class MenuBarManagerTests: XCTestCase {
             manager: manager,
             settingsProvider: { .default },
             argumentsProvider: { ["--scheduled-scan", "--path", "/tmp/scheduled"] },
-            requestMainWindowPresentation: { presentationRequests += 1 },
+            nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
+            requestMainWindowPresentation: {
+                presentationRequests += 1
+                application.events.append(.requestMainWindow)
+            },
             runInitialApplicationLaunch: { mode in
                 receivedMode = mode
+                application.events.append(.runInitialMaintenance)
                 launchRan.fulfill()
             }
         )
@@ -402,9 +443,15 @@ final class MenuBarManagerTests: XCTestCase {
         await fulfillment(of: [launchRan], timeout: 1)
 
         XCTAssertEqual(receivedMode, .scheduledScan(jobID: nil, paths: [URL(fileURLWithPath: "/tmp/scheduled")]))
-        XCTAssertEqual(presentationRequests, 0)
-        XCTAssertEqual(application.activationCalls, [])
+        XCTAssertEqual(presentationRequests, 1)
+        XCTAssertEqual(application.activationCalls, [true, true])
         XCTAssertEqual(application.focusMainWindowResults.count, 0)
+        XCTAssertEqual(
+            application.events,
+            [.nextMainRunLoopTurn, .activateApplication, .focusMainWindow,
+             .requestMainWindow, .nextMainRunLoopTurn, .activateApplication,
+             .focusMainWindow, .runInitialMaintenance]
+        )
     }
 
     func testScheduledSignatureUpdateLaunchUsesAccessoryModeAndClosesMainWindow() async {
@@ -425,6 +472,8 @@ final class MenuBarManagerTests: XCTestCase {
 
         XCTAssertEqual(application.requestedPolicies, [.accessory])
         XCTAssertEqual(application.closeMainWindowCalls, 1)
+        XCTAssertEqual(application.activationCalls, [])
+        XCTAssertFalse(application.events.contains(.focusMainWindow))
     }
 
     func testApplicationDelegateRetainsDelayedScheduledUpdateUntilItFinishesThenExits() async {
