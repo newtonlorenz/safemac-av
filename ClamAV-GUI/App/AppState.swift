@@ -143,13 +143,12 @@ final class AppState: ObservableObject {
         ) { [weak self] notification in
             Task { @MainActor in
                 guard let self else { return }
-                let drainedCount = await self.drainExternalScanRequests()
-                guard drainedCount == 0,
-                      let data = notification.userInfo?["paths"] as? Data,
-                      let paths = try? JSONDecoder().decode([String].self, from: data) else {
-                    return
+                if let requestID = notification.userInfo?["requestID"] as? String,
+                   let id = UUID(uuidString: requestID) {
+                    await self.drainExternalScanRequest(id: id)
+                } else {
+                    await self.drainExternalScanRequests()
                 }
-                await self.startScan(paths: paths.map { URL(fileURLWithPath: $0) }, options: .default, scanType: .custom, source: .finder)
             }
         }
     }
@@ -522,18 +521,34 @@ final class AppState: ObservableObject {
     func drainExternalScanRequests() async -> Int {
         do {
             let requests = try externalScanRequestStore.drainRequests()
-            for request in requests {
-                await startScan(
-                    paths: request.paths.map { URL(fileURLWithPath: $0) },
-                    options: .default,
-                    scanType: .custom,
-                    source: ScanSource(rawValue: request.source) ?? .finder
-                )
-            }
+            await runExternalScanRequests(requests)
             return requests.count
         } catch {
             addLog(.error, "Failed to load external scan requests: \(error.localizedDescription)")
             return 0
+        }
+    }
+
+    @discardableResult
+    func drainExternalScanRequest(id: UUID) async -> Int {
+        do {
+            let requests = try externalScanRequestStore.drainRequest(id: id)
+            await runExternalScanRequests(requests)
+            return requests.count
+        } catch {
+            addLog(.error, "Failed to load external scan request: \(error.localizedDescription)")
+            return 0
+        }
+    }
+
+    private func runExternalScanRequests(_ requests: [ExternalScanRequest]) async {
+        for request in requests {
+            await startScan(
+                paths: request.paths.map { URL(fileURLWithPath: $0) },
+                options: .default,
+                scanType: .custom,
+                source: ScanSource(rawValue: request.source) ?? .finder
+            )
         }
     }
 
