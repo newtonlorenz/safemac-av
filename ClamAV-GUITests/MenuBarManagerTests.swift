@@ -269,6 +269,51 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertFalse(delegate.showMainWindow(selecting: nil))
     }
 
+    func testVisibleLaunchDefersPresentationUntilControllerFactoryIsInstalled() async {
+        let registry = MainWindowControllerRegistry()
+        let controller = MainWindowControllerMock()
+        let application = MenuBarApplicationMock()
+        controller.onShow = { application.events.append(.showMainWindow) }
+        let maintenanceRan = expectation(description: "maintenance ran after presentation")
+        var factoryCalls = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: MenuBarManager(application: application),
+            settingsProvider: { .default },
+            argumentsProvider: { [] },
+            nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
+            mainWindowControllerFactory: {
+                factoryCalls += 1
+                return registry.makeController()
+            },
+            waitForMainWindowControllerFactory: { continuation in
+                registry.whenFactoryAvailable(continuation)
+            },
+            runInitialApplicationLaunch: { _ in
+                application.events.append(.runInitialMaintenance)
+                maintenanceRan.fulfill()
+            }
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+
+        XCTAssertEqual(controller.selections.count, 0)
+        XCTAssertEqual(application.events, [])
+
+        registry.installFactory { controller }
+        await fulfillment(of: [maintenanceRan], timeout: 1)
+
+        XCTAssertEqual(factoryCalls, 2)
+        XCTAssertEqual(controller.selections.count, 1)
+        XCTAssertNil(controller.selections[0])
+        XCTAssertEqual(
+            application.events,
+            [.showMainWindow, .nextMainRunLoopTurn, .runInitialMaintenance]
+        )
+    }
+
     func testApplicationDelegateUsesPersistedHiddenDockSettingOnInteractiveRestart() async {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
