@@ -26,6 +26,7 @@ struct ClamAVApp: App {
                 .onChange(of: scenePhase) { phase in
                     guard phase == .active else { return }
                     appState.refreshProtectionScore()
+                    appState.refreshLaunchAtLoginStatus()
                     Task { await appState.drainExternalScanRequests() }
                 }
         }

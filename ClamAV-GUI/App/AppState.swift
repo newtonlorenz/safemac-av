@@ -15,7 +15,11 @@ final class AppState: ObservableObject {
     @Published var logs: [LogEntry] = []
     @Published var scanError: String?
     @Published var settingsSaveError: String?
+    @Published var launchAtLoginError: String?
+    @Published private(set) var notificationPermissionStatus: NotificationPermissionStatus = .unknown
+    @Published private(set) var notificationPermissionError: String?
     @Published var shouldOpenCustomScanPicker = false
+    @Published private(set) var launchAtLoginStatus: LaunchAtLoginStatus
     @Published private(set) var protectionScore: ProtectionScore
 
     let configManager: ConfigManagerProtocol
@@ -28,6 +32,8 @@ final class AppState: ObservableObject {
     let externalScanRequestStore: ExternalScanRequestStore
     let scanHistoryManager: ScanHistoryManager
     let protectionScoreManager: ProtectionScoreManager
+    private let launchAtLoginManager: any LaunchAtLoginManaging
+    let notificationManager: NotificationManaging
 
     private let logManager = LogManager()
     private var cancellables = Set<AnyCancellable>()
@@ -40,16 +46,24 @@ final class AppState: ObservableObject {
         fileWatcher: FileWatcherProtocol? = nil,
         scanCoordinator: ScanCoordinator? = nil,
         freshclamRunner: FreshclamRunnerProtocol? = nil,
+        notificationManager: NotificationManaging? = nil,
         externalScanRequestStore: ExternalScanRequestStore = ExternalScanRequestStore(),
-        scanHistoryManager: ScanHistoryManager = ScanHistoryManager()
+        scanHistoryManager: ScanHistoryManager = ScanHistoryManager(),
+        launchAtLoginManager: any LaunchAtLoginManaging = LaunchAtLoginManager()
     ) {
-        let loadedSettings = configManager.loadSettings()
+        var loadedSettings = configManager.loadSettings()
+        let settingsLoadState = configManager.lastSettingsLoadState
+        let initialLaunchAtLoginStatus = launchAtLoginManager.status
+        let shouldPersistLaunchAtLoginStatus = loadedSettings.launchAtLogin != initialLaunchAtLoginStatus.isRequested
+        loadedSettings.launchAtLogin = initialLaunchAtLoginStatus.isRequested
         let runner = ClamAVRunner(configManager: configManager)
+        let resolvedNotificationManager = notificationManager ?? NotificationManager.shared
 
         self.configManager = configManager
         self.settings = loadedSettings
         self.clamAVRunner = runner
         self.freshclamRunner = freshclamRunner ?? FreshclamRunner(configManager: configManager)
+        self.notificationManager = resolvedNotificationManager
         self.quarantineManager = QuarantineManager(configManager: configManager)
         self.scanScheduler = scanScheduler
         self.fileWatcher = fileWatcher ?? FileWatcher(
@@ -59,6 +73,8 @@ final class AppState: ObservableObject {
         self.scanCoordinator = scanCoordinator ?? ScanCoordinator(clamAVRunner: runner)
         self.externalScanRequestStore = externalScanRequestStore
         self.scanHistoryManager = scanHistoryManager
+        self.launchAtLoginManager = launchAtLoginManager
+        self.launchAtLoginStatus = initialLaunchAtLoginStatus
         let scoreManager = ProtectionScoreManager(configManager: configManager)
         self.protectionScoreManager = scoreManager
         self.protectionScore = scoreManager.calculateScore(
@@ -66,11 +82,25 @@ final class AppState: ObservableObject {
             monitoringEnabled: loadedSettings.monitoringEnabled,
             finderExtensionEnabled: FinderExtensionManager.isEnabled
         )
+        self.notificationPermissionStatus = resolvedNotificationManager.permissionStatus
+        self.notificationPermissionError = resolvedNotificationManager.permissionError
 
         loadQuarantinedFiles()
+        resolvedNotificationManager.setupNotificationCategories()
         setupNotifications()
         setupFileWatcherAutoScan()
         configureMonitoring()
+
+        if shouldPersistLaunchAtLoginStatus, settingsLoadState.allowsStartupReconciliationPersistence {
+            persistLaunchAtLoginReconciliation()
+        } else if shouldPersistLaunchAtLoginStatus {
+            settingsSaveError = "Your settings could not be loaded. SafeMac AV is using default settings until you save changes."
+            addLog(.error, "Skipped launch-at-login reconciliation because settings could not be loaded safely")
+        }
+
+        Task { [weak self] in
+            await self?.refreshNotificationPermissionStatus()
+        }
     }
 
     private func setupNotifications() {
@@ -125,7 +155,8 @@ final class AppState: ObservableObject {
         options: ScanOptions,
         scanType: ScanType = .custom,
         source: ScanSource = .custom,
-        jobID: UUID? = nil
+        jobID: UUID? = nil,
+        onAdmitted: (() async -> Void)? = nil
     ) async -> ScanOutcome {
         guard !paths.isEmpty else {
             scanError = "No scan paths selected."
@@ -153,7 +184,7 @@ final class AppState: ObservableObject {
         currentScanProgress = ScanProgress(status: .preparing, currentFile: nil, filesScanned: 0, infectedCount: 0, startTime: Date())
 
         let request = ScanRequest(source: source, paths: paths, options: options, jobID: jobID)
-        let outcome = await scanCoordinator.run(request) { [weak self] progress in
+        let outcome = await scanCoordinator.run(request, onAdmitted: onAdmitted) { [weak self] progress in
             Task { @MainActor in
                 self?.currentScanProgress = progress
             }
@@ -176,6 +207,7 @@ final class AppState: ObservableObject {
 
             scanHistoryManager.addEntry(ScanHistoryEntry(from: report, scanType: scanType))
             addLog(.info, "Scan completed: \(report.filesScanned) files scanned, \(report.infectedFiles.count) threats found")
+            await sendScanNotification(report: report, source: source, requestedPaths: paths)
         case .failed(let message):
             scanError = message
             addLog(.error, "Scan failed: \(message)")
@@ -243,6 +275,10 @@ final class AppState: ObservableObject {
             lastUpdateResult = .failed(error: error.localizedDescription)
             addLog(.error, "Signature update failed: \(error.localizedDescription)")
         }
+        if settings.showNotifications, let result = lastUpdateResult {
+            await notificationManager.sendSignaturesUpdated(result: result, settings: settings)
+            updateNotificationPermissionState()
+        }
         refreshProtectionScore()
     }
 
@@ -275,6 +311,93 @@ final class AppState: ObservableObject {
         }
         configureMonitoring()
         refreshProtectionScore()
+    }
+
+    func setLaunchAtLoginEnabled(_ enabled: Bool) {
+        let previousSettings = settings
+        let previousStatus = launchAtLoginStatus
+        launchAtLoginError = nil
+
+        do {
+            try launchAtLoginManager.setEnabled(enabled)
+            launchAtLoginStatus = launchAtLoginManager.status
+            guard launchAtLoginStatus.isRequested == enabled else {
+                throw LaunchAtLoginUpdateError.unexpectedStatus(launchAtLoginStatus)
+            }
+
+            var updatedSettings = settings
+            updatedSettings.launchAtLogin = launchAtLoginStatus.isRequested
+
+            do {
+                try configManager.saveSettings(updatedSettings)
+                settings = updatedSettings
+                settingsSaveError = nil
+                addLog(.info, enabled ? "Enabled launch at login" : "Disabled launch at login")
+            } catch {
+                rollbackLaunchAtLogin(
+                    to: previousStatus,
+                    previousSettings: previousSettings,
+                    persistenceError: error
+                )
+            }
+        } catch {
+            launchAtLoginStatus = launchAtLoginManager.status
+            var reconciledSettings = settings
+            reconciledSettings.launchAtLogin = launchAtLoginStatus.isRequested
+            settings = reconciledSettings
+            launchAtLoginError = "SafeMac AV could not update launch at login. \(error.localizedDescription)"
+            addLog(.error, "Failed to update launch at login: \(error.localizedDescription)")
+        }
+    }
+
+    func refreshLaunchAtLoginStatus() {
+        let currentStatus = launchAtLoginManager.status
+        guard currentStatus != launchAtLoginStatus || settings.launchAtLogin != currentStatus.isRequested else {
+            return
+        }
+
+        launchAtLoginStatus = currentStatus
+        var reconciledSettings = settings
+        reconciledSettings.launchAtLogin = currentStatus.isRequested
+        settings = reconciledSettings
+        launchAtLoginError = nil
+        persistLaunchAtLoginReconciliation()
+    }
+
+    private func rollbackLaunchAtLogin(
+        to previousStatus: LaunchAtLoginStatus,
+        previousSettings: AppSettings,
+        persistenceError: Error
+    ) {
+        settingsSaveError = "Your settings could not be saved. Check that the app can write to Application Support, then try again."
+
+        do {
+            try launchAtLoginManager.setEnabled(previousStatus.isRequested)
+            launchAtLoginStatus = launchAtLoginManager.status
+            var restoredSettings = previousSettings
+            restoredSettings.launchAtLogin = launchAtLoginStatus.isRequested
+            settings = restoredSettings
+            launchAtLoginError = "Launch at login was not changed because your settings could not be saved."
+        } catch {
+            launchAtLoginStatus = launchAtLoginManager.status
+            var reconciledSettings = previousSettings
+            reconciledSettings.launchAtLogin = launchAtLoginStatus.isRequested
+            settings = reconciledSettings
+            launchAtLoginError = "SafeMac AV changed the login item, but could not save or roll back the setting. Review Login Items in System Settings."
+            addLog(.error, "Failed to roll back launch at login: \(error.localizedDescription)")
+        }
+
+        addLog(.error, "Failed to save launch-at-login setting: \(persistenceError.localizedDescription)")
+    }
+
+    private func persistLaunchAtLoginReconciliation() {
+        do {
+            try configManager.saveSettings(settings)
+            settingsSaveError = nil
+        } catch {
+            settingsSaveError = "Your settings could not be saved. Check that the app can write to Application Support, then try again."
+            addLog(.error, "Failed to reconcile launch-at-login setting: \(error.localizedDescription)")
+        }
     }
 
     func refreshProtectionScore() {
@@ -313,7 +436,21 @@ final class AppState: ObservableObject {
         let job = jobID.flatMap { scanScheduler.scheduledScan(jobID: $0) }
         let scanPaths = job?.paths.map { URL(fileURLWithPath: $0) } ?? paths
         let options = job?.options ?? .default
-        let outcome = await startScan(paths: scanPaths, options: options, scanType: .scheduled, source: .scheduled, jobID: jobID)
+        let jobName = job?.name ?? "Scheduled scan"
+        let outcome = await startScan(
+            paths: scanPaths,
+            options: options,
+            scanType: .scheduled,
+            source: .scheduled,
+            jobID: jobID
+        ) { [weak self] in
+            guard let self, self.settings.showNotifications else { return }
+            await self.notificationManager.sendScheduledScanStarting(
+                jobName: jobName,
+                settings: self.settings
+            )
+            self.updateNotificationPermissionState()
+        }
 
         if let jobID {
             scanScheduler.markScheduledScanRun(jobID: jobID, result: outcome.scheduledResultMessage, at: Date())
@@ -415,6 +552,52 @@ final class AppState: ObservableObject {
         options.recursive = false
         options.excludedPaths = settings.allExclusions
         return options
+    }
+
+    func refreshNotificationPermissionStatus() async {
+        await notificationManager.refreshPermissionStatus()
+        updateNotificationPermissionState()
+    }
+
+    func requestNotificationPermission() async {
+        await notificationManager.requestPermission()
+        updateNotificationPermissionState()
+    }
+
+    private func sendScanNotification(
+        report: ScanReport,
+        source: ScanSource,
+        requestedPaths: [URL]
+    ) async {
+        guard settings.showNotifications else { return }
+
+        if !report.infectedFiles.isEmpty {
+            await notificationManager.sendThreatDetected(
+                threats: report.infectedFiles,
+                settings: settings
+            )
+        } else if source == .download, settings.notifyOnCleanFiles, let firstPath = requestedPaths.first {
+            await notificationManager.sendFileClean(url: firstPath, settings: settings)
+        } else if source != .download {
+            await notificationManager.sendScanComplete(report: report, settings: settings)
+        }
+        updateNotificationPermissionState()
+    }
+
+    private func updateNotificationPermissionState() {
+        notificationPermissionStatus = notificationManager.permissionStatus
+        notificationPermissionError = notificationManager.permissionError
+    }
+}
+
+private enum LaunchAtLoginUpdateError: LocalizedError {
+    case unexpectedStatus(LaunchAtLoginStatus)
+
+    var errorDescription: String? {
+        switch self {
+        case .unexpectedStatus(let status):
+            return "The system reported launch at login as \(status.title.lowercased())."
+        }
     }
 }
 

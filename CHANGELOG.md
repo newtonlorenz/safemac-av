@@ -4,6 +4,10 @@ All notable project changes will be documented in this file. The format follows 
 
 ## [Unreleased]
 
+### Added
+
+- A native macOS login-item control with enabled, disabled, approval-required, and unavailable status feedback in Settings.
+
 ## [1.1.0] - 2026-08-21
 
 ### Added

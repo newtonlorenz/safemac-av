@@ -20,7 +20,11 @@ final class ScanCoordinator {
         self.clamAVRunner = clamAVRunner
     }
 
-    func run(_ request: ScanRequest, progressHandler: @escaping (ScanProgress) -> Void) async -> ScanOutcome {
+    func run(
+        _ request: ScanRequest,
+        onAdmitted: (() async -> Void)? = nil,
+        progressHandler: @escaping (ScanProgress) -> Void
+    ) async -> ScanOutcome {
         guard !isScanning else {
             return .skippedAlreadyRunning(active: activeScanSource)
         }
@@ -36,6 +40,8 @@ final class ScanCoordinator {
                 waiter.resume()
             }
         }
+
+        await onAdmitted?()
 
         do {
             let report = try await clamAVRunner.scan(

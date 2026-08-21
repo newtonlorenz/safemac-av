@@ -1,6 +1,8 @@
 import Foundation
 
 protocol ConfigManagerProtocol {
+    var lastSettingsLoadState: SettingsLoadState { get }
+
     func loadSettings() -> AppSettings
     func saveSettings(_ settings: AppSettings) throws
     func detectClamAVPaths() -> (clamscan: String?, freshclam: String?, configDir: String?)
@@ -13,6 +15,7 @@ final class ConfigManager: ConfigManagerProtocol {
     private let fileManager: FileManager
     private let appDirectoryURL: URL
     private let settingsURL: URL
+    private(set) var lastSettingsLoadState: SettingsLoadState = .missing
 
     init(appSupportURL: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -26,12 +29,20 @@ final class ConfigManager: ConfigManagerProtocol {
     }
 
     func loadSettings() -> AppSettings {
-        guard fileManager.fileExists(atPath: settingsURL.path),
-              let data = try? Data(contentsOf: settingsURL),
-              let settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
+        guard fileManager.fileExists(atPath: settingsURL.path) else {
+            lastSettingsLoadState = .missing
             return .default
         }
-        return settings
+
+        do {
+            let data = try Data(contentsOf: settingsURL)
+            let settings = try JSONDecoder().decode(AppSettings.self, from: data)
+            lastSettingsLoadState = .loaded
+            return settings
+        } catch {
+            lastSettingsLoadState = .fallbackDueToError(reason: error.localizedDescription)
+            return .default
+        }
     }
 
     func saveSettings(_ settings: AppSettings) throws {
@@ -172,6 +183,21 @@ final class ConfigManager: ConfigManagerProtocol {
             return components[2]
         }
         return nil
+    }
+}
+
+enum SettingsLoadState: Equatable {
+    case missing
+    case loaded
+    case fallbackDueToError(reason: String)
+
+    var allowsStartupReconciliationPersistence: Bool {
+        switch self {
+        case .missing, .loaded:
+            return true
+        case .fallbackDueToError:
+            return false
+        }
     }
 }
 
