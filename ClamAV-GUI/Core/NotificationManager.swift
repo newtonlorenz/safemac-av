@@ -7,7 +7,6 @@ enum NotificationPermissionStatus: Equatable {
     case denied
     case authorized
     case provisional
-    case ephemeral
 
     init(_ status: UNAuthorizationStatus) {
         switch status {
@@ -19,8 +18,6 @@ enum NotificationPermissionStatus: Equatable {
             self = .authorized
         case .provisional:
             self = .provisional
-        case .ephemeral:
-            self = .ephemeral
         @unknown default:
             self = .unknown
         }
@@ -28,7 +25,7 @@ enum NotificationPermissionStatus: Equatable {
 
     var isAuthorized: Bool {
         switch self {
-        case .authorized, .provisional, .ephemeral:
+        case .authorized, .provisional:
             return true
         case .unknown, .notDetermined, .denied:
             return false
@@ -47,8 +44,6 @@ enum NotificationPermissionStatus: Equatable {
             return "Allowed"
         case .provisional:
             return "Delivered quietly"
-        case .ephemeral:
-            return "Temporarily allowed"
         }
     }
 }
@@ -58,6 +53,7 @@ protocol UserNotificationCenterProtocol: AnyObject {
     func authorizationStatus() async -> UNAuthorizationStatus
     func add(_ request: UNNotificationRequest) async throws
     func setNotificationCategories(_ categories: Set<UNNotificationCategory>)
+    func setDelegate(_ delegate: UNUserNotificationCenterDelegate)
 }
 
 final class SystemUserNotificationCenter: UserNotificationCenterProtocol {
@@ -81,6 +77,22 @@ final class SystemUserNotificationCenter: UserNotificationCenterProtocol {
 
     func setNotificationCategories(_ categories: Set<UNNotificationCategory>) {
         center.setNotificationCategories(categories)
+    }
+
+    func setDelegate(_ delegate: UNUserNotificationCenterDelegate) {
+        center.delegate = delegate
+    }
+}
+
+final class ForegroundNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    static let presentationOptions: UNNotificationPresentationOptions = [.banner, .list, .sound]
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler(Self.presentationOptions)
     }
 }
 
@@ -111,15 +123,22 @@ final class NotificationManager: NotificationManaging {
     }
 
     private let center: UserNotificationCenterProtocol
+    private let foregroundDelegate: ForegroundNotificationDelegate
     private(set) var permissionStatus: NotificationPermissionStatus = .unknown
     private(set) var permissionError: String?
 
     init(center: UserNotificationCenterProtocol = SystemUserNotificationCenter()) {
         self.center = center
+        let foregroundDelegate = ForegroundNotificationDelegate()
+        self.foregroundDelegate = foregroundDelegate
+        center.setDelegate(foregroundDelegate)
     }
 
     func refreshPermissionStatus() async {
         permissionStatus = NotificationPermissionStatus(await center.authorizationStatus())
+        if permissionStatus.isAuthorized {
+            permissionError = nil
+        }
     }
 
     func requestPermission() async {

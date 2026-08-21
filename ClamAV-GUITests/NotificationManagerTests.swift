@@ -38,6 +38,37 @@ final class NotificationManagerTests: XCTestCase {
         XCTAssertFalse(manager.permissionError?.contains("/Users/private") == true)
     }
 
+    func testDeliveryFailureUsesSafeErrorAndAuthorizedRefreshClearsIt() async {
+        let center = MockUserNotificationCenter(status: .authorized)
+        center.addError = NSError(
+            domain: "NotificationManagerTests",
+            code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "/Users/private/delivery failure"]
+        )
+        let manager = NotificationManager(center: center)
+        var settings = AppSettings.default
+        settings.showNotifications = true
+        let report = ScanReport(
+            startTime: Date(),
+            endTime: Date(),
+            filesScanned: 1,
+            infectedFiles: [],
+            errors: [],
+            scanPaths: [URL(fileURLWithPath: "/Users/private/file")]
+        )
+
+        await manager.sendScanComplete(report: report, settings: settings)
+
+        XCTAssertEqual(
+            manager.permissionError,
+            "SafeMac AV could not deliver a notification. Check notification access in System Settings."
+        )
+        XCTAssertFalse(manager.permissionError?.contains("/Users/private") == true)
+
+        await manager.refreshPermissionStatus()
+        XCTAssertNil(manager.permissionError)
+    }
+
     func testThreatNotificationHonorsMasterAndSoundPreferencesWithoutLeakingPath() async throws {
         let center = MockUserNotificationCenter(status: .authorized)
         let manager = NotificationManager(center: center)
@@ -129,6 +160,15 @@ final class NotificationManagerTests: XCTestCase {
             center.categoryIdentifiers,
             Set(["SCAN_RESULT", "THREAT_DETECTED", "SIGNATURE_UPDATE", "SCHEDULED_SCAN"])
         )
+        XCTAssertTrue(center.delegate is ForegroundNotificationDelegate)
+    }
+
+    func testForegroundNotificationsRequestVisiblePresentation() {
+        let options = ForegroundNotificationDelegate.presentationOptions
+
+        XCTAssertTrue(options.contains(.banner))
+        XCTAssertTrue(options.contains(.list))
+        XCTAssertTrue(options.contains(.sound))
     }
 }
 
@@ -136,9 +176,11 @@ private final class MockUserNotificationCenter: UserNotificationCenterProtocol {
     var status: UNAuthorizationStatus
     var requestResult = false
     var requestError: Error?
+    var addError: Error?
     private(set) var requestedOptions: UNAuthorizationOptions = []
     private(set) var requests: [UNNotificationRequest] = []
     private(set) var categoryIdentifiers: Set<String> = []
+    private(set) weak var delegate: UNUserNotificationCenterDelegate?
 
     init(status: UNAuthorizationStatus) {
         self.status = status
@@ -158,10 +200,17 @@ private final class MockUserNotificationCenter: UserNotificationCenterProtocol {
     }
 
     func add(_ request: UNNotificationRequest) async throws {
+        if let addError {
+            throw addError
+        }
         requests.append(request)
     }
 
     func setNotificationCategories(_ categories: Set<UNNotificationCategory>) {
         categoryIdentifiers = Set(categories.map(\.identifier))
+    }
+
+    func setDelegate(_ delegate: UNUserNotificationCenterDelegate) {
+        self.delegate = delegate
     }
 }

@@ -43,18 +43,19 @@ final class AppState: ObservableObject {
         fileWatcher: FileWatcherProtocol? = nil,
         scanCoordinator: ScanCoordinator? = nil,
         freshclamRunner: FreshclamRunnerProtocol? = nil,
-        notificationManager: NotificationManaging = NotificationManager.shared,
+        notificationManager: NotificationManaging? = nil,
         externalScanRequestStore: ExternalScanRequestStore = ExternalScanRequestStore(),
         scanHistoryManager: ScanHistoryManager = ScanHistoryManager()
     ) {
         let loadedSettings = configManager.loadSettings()
         let runner = ClamAVRunner(configManager: configManager)
+        let resolvedNotificationManager = notificationManager ?? NotificationManager.shared
 
         self.configManager = configManager
         self.settings = loadedSettings
         self.clamAVRunner = runner
         self.freshclamRunner = freshclamRunner ?? FreshclamRunner(configManager: configManager)
-        self.notificationManager = notificationManager
+        self.notificationManager = resolvedNotificationManager
         self.quarantineManager = QuarantineManager(configManager: configManager)
         self.scanScheduler = scanScheduler
         self.fileWatcher = fileWatcher ?? FileWatcher(
@@ -71,11 +72,11 @@ final class AppState: ObservableObject {
             monitoringEnabled: loadedSettings.monitoringEnabled,
             finderExtensionEnabled: FinderExtensionManager.isEnabled
         )
-        self.notificationPermissionStatus = notificationManager.permissionStatus
-        self.notificationPermissionError = notificationManager.permissionError
+        self.notificationPermissionStatus = resolvedNotificationManager.permissionStatus
+        self.notificationPermissionError = resolvedNotificationManager.permissionError
 
         loadQuarantinedFiles()
-        notificationManager.setupNotificationCategories()
+        resolvedNotificationManager.setupNotificationCategories()
         setupNotifications()
         setupFileWatcherAutoScan()
         configureMonitoring()
