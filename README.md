@@ -7,8 +7,8 @@
 <p align="center"><strong>Scan locally. Stay in control.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/newtonlorenz/clamav-gui/actions/workflows/ci.yml"><img src="https://github.com/newtonlorenz/clamav-gui/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/newtonlorenz/clamav-gui/releases/latest"><img src="https://img.shields.io/github/v/release/newtonlorenz/clamav-gui" alt="Latest release"></a>
+  <a href="https://github.com/newtonlorenz/safemac-av/actions/workflows/ci.yml"><img src="https://github.com/newtonlorenz/safemac-av/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/newtonlorenz/safemac-av/releases/latest"><img src="https://img.shields.io/github/v/release/newtonlorenz/safemac-av" alt="Latest release"></a>
   <a href="https://support.apple.com/macos"><img src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple" alt="macOS 13+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
@@ -17,7 +17,7 @@
 
 SafeMac AV turns ClamAV's command-line engine into a complete local malware-scanning workflow. Scan on demand, watch folders, update signatures, quarantine detections, and schedule repeat checks. Review history and start scans from Finder. There are no subscriptions, telemetry, or cloud uploads.
 
-**[Download the latest signed and notarized release →](https://github.com/newtonlorenz/clamav-gui/releases/latest)**
+**[Download the latest signed and notarized release →](https://github.com/newtonlorenz/safemac-av/releases/latest)** *(v1.0.0 uses the previous ClamAV GUI package name)*
 
 ![SafeMac AV dashboard](docs/images/dashboard.png)
 
@@ -45,7 +45,10 @@ Both Apple silicon (`/opt/homebrew`) and Intel Homebrew (`/usr/local`) defaults 
 
 ## Releases
 
-Download the latest compiled build from [GitHub Releases](https://github.com/newtonlorenz/clamav-gui/releases/latest).
+Download the latest compiled build from [GitHub Releases](https://github.com/newtonlorenz/safemac-av/releases/latest).
+
+> [!NOTE]
+> v1.0.0 predates the SafeMac AV rename and is distributed as `ClamAV-GUI-1.0.0.dmg` containing `ClamAV-GUI.app`. Future releases use `SafeMac-AV.dmg` containing `SafeMac AV.app`.
 
 Each release provides:
 
@@ -66,7 +69,7 @@ Download the DMG and checksum file into the same folder. Verify the download:
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-Open the DMG and drag `SafeMac AV` into `Applications`.
+Open the DMG and drag the included app into `Applications`. It is named `ClamAV-GUI` in v1.0.0 and `SafeMac AV` in subsequent releases.
 
 When upgrading from an older ClamAV GUI build, launch SafeMac AV and re-save any enabled schedules so their LaunchAgents point to the renamed app. Remove the old app after confirming the new build works.
 
@@ -93,8 +96,8 @@ When upgrading from an older ClamAV GUI build, launch SafeMac AV and re-save any
 3. Clone and open the project:
 
    ```bash
-   git clone https://github.com/newtonlorenz/clamav-gui.git
-   cd clamav-gui
+   git clone https://github.com/newtonlorenz/safemac-av.git
+   cd safemac-av
    open ClamAV-GUI.xcodeproj
    ```
 
@@ -153,7 +156,7 @@ SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 
 # Signed, submitted with a notarytool Keychain profile, and stapled
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
-NOTARY_PROFILE='clamav-gui-notary' \
+NOTARY_PROFILE='safemac-av-notary' \
   ./scripts/create-dmg.sh
 ```
 

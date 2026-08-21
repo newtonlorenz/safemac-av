@@ -10,7 +10,7 @@ Security fixes target the latest release and the current `main` branch. Older so
 
 Do not open a public issue for a suspected vulnerability.
 
-Use GitHub's [private vulnerability reporting](https://github.com/newtonlorenz/clamav-gui/security/advisories/new) to send the maintainers:
+Use GitHub's [private vulnerability reporting](https://github.com/newtonlorenz/safemac-av/security/advisories/new) to send the maintainers:
 
 - the affected commit or version;
 - impact and realistic attack scenario;
