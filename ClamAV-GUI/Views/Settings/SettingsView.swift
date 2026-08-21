@@ -426,8 +426,12 @@ struct NotificationsSection: View {
                     set: {
                         appState.settings.showNotifications = $0
                         appState.saveSettings()
+                        if $0 {
+                            Task { await appState.requestNotificationPermission() }
+                        }
                     }
                 ))
+                .accessibilityIdentifier("notifications-enabled-toggle")
 
                 Toggle("Play sound on threat detection", isOn: Binding(
                     get: { appState.settings.playSoundOnDetection },
@@ -436,6 +440,53 @@ struct NotificationsSection: View {
                         appState.saveSettings()
                     }
                 ))
+                .disabled(!appState.settings.showNotifications)
+
+                Toggle("Notify when downloaded files are clean", isOn: Binding(
+                    get: { appState.settings.notifyOnCleanFiles },
+                    set: {
+                        appState.settings.notifyOnCleanFiles = $0
+                        appState.saveSettings()
+                    }
+                ))
+                .disabled(!appState.settings.showNotifications)
+
+                Divider()
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Notification permission")
+                        Text(appState.notificationPermissionStatus.displayName)
+                            .font(.caption)
+                            .foregroundColor(appState.notificationPermissionStatus.isAuthorized ? .green : .secondary)
+                    }
+
+                    Spacer()
+
+                    if appState.notificationPermissionStatus == .notDetermined ||
+                        appState.notificationPermissionStatus == .unknown {
+                        Button("Allow Notifications") {
+                            Task { await appState.requestNotificationPermission() }
+                        }
+                    } else {
+                        Button("Refresh Status") {
+                            Task { await appState.refreshNotificationPermissionStatus() }
+                        }
+                    }
+                }
+
+                if appState.notificationPermissionStatus == .denied {
+                    Text("Allow SafeMac AV notifications in System Settings to receive scan and update alerts.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let error = appState.notificationPermissionError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .accessibilityIdentifier("notification-permission-error")
+                }
             }
         }
     }

@@ -38,7 +38,7 @@ final class NotificationManagerTests: XCTestCase {
         XCTAssertFalse(manager.permissionError?.contains("/Users/private") == true)
     }
 
-    func testThreatNotificationHonorsMasterAndSoundPreferencesWithoutLeakingPath() async {
+    func testThreatNotificationHonorsMasterAndSoundPreferencesWithoutLeakingPath() async throws {
         let center = MockUserNotificationCenter(status: .authorized)
         let manager = NotificationManager(center: center)
         let threat = ScanResult(
