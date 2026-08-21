@@ -107,7 +107,7 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
             launchctlRunner: { arguments in
                 commands.append(arguments)
                 if arguments.first == "bootstrap" {
-                    throw SignatureUpdateSchedulerError.launchctlFailed(arguments: arguments, status: 5)
+                    throw SignatureUpdateSchedulerError.launchctlFailed(status: 5)
                 }
             }
         )

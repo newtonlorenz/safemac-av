@@ -149,7 +149,7 @@ final class SignatureUpdateScheduler: SignatureUpdateSchedulerProtocol {
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            throw SignatureUpdateSchedulerError.launchctlFailed(arguments: arguments, status: process.terminationStatus)
+            throw SignatureUpdateSchedulerError.launchctlFailed(status: process.terminationStatus)
         }
     }
 
@@ -211,12 +211,12 @@ final class SignatureUpdateScheduler: SignatureUpdateSchedulerProtocol {
 }
 
 enum SignatureUpdateSchedulerError: LocalizedError {
-    case launchctlFailed(arguments: [String], status: Int32)
+    case launchctlFailed(status: Int32)
 
     var errorDescription: String? {
         switch self {
-        case .launchctlFailed(let arguments, let status):
-            return "launchctl \(arguments.joined(separator: " ")) failed with status \(status)"
+        case .launchctlFailed(let status):
+            return "launchctl failed with status \(status)"
         }
     }
 }
