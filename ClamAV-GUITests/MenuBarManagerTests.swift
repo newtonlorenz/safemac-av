@@ -377,6 +377,104 @@ final class MenuBarManagerTests: XCTestCase {
         )
     }
 
+    func testHiddenInteractiveLaunchDefersMaintenanceUntilDelegateIsConfigured() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var settings = AppSettings.default
+        settings.hideFromDock = true
+        var placeholderCalls = 0
+        var configuredCalls = 0
+        var waiterCalls = 0
+        let maintenanceRan = expectation(description: "configured maintenance ran")
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { [] },
+            mainWindowControllerFactory: { MainWindowControllerMock() },
+            waitForMainWindowControllerFactory: { _ in waiterCalls += 1 },
+            runInitialApplicationLaunch: { _ in placeholderCalls += 1 },
+            startsConfigured: false
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+
+        XCTAssertEqual(placeholderCalls, 0)
+        XCTAssertEqual(configuredCalls, 0)
+        XCTAssertEqual(waiterCalls, 0)
+
+        delegate.configure(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { [] },
+            runInitialApplicationLaunch: { _ in
+                configuredCalls += 1
+                maintenanceRan.fulfill()
+            },
+            runActiveInteractiveMaintenance: { _ in },
+            runScheduledSignatureUpdate: {}
+        )
+        await fulfillment(of: [maintenanceRan], timeout: 1)
+
+        XCTAssertEqual(placeholderCalls, 0)
+        XCTAssertEqual(configuredCalls, 1)
+        XCTAssertEqual(waiterCalls, 0)
+    }
+
+    func testScheduledSignatureUpdateDefersUntilDelegateIsConfigured() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var placeholderCalls = 0
+        var configuredCalls = 0
+        var finishCalls = 0
+        var waiterCalls = 0
+        let updateRan = expectation(description: "configured signature update ran")
+        let launchFinished = expectation(description: "scheduled launch finished")
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { ["--scheduled-signature-update"] },
+            mainWindowControllerFactory: { MainWindowControllerMock() },
+            waitForMainWindowControllerFactory: { _ in waiterCalls += 1 },
+            runScheduledSignatureUpdate: { placeholderCalls += 1 },
+            finishScheduledLaunch: {
+                finishCalls += 1
+                launchFinished.fulfill()
+            },
+            startsConfigured: false
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+
+        XCTAssertEqual(placeholderCalls, 0)
+        XCTAssertEqual(configuredCalls, 0)
+        XCTAssertEqual(finishCalls, 0)
+        XCTAssertEqual(waiterCalls, 0)
+
+        delegate.configure(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { ["--scheduled-signature-update"] },
+            runInitialApplicationLaunch: { _ in },
+            runActiveInteractiveMaintenance: { _ in },
+            runScheduledSignatureUpdate: {
+                configuredCalls += 1
+                updateRan.fulfill()
+            }
+        )
+        await fulfillment(of: [updateRan, launchFinished], timeout: 1)
+
+        XCTAssertEqual(placeholderCalls, 0)
+        XCTAssertEqual(configuredCalls, 1)
+        XCTAssertEqual(finishCalls, 1)
+        XCTAssertEqual(waiterCalls, 0)
+    }
+
     func testApplicationDelegateUsesPersistedHiddenDockSettingOnInteractiveRestart() async {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
