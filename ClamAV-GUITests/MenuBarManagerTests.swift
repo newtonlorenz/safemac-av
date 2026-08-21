@@ -4,6 +4,12 @@ import XCTest
 
 @MainActor
 final class MenuBarManagerTests: XCTestCase {
+    func testApplicationDelegateSupportsRuntimeDefaultInitialization() {
+        let delegateType: NSObject.Type = MenuBarApplicationDelegate.self
+
+        XCTAssertTrue(delegateType.init() is MenuBarApplicationDelegate)
+    }
+
     func testHidingDockRequestsAccessoryActivationPolicy() {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)

@@ -61,14 +61,21 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     private var launchManager: MenuBarManager?
     private var shouldSuppressInitialMainWindow = false
 
+    override init() {
+        providedManager = nil
+        settingsProvider = { ConfigManager().loadSettings() }
+        argumentsProvider = { CommandLine.arguments }
+        super.init()
+    }
+
     init(
-        manager: MenuBarManager? = nil,
-        settingsProvider: (() -> AppSettings)? = nil,
-        argumentsProvider: (() -> [String])? = nil
+        manager: MenuBarManager,
+        settingsProvider: @escaping () -> AppSettings,
+        argumentsProvider: @escaping () -> [String]
     ) {
         providedManager = manager
-        self.settingsProvider = settingsProvider ?? { ConfigManager().loadSettings() }
-        self.argumentsProvider = argumentsProvider ?? { CommandLine.arguments }
+        self.settingsProvider = settingsProvider
+        self.argumentsProvider = argumentsProvider
         super.init()
     }
 
