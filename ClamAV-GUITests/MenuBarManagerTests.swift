@@ -416,7 +416,19 @@ final class MenuBarManagerTests: XCTestCase {
             runActiveInteractiveMaintenance: { _ in },
             runScheduledSignatureUpdate: {}
         )
+        delegate.configure(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { [] },
+            runInitialApplicationLaunch: { _ in
+                configuredCalls += 1
+                maintenanceRan.fulfill()
+            },
+            runActiveInteractiveMaintenance: { _ in },
+            runScheduledSignatureUpdate: {}
+        )
         await fulfillment(of: [maintenanceRan], timeout: 1)
+        await Task.yield()
 
         XCTAssertEqual(placeholderCalls, 0)
         XCTAssertEqual(configuredCalls, 1)
@@ -467,7 +479,19 @@ final class MenuBarManagerTests: XCTestCase {
                 updateRan.fulfill()
             }
         )
+        delegate.configure(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { ["--scheduled-signature-update"] },
+            runInitialApplicationLaunch: { _ in },
+            runActiveInteractiveMaintenance: { _ in },
+            runScheduledSignatureUpdate: {
+                configuredCalls += 1
+                updateRan.fulfill()
+            }
+        )
         await fulfillment(of: [updateRan, launchFinished], timeout: 1)
+        await Task.yield()
 
         XCTAssertEqual(placeholderCalls, 0)
         XCTAssertEqual(configuredCalls, 1)
