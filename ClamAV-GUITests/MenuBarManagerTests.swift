@@ -200,6 +200,26 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(application.requestedPolicies, [.accessory])
         XCTAssertEqual(application.closeMainWindowCalls, 1)
     }
+
+    func testScheduledSignatureUpdateLaunchUsesAccessoryModeAndClosesMainWindow() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var settings = AppSettings.default
+        settings.hideFromDock = false
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { ["--scheduled-signature-update"] }
+        )
+
+        delegate.applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 1)
+    }
 }
 
 private enum MenuBarApplicationEvent: Equatable {

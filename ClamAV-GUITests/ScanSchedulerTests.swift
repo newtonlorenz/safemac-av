@@ -55,6 +55,8 @@ final class ScanSchedulerTests: XCTestCase {
             XCTAssertTrue(paths.isEmpty)
         case .interactive:
             XCTFail("Expected launch arguments to parse as scheduled mode")
+        case .scheduledSignatureUpdate:
+            XCTFail("Expected scheduled scan mode, not signature update mode")
         }
     }
 

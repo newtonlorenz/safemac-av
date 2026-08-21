@@ -244,34 +244,90 @@ struct AutoUpdateSettingsCard: View {
 
             Toggle("Enable automatic signature updates", isOn: Binding(
                 get: { appState.settings.autoUpdateSignatures },
-                set: {
-                    appState.settings.autoUpdateSignatures = $0
-                    appState.saveSettings()
+                set: { enabled in
+                    apply(enabled: enabled, schedule: currentSchedule)
                 }
             ))
+            .accessibilityIdentifier("automatic-signature-updates-toggle")
 
             if appState.settings.autoUpdateSignatures {
                 HStack {
                     Text("Update frequency:")
                     Picker("", selection: Binding(
-                        get: { appState.settings.updateSchedule?.frequency ?? .daily },
-                        set: {
-                            var schedule = appState.settings.updateSchedule ?? .daily9am
-                            schedule.frequency = $0
-                            appState.settings.updateSchedule = schedule
-                            appState.saveSettings()
+                        get: { currentSchedule.frequency },
+                        set: { frequency in
+                            var schedule = currentSchedule
+                            schedule.frequency = frequency
+                            if frequency == .weekly, schedule.dayOfWeek == nil {
+                                schedule.dayOfWeek = 2
+                            }
+                            apply(enabled: true, schedule: schedule)
                         }
                     )) {
                         Text("Daily").tag(ScheduleFrequency.daily)
                         Text("Weekly").tag(ScheduleFrequency.weekly)
                     }
                     .frame(width: 120)
+                    .accessibilityIdentifier("signature-update-frequency")
                 }
+
+                DatePicker(
+                    "Update time:",
+                    selection: Binding(
+                        get: { scheduleDate },
+                        set: { date in
+                            var schedule = currentSchedule
+                            schedule.time = Calendar.current.dateComponents([.hour, .minute], from: date)
+                            apply(enabled: true, schedule: schedule)
+                        }
+                    ),
+                    displayedComponents: .hourAndMinute
+                )
+                .accessibilityIdentifier("signature-update-time")
+
+                if currentSchedule.frequency == .weekly {
+                    HStack {
+                        Text("Update day:")
+                        Picker("", selection: Binding(
+                            get: { currentSchedule.dayOfWeek ?? 2 },
+                            set: { weekday in
+                                var schedule = currentSchedule
+                                schedule.dayOfWeek = weekday
+                                apply(enabled: true, schedule: schedule)
+                            }
+                        )) {
+                            ForEach(Array(Calendar.current.weekdaySymbols.enumerated()), id: \.offset) { index, name in
+                                Text(name).tag(index + 1)
+                            }
+                        }
+                        .frame(width: 150)
+                        .accessibilityIdentifier("signature-update-weekday")
+                    }
+                }
+            }
+
+            if let error = appState.signatureUpdateScheduleError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .accessibilityIdentifier("signature-update-schedule-error")
             }
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .adaptiveGlassSurface()
+    }
+
+    private var currentSchedule: ScanSchedule {
+        appState.settings.updateSchedule ?? .daily9am
+    }
+
+    private var scheduleDate: Date {
+        Calendar.current.date(from: currentSchedule.time) ?? Date()
+    }
+
+    private func apply(enabled: Bool, schedule: ScanSchedule) {
+        appState.setAutomaticSignatureUpdates(enabled: enabled, schedule: schedule)
     }
 }
 

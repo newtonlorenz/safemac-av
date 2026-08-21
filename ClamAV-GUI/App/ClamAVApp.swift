@@ -9,6 +9,9 @@ struct ClamAVApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var menuBarManager = MenuBarManager()
     @StateObject private var initialLaunchHandler = InitialLaunchHandler()
+    @State private var presentsMenuBarExtra = LaunchModeParser
+        .parse(arguments: CommandLine.arguments)
+        .presentsUserInterface
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -37,7 +40,7 @@ struct ClamAVApp: App {
             ScanCommands()
         }
 
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $presentsMenuBarExtra) {
             MenuBarPopoverView()
                 .environmentObject(appState)
                 .environmentObject(menuBarManager)
@@ -64,6 +67,11 @@ struct ClamAVApp: App {
         CommandLine.arguments.contains("--ui-testing")
     }
 
+    private var isAutomatedTestLaunch: Bool {
+        isUITesting
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
     private var shouldHideDock: Bool {
         appState.settings.hideFromDock && !isUITesting
     }
@@ -85,10 +93,19 @@ struct ClamAVApp: App {
         await initialLaunchHandler.handle(
             arguments: CommandLine.arguments,
             drainExternalScanRequests: {
+                if !isAutomatedTestLaunch {
+                    appState.reconcileSignatureUpdateSchedule()
+                }
                 await appState.drainExternalScanRequests()
             },
             runScheduledScan: { jobID, paths in
                 await appState.runScheduledScan(jobID: jobID, paths: paths)
+            },
+            runScheduledSignatureUpdate: {
+                await appState.runScheduledSignatureUpdate()
+            },
+            finishScheduledLaunch: {
+                NSApplication.shared.terminate(nil)
             }
         )
     }
@@ -101,7 +118,9 @@ final class InitialLaunchHandler: ObservableObject {
     func handle(
         arguments: [String],
         drainExternalScanRequests: () async -> Void,
-        runScheduledScan: (UUID?, [URL]) async -> Void
+        runScheduledScan: (UUID?, [URL]) async -> Void,
+        runScheduledSignatureUpdate: () async -> Void,
+        finishScheduledLaunch: () -> Void
     ) async {
         guard !didHandleInitialLaunch else { return }
         didHandleInitialLaunch = true
@@ -111,6 +130,9 @@ final class InitialLaunchHandler: ObservableObject {
             await drainExternalScanRequests()
         case .scheduledScan(let jobID, let paths):
             await runScheduledScan(jobID, paths)
+        case .scheduledSignatureUpdate:
+            await runScheduledSignatureUpdate()
+            finishScheduledLaunch()
         }
     }
 }

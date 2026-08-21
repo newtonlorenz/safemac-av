@@ -42,6 +42,10 @@ WindowGroup + MenuBarExtra
 
 `FreshclamRunner` launches the configured `freshclam` executable with the local config and signature-data paths. Its output is parsed into success, already-current, or failure status. Network access belongs to `freshclam`; the Swift application does not implement an update client.
 
+`SignatureUpdateScheduler` owns the single per-user LaunchAgent `com.newtonlorenz.ClamAV-GUI.signature-update`. Its property list contains only the current app executable and `--scheduled-signature-update`; configured ClamAV paths remain in app settings rather than launchd arguments. Daily and weekly calendar changes atomically replace the property list, unload and reload the job, and restore the previous job if writing, loading, or settings persistence fails.
+
+An interactive installed launch reconciles the captured executable path. A scheduled invocation uses accessory mode, suppresses normal scenes, calls the same single-flight `AppState.updateSignatures()` path as manual updates, emits the same privacy-safe local result notification, and exits. If automatic updates were disabled after launchd queued an invocation, it exits without running `freshclam`. Malware-signature updates are distinct from SafeMac AV application updates and from Homebrew-managed ClamAV engine upgrades.
+
 ### Quarantine
 
 The default quarantine location is `~/.clamav-quarantine/`. Each payload gets an opaque `.quarantine` filename, while `metadata.json` stores its original path, threat name, file size, timestamp, and SHA-256 hash.
@@ -96,6 +100,7 @@ Notification content is intentionally summary-only. It includes counts and gener
 | Scheduled-job definitions | `~/Library/Application Support/ClamAV-GUI/scheduled_jobs.json` | Persistent |
 | Finder request queue | App-group container when configured, otherwise Application Support | Drained after processing |
 | LaunchAgent definitions | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.scan.*.plist` | Until job removal |
+| Signature-update LaunchAgent | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.signature-update.plist` | Until automatic updates are disabled |
 | Main-app login item | macOS System Settings › General › Login Items | Until disabled by the user or app |
 | Quarantine payload and metadata | `~/.clamav-quarantine/` | Until restore or deletion |
 | Scan history and application logs | Process memory | Current app run |

@@ -15,6 +15,7 @@ final class LaunchModeParserTests: XCTestCase {
 
         XCTAssertEqual(mode, .scheduledSignatureUpdate)
         XCTAssertFalse(mode.isInteractive)
+        XCTAssertFalse(mode.presentsUserInterface)
     }
 
     func testParsesScheduledScanWithRepeatedPaths() {
@@ -33,6 +34,8 @@ final class LaunchModeParserTests: XCTestCase {
             XCTAssertEqual(paths.map(\.path).sorted(), ["/tmp/with space", "/tmp/with,comma"].sorted())
         case .interactive:
             XCTFail("Expected scheduled scan mode")
+        case .scheduledSignatureUpdate:
+            XCTFail("Expected scheduled scan mode, not signature update mode")
         }
     }
 
@@ -55,6 +58,8 @@ final class LaunchModeParserTests: XCTestCase {
             XCTAssertTrue(paths.isEmpty)
         case .interactive:
             XCTFail("Expected scheduled scan mode")
+        case .scheduledSignatureUpdate:
+            XCTFail("Expected scheduled scan mode, not signature update mode")
         }
     }
 }

@@ -135,13 +135,13 @@ final class SignatureUpdateAppStateTests: XCTestCase {
         config: SignatureScheduleConfigMock,
         scheduler: SignatureScheduleMock,
         freshclamRunner: FreshclamRunnerProtocol = SignatureScheduleFreshclamMock(),
-        notifications: NotificationManaging = SignatureScheduleNotificationMock()
+        notifications: NotificationManaging? = nil
     ) -> AppState {
         AppState(
             configManager: config,
             fileWatcher: SignatureScheduleFileWatcherMock(),
             freshclamRunner: freshclamRunner,
-            notificationManager: notifications,
+            notificationManager: notifications ?? SignatureScheduleNotificationMock(),
             launchAtLoginManager: SignatureScheduleLaunchAtLoginMock(),
             signatureUpdateScheduler: scheduler
         )
@@ -223,7 +223,7 @@ private final class SignatureScheduleFreshclamMock: FreshclamRunnerProtocol, @un
 
     func update() async throws -> UpdateResult {
         updateCalls += 1
-        return .upToDate(message: "Signatures are current")
+        return .alreadyUpToDate()
     }
 
     func checkForUpdates() async throws -> Bool { false }

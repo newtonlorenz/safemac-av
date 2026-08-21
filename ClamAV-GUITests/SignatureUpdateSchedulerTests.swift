@@ -165,6 +165,102 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
     }
 
+    func testDisablingWithoutInstalledAgentIsNoOp() throws {
+        let fixture = try makeFixture()
+        var commands: [String] = []
+        let scheduler = SignatureUpdateScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            launchctlRunner: { command, _ in commands.append(command) }
+        )
+
+        try scheduler.reconcile(enabled: false, schedule: .daily9am)
+
+        XCTAssertTrue(commands.isEmpty)
+    }
+
+    func testMonthlyScheduleUsesDayOfMonthForExistingModelCompatibility() throws {
+        let fixture = try makeFixture()
+        let scheduler = SignatureUpdateScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            launchctlRunner: { _, _ in }
+        )
+        let schedule = ScanSchedule(
+            frequency: .monthly,
+            time: DateComponents(hour: 3, minute: 20),
+            dayOfMonth: 14
+        )
+
+        try scheduler.reconcile(enabled: true, schedule: schedule)
+
+        let data = try Data(contentsOf: fixture.plistURL)
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+        XCTAssertEqual(plist["StartCalendarInterval"] as? [String: Int], [
+            "Day": 14,
+            "Hour": 3,
+            "Minute": 20
+        ])
+    }
+
+    func testInvalidWeeklyScheduleFailsBeforeWritingOrLoading() throws {
+        let fixture = try makeFixture()
+        var commands: [String] = []
+        let scheduler = SignatureUpdateScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            launchctlRunner: { command, _ in commands.append(command) }
+        )
+        let invalidSchedule = ScanSchedule(
+            frequency: .weekly,
+            time: DateComponents(hour: 25, minute: 0),
+            dayOfWeek: 9
+        )
+
+        XCTAssertThrowsError(try scheduler.reconcile(enabled: true, schedule: invalidSchedule)) { error in
+            guard case SignatureUpdateSchedulerError.invalidSchedule = error else {
+                return XCTFail("Expected invalid schedule, got \(error)")
+            }
+        }
+        XCTAssertTrue(commands.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
+    }
+
+    func testFailedFirstLoadRemovesIncompleteNewAgent() throws {
+        let fixture = try makeFixture()
+        var commands: [String] = []
+        let scheduler = SignatureUpdateScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            launchctlRunner: { command, _ in
+                commands.append(command)
+                if command == "load" {
+                    throw SignatureUpdateSchedulerError.launchctlFailed(command: command, status: 5)
+                }
+            }
+        )
+
+        XCTAssertThrowsError(try scheduler.reconcile(enabled: true, schedule: .daily9am))
+
+        XCTAssertEqual(commands, ["load", "unload"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
+    }
+
+    func testFailedDisableUnloadPreservesExistingAgent() throws {
+        let fixture = try makeFixture()
+        let oldData = Data("existing".utf8)
+        try oldData.write(to: fixture.plistURL)
+        let scheduler = SignatureUpdateScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            launchctlRunner: { command, _ in
+                throw SignatureUpdateSchedulerError.launchctlFailed(command: command, status: 5)
+            }
+        )
+
+        XCTAssertThrowsError(try scheduler.reconcile(enabled: false, schedule: .daily9am))
+
+        XCTAssertEqual(try Data(contentsOf: fixture.plistURL), oldData)
+    }
+
     private func makeFixture() throws -> SignatureSchedulerFixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("SignatureUpdateSchedulerTests-\(UUID().uuidString)", isDirectory: true)
