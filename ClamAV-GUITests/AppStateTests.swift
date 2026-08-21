@@ -328,6 +328,25 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(signatureScheduler.removeCalls, 0)
     }
 
+    func testSaveSettingsFailureDoesNotMutateSignatureUpdateSchedule() {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = true
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        mockConfig.saveError = AppStateTestError.settingsFailure
+        let signatureScheduler = AppStateMockSignatureUpdateScheduler()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            signatureUpdateScheduler: signatureScheduler
+        )
+
+        appState.saveSettings()
+
+        XCTAssertTrue(signatureScheduler.installedSchedules.isEmpty)
+        XCTAssertEqual(signatureScheduler.removeCalls, 0)
+        XCTAssertNotNil(appState.settingsSaveError)
+    }
+
     func testSaveSettingsRemovesSignatureUpdateScheduleWhenDisabled() {
         var settings = AppSettings.default
         settings.autoUpdateSignatures = false
@@ -343,6 +362,71 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertTrue(signatureScheduler.installedSchedules.isEmpty)
         XCTAssertEqual(signatureScheduler.removeCalls, 1)
+    }
+
+    func testAutomaticSignatureUpdateChangePersistsOnlyAfterSchedulerSucceeds() {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = false
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let signatureScheduler = AppStateMockSignatureUpdateScheduler()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            signatureUpdateScheduler: signatureScheduler
+        )
+        let schedule = ScanSchedule(
+            frequency: .weekly,
+            time: DateComponents(hour: 8, minute: 30),
+            dayOfWeek: 4
+        )
+
+        appState.setAutomaticSignatureUpdates(enabled: true, schedule: schedule)
+
+        XCTAssertEqual(signatureScheduler.installedSchedules, [schedule])
+        XCTAssertTrue(appState.settings.autoUpdateSignatures)
+        XCTAssertEqual(appState.settings.updateSchedule, schedule)
+        XCTAssertEqual(mockConfig.settings, appState.settings)
+        XCTAssertNil(appState.signatureUpdateScheduleError)
+    }
+
+    func testAutomaticSignatureUpdateSchedulerFailureLeavesSettingsUnchanged() {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = false
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let signatureScheduler = AppStateMockSignatureUpdateScheduler()
+        signatureScheduler.installError = AppStateTestError.settingsFailure
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            signatureUpdateScheduler: signatureScheduler
+        )
+
+        appState.setAutomaticSignatureUpdates(enabled: true, schedule: .daily9am)
+
+        XCTAssertFalse(appState.settings.autoUpdateSignatures)
+        XCTAssertEqual(mockConfig.saveSettingsCalls, 0)
+        XCTAssertNotNil(appState.signatureUpdateScheduleError)
+    }
+
+    func testAutomaticSignatureUpdateSaveFailureRollsBackScheduler() {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = false
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        mockConfig.saveError = AppStateTestError.settingsFailure
+        let signatureScheduler = AppStateMockSignatureUpdateScheduler()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            signatureUpdateScheduler: signatureScheduler
+        )
+
+        appState.setAutomaticSignatureUpdates(enabled: true, schedule: .daily9am)
+
+        XCTAssertEqual(signatureScheduler.installedSchedules, [.daily9am])
+        XCTAssertEqual(signatureScheduler.removeCalls, 1)
+        XCTAssertFalse(appState.settings.autoUpdateSignatures)
+        XCTAssertNotNil(appState.settingsSaveError)
+        XCTAssertNotNil(appState.signatureUpdateScheduleError)
     }
 
     func testStartCustomScanNotificationSwitchesToScanAndOpensPicker() {
@@ -418,6 +502,25 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertFalse(appState.isUpdatingSignatures)
         XCTAssertEqual(appState.lastUpdateResult?.status, .upToDate)
+    }
+
+    func testScheduledSignatureUpdateSkipsWhenSettingsLoadedFromFallback() async {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = true
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        mockConfig.lastSettingsLoadState = .fallbackDueToError(reason: "corrupt")
+        let mockWatcher = MockFileWatcher()
+        let freshclamRunner = AppStateDelayedFreshclamRunner()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: mockWatcher,
+            freshclamRunner: freshclamRunner
+        )
+
+        await appState.runScheduledSignatureUpdate()
+
+        XCTAssertEqual(freshclamRunner.updateCalls, 0)
+        XCTAssertNil(appState.lastUpdateResult)
     }
 
     func testUpdateSignaturesPublishesFailureAndClearsUpdatingState() async throws {
@@ -537,6 +640,45 @@ final class AppStateTests: XCTestCase {
         await update.value
 
         XCTAssertEqual(notifications.signatureResults.map(\.status), [.success])
+    }
+
+    func testScheduledSignatureUpdateUsesAlreadyValidatedSettings() async throws {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = true
+        settings.freshclamPath = "/validated/freshclam"
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let freshclamRunner = AppStateDelayedFreshclamRunner()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            freshclamRunner: freshclamRunner
+        )
+        mockConfig.settings = .default
+        mockConfig.lastSettingsLoadState = .fallbackDueToError(reason: "corrupt")
+
+        let update = Task { await appState.runScheduledSignatureUpdate() }
+        try await waitUntil { freshclamRunner.updateCalls == 1 }
+        freshclamRunner.complete(with: .alreadyUpToDate())
+        await update.value
+
+        XCTAssertEqual(freshclamRunner.validatedSettings.map(\.freshclamPath), ["/validated/freshclam"])
+    }
+
+    func testManualSignatureUpdateReloadsSettings() async throws {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let freshclamRunner = AppStateDelayedFreshclamRunner()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            freshclamRunner: freshclamRunner
+        )
+
+        let update = Task { await appState.updateSignatures() }
+        try await waitUntil { freshclamRunner.updateCalls == 1 }
+        freshclamRunner.complete(with: .alreadyUpToDate())
+        await update.value
+
+        XCTAssertTrue(freshclamRunner.validatedSettings.isEmpty)
     }
 
     func testScheduledScanSendsStartingNotificationBeforeRunning() async throws {
@@ -934,16 +1076,32 @@ private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol, @un
     private let lock = NSLock()
     private var storedUpdateCalls = 0
     private var continuation: CheckedContinuation<UpdateResult, Error>?
+    private var storedValidatedSettings: [AppSettings] = []
 
     var updateCalls: Int {
         lock.withLock { storedUpdateCalls }
     }
 
+    var validatedSettings: [AppSettings] {
+        lock.withLock { storedValidatedSettings }
+    }
+
     func update() async throws -> UpdateResult {
+        try await waitForCompletion(settings: nil)
+    }
+
+    func update(using settings: AppSettings) async throws -> UpdateResult {
+        try await waitForCompletion(settings: settings)
+    }
+
+    private func waitForCompletion(settings: AppSettings?) async throws -> UpdateResult {
         return try await withCheckedThrowingContinuation { continuation in
             lock.withLock {
                 self.continuation = continuation
                 storedUpdateCalls += 1
+                if let settings {
+                    storedValidatedSettings.append(settings)
+                }
             }
         }
     }
@@ -1025,14 +1183,22 @@ private final class AppStateMockConfigManager: ConfigManagerProtocol {
 }
 
 private final class AppStateMockSignatureUpdateScheduler: SignatureUpdateSchedulerProtocol {
+    var installError: Error?
+    var removeError: Error?
     private(set) var installedSchedules: [ScanSchedule?] = []
     private(set) var removeCalls = 0
 
     func install(schedule: ScanSchedule) throws {
+        if let installError {
+            throw installError
+        }
         installedSchedules.append(schedule)
     }
 
     func remove() throws {
+        if let removeError {
+            throw removeError
+        }
         removeCalls += 1
     }
 

@@ -2,6 +2,7 @@ import Foundation
 
 protocol FreshclamRunnerProtocol {
     func update() async throws -> UpdateResult
+    func update(using settings: AppSettings) async throws -> UpdateResult
     func checkForUpdates() async throws -> Bool
 }
 
@@ -14,7 +15,10 @@ final class FreshclamRunner: FreshclamRunnerProtocol {
 
     func update() async throws -> UpdateResult {
         let settings = configManager.loadSettings()
+        return try await update(using: settings)
+    }
 
+    func update(using settings: AppSettings) async throws -> UpdateResult {
         guard FileManager.default.isExecutableFile(atPath: settings.freshclamPath) else {
             throw FreshclamError.executableNotFound(settings.freshclamPath)
         }

@@ -244,34 +244,48 @@ struct AutoUpdateSettingsCard: View {
 
             Toggle("Enable automatic signature updates", isOn: Binding(
                 get: { appState.settings.autoUpdateSignatures },
-                set: {
-                    appState.settings.autoUpdateSignatures = $0
-                    appState.saveSettings()
+                set: { enabled in
+                    appState.setAutomaticSignatureUpdates(enabled: enabled, schedule: currentSchedule)
                 }
             ))
+            .accessibilityIdentifier("automatic-signature-updates-toggle")
 
             if appState.settings.autoUpdateSignatures {
                 HStack {
                     Text("Update frequency:")
                     Picker("", selection: Binding(
-                        get: { appState.settings.updateSchedule?.frequency ?? .daily },
-                        set: {
-                            var schedule = appState.settings.updateSchedule ?? .daily9am
-                            schedule.frequency = $0
-                            appState.settings.updateSchedule = schedule
-                            appState.saveSettings()
+                        get: { currentSchedule.frequency },
+                        set: { frequency in
+                            var schedule = currentSchedule
+                            schedule.frequency = frequency
+                            if frequency == .weekly, schedule.dayOfWeek == nil {
+                                schedule.dayOfWeek = 2
+                            }
+                            appState.setAutomaticSignatureUpdates(enabled: true, schedule: schedule)
                         }
                     )) {
                         Text("Daily").tag(ScheduleFrequency.daily)
                         Text("Weekly").tag(ScheduleFrequency.weekly)
                     }
                     .frame(width: 120)
+                    .accessibilityIdentifier("signature-update-frequency")
                 }
+            }
+
+            if let error = appState.signatureUpdateScheduleError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .accessibilityIdentifier("signature-update-schedule-error")
             }
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .adaptiveGlassSurface()
+    }
+
+    private var currentSchedule: ScanSchedule {
+        appState.settings.updateSchedule ?? .daily9am
     }
 }
 

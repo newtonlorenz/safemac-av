@@ -9,6 +9,10 @@ struct ClamAVApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var menuBarManager = MenuBarManager()
     @StateObject private var initialLaunchHandler = InitialLaunchHandler()
+    private let launchMode = LaunchModeParser.parse(arguments: CommandLine.arguments)
+    @State private var presentsMenuBarExtra = LaunchModeParser
+        .parse(arguments: CommandLine.arguments)
+        .presentsUserInterface
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -18,11 +22,14 @@ struct ClamAVApp: App {
                 .preferredColorScheme(uiTestColorScheme)
                 .background(MainWindowIdentifier(identifier: Self.mainWindowID))
                 .task {
-                    menuBarManager.applyDockVisibility(hidden: shouldHideDock)
+                    menuBarManager.applyDockVisibility(hidden: currentLaunchModeHidesDock)
                     await handleInitialLaunch()
                 }
                 .onChange(of: appState.settings.hideFromDock) { isHidden in
-                    menuBarManager.applyDockVisibility(hidden: isHidden && !isUITesting)
+                    menuBarManager.applyDockVisibility(hidden: launchMode.hidesDock(
+                        settings: updatedSettings(hideFromDock: isHidden),
+                        isUITesting: isUITesting
+                    ))
                 }
                 .onChange(of: scenePhase) { phase in
                     guard phase == .active else { return }
@@ -37,7 +44,7 @@ struct ClamAVApp: App {
             ScanCommands()
         }
 
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $presentsMenuBarExtra) {
             MenuBarPopoverView()
                 .environmentObject(appState)
                 .environmentObject(menuBarManager)
@@ -64,8 +71,19 @@ struct ClamAVApp: App {
         CommandLine.arguments.contains("--ui-testing")
     }
 
-    private var shouldHideDock: Bool {
-        appState.settings.hideFromDock && !isUITesting
+    private var isAutomatedTestLaunch: Bool {
+        isUITesting
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
+    private var currentLaunchModeHidesDock: Bool {
+        launchMode.hidesDock(settings: appState.settings, isUITesting: isUITesting)
+    }
+
+    private func updatedSettings(hideFromDock: Bool) -> AppSettings {
+        var settings = appState.settings
+        settings.hideFromDock = hideFromDock
+        return settings
     }
 
     private var uiTestColorScheme: ColorScheme? {
@@ -83,9 +101,11 @@ struct ClamAVApp: App {
     @MainActor
     private func handleInitialLaunch() async {
         await initialLaunchHandler.handle(
-            arguments: CommandLine.arguments,
+            launchMode: launchMode,
             drainExternalScanRequests: {
-                appState.configureSignatureUpdateSchedule()
+                if !isAutomatedTestLaunch {
+                    appState.reconcileSignatureUpdateScheduleOnStartup()
+                }
                 await appState.drainExternalScanRequests()
             },
             runScheduledScan: { jobID, paths in
@@ -104,7 +124,7 @@ final class InitialLaunchHandler: ObservableObject {
     private var didHandleInitialLaunch = false
 
     func handle(
-        arguments: [String],
+        launchMode: LaunchMode,
         drainExternalScanRequests: () async -> Void,
         runScheduledScan: (UUID?, [URL]) async -> Void,
         runSignatureUpdate: () async -> Void
@@ -112,7 +132,7 @@ final class InitialLaunchHandler: ObservableObject {
         guard !didHandleInitialLaunch else { return }
         didHandleInitialLaunch = true
 
-        switch LaunchModeParser.parse(arguments: arguments) {
+        switch launchMode {
         case .interactive:
             await drainExternalScanRequests()
         case .scheduledScan(let jobID, let paths):
