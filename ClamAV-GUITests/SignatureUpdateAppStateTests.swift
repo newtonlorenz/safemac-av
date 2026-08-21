@@ -44,6 +44,24 @@ final class SignatureUpdateAppStateTests: XCTestCase {
         XCTAssertFalse(appState.logs.contains { $0.message.contains("/Users/private") })
     }
 
+    func testUnknownLaunchctlInspectionFailurePublishesIndeterminateState() {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = false
+        let config = SignatureScheduleConfigMock(settings: settings)
+        let scheduler = SignatureScheduleMock()
+        scheduler.errorsByCall[1] = SignatureUpdateSchedulerError.launchctlFailed(
+            command: "print",
+            status: 5
+        )
+        let appState = makeAppState(config: config, scheduler: scheduler)
+
+        appState.setAutomaticSignatureUpdates(enabled: true, schedule: .daily9am)
+
+        XCTAssertEqual(appState.signatureUpdateScheduleState, .indeterminate)
+        XCTAssertEqual(appState.settings, settings)
+        XCTAssertEqual(config.saveCalls, 0)
+    }
+
     func testPersistenceFailureRollsLaunchAgentBackToPreviousSchedule() {
         var settings = AppSettings.default
         settings.autoUpdateSignatures = false
@@ -203,19 +221,43 @@ final class SignatureUpdateAppStateTests: XCTestCase {
         XCTAssertEqual(runner.updateCalls, 1)
     }
 
+    func testScheduledLaunchDoesNotStartInteractiveBackgroundServices() {
+        var settings = AppSettings.default
+        settings.monitoringEnabled = true
+        settings.autoScanDownloads = true
+        settings.monitoredDirectories = ["/tmp/watch"]
+        let config = SignatureScheduleConfigMock(settings: settings)
+        let fileWatcher = SignatureScheduleFileWatcherMock()
+
+        _ = makeAppState(
+            config: config,
+            scheduler: SignatureScheduleMock(),
+            fileWatcher: fileWatcher,
+            startsInteractiveBackgroundServices: false
+        )
+
+        XCTAssertEqual(fileWatcher.updateConfigurationCalls, 0)
+        XCTAssertEqual(fileWatcher.configureImmediateScanDirectoriesCalls, 0)
+        XCTAssertEqual(fileWatcher.startWatchingCalls, 0)
+        XCTAssertNil(fileWatcher.onNewFileDetected)
+    }
+
     private func makeAppState(
         config: SignatureScheduleConfigMock,
         scheduler: SignatureScheduleMock,
+        fileWatcher: SignatureScheduleFileWatcherMock = SignatureScheduleFileWatcherMock(),
         freshclamRunner: FreshclamRunnerProtocol = SignatureScheduleFreshclamMock(),
-        notifications: NotificationManaging? = nil
+        notifications: NotificationManaging? = nil,
+        startsInteractiveBackgroundServices: Bool = true
     ) -> AppState {
         AppState(
             configManager: config,
-            fileWatcher: SignatureScheduleFileWatcherMock(),
+            fileWatcher: fileWatcher,
             freshclamRunner: freshclamRunner,
             notificationManager: notifications ?? SignatureScheduleNotificationMock(),
             launchAtLoginManager: SignatureScheduleLaunchAtLoginMock(),
-            signatureUpdateScheduler: scheduler
+            signatureUpdateScheduler: scheduler,
+            startsInteractiveBackgroundServices: startsInteractiveBackgroundServices
         )
     }
 }
@@ -235,10 +277,14 @@ private struct SignatureScheduleCall: Equatable {
 
 private final class SignatureScheduleMock: SignatureUpdateScheduling {
     var failOnCalls: Set<Int> = []
+    var errorsByCall: [Int: Error] = [:]
     private(set) var calls: [SignatureScheduleCall] = []
 
     func reconcile(enabled: Bool, schedule: ScanSchedule) throws {
         calls.append(.init(enabled: enabled, schedule: schedule))
+        if let error = errorsByCall[calls.count] {
+            throw error
+        }
         if failOnCalls.contains(calls.count) {
             throw NSError(
                 domain: "SignatureScheduleMock",
@@ -311,11 +357,26 @@ private final class SignatureScheduleFreshclamMock: FreshclamRunnerProtocol, @un
 private final class SignatureScheduleFileWatcherMock: FileWatcherProtocol {
     var isWatching = false
     var onNewFileDetected: ((URL) -> Void)?
+    private(set) var startWatchingCalls = 0
+    private(set) var stopWatchingCalls = 0
+    private(set) var updateConfigurationCalls = 0
+    private(set) var configureImmediateScanDirectoriesCalls = 0
 
-    func startWatching(directories: [URL], handler: @escaping ([URL]) -> Void) {}
-    func stopWatching() {}
-    func updateConfiguration(batchIntervalMinutes: Int, batchThreshold: Int) {}
-    func configureImmediateScanDirectories(_ directories: [URL]) {}
+    func startWatching(directories: [URL], handler: @escaping ([URL]) -> Void) {
+        startWatchingCalls += 1
+    }
+
+    func stopWatching() {
+        stopWatchingCalls += 1
+    }
+
+    func updateConfiguration(batchIntervalMinutes: Int, batchThreshold: Int) {
+        updateConfigurationCalls += 1
+    }
+
+    func configureImmediateScanDirectories(_ directories: [URL]) {
+        configureImmediateScanDirectoriesCalls += 1
+    }
 }
 
 private final class SignatureScheduleLaunchAtLoginMock: LaunchAtLoginManaging {

@@ -42,6 +42,24 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         XCTAssertTrue(writeOptions.allSatisfy { $0.contains(.atomic) })
     }
 
+    func testNewLaunchAgentPermissionsAreNormalizedBeforeBootstrap() throws {
+        let fixture = try makeFixture()
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            dataWriter: { data, url, options in
+                try data.write(to: url, options: options)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o666],
+                    ofItemAtPath: url.path
+                )
+            }
+        )
+
+        try scheduler.reconcile(enabled: true, schedule: .daily9am)
+
+        XCTAssertEqual(try permissions(at: fixture.plistURL), 0o644)
+    }
+
     func testWeeklyScheduleIncludesSelectedWeekday() throws {
         let fixture = try makeFixture()
         let scheduler = makeScheduler(fixture: fixture)
@@ -143,6 +161,40 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
             .bootout(serviceTarget: serviceTarget),
             .bootstrap(domain: domain, plistURL: fixture.plistURL)
         ])
+    }
+
+    func testRollbackNormalizesRestoredLaunchAgentPermissions() throws {
+        let fixture = try makeFixture()
+        let oldData = Data("old plist".utf8)
+        try oldData.write(to: fixture.plistURL)
+        var bootstrapCount = 0
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: true,
+            dataWriter: { data, url, options in
+                try data.write(to: url, options: options)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o666],
+                    ofItemAtPath: url.path
+                )
+            },
+            launchctlRunner: { operation in
+                if case .bootstrap = operation {
+                    bootstrapCount += 1
+                    if bootstrapCount == 1 {
+                        throw SignatureUpdateSchedulerError.launchctlFailed(
+                            command: "bootstrap",
+                            status: 5
+                        )
+                    }
+                }
+            }
+        )
+
+        XCTAssertThrowsError(try scheduler.reconcile(enabled: true, schedule: .daily9am))
+
+        XCTAssertEqual(try Data(contentsOf: fixture.plistURL), oldData)
+        XCTAssertEqual(try permissions(at: fixture.plistURL), 0o644)
     }
 
     func testRollbackFailureIsReportedInsteadOfSilentlyClaimingRestoration() throws {
@@ -409,6 +461,11 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         return try XCTUnwrap(
             PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         )
+    }
+
+    private func permissions(at url: URL) throws -> Int {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return try XCTUnwrap(attributes[.posixPermissions] as? NSNumber).intValue
     }
 
     private func makeLaunchctlStub(

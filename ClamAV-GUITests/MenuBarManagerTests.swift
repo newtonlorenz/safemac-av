@@ -241,6 +241,30 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(finishCalls, 1)
     }
 
+    func testScheduledUpdateAbortsWhenAccessoryIsolationCannotBeEstablished() async {
+        let application = MenuBarApplicationMock()
+        application.shouldAcceptPolicy = false
+        let manager = MenuBarManager(application: application)
+        var updateCalls = 0
+        var finishCalls = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { ["--scheduled-signature-update"] },
+            runScheduledSignatureUpdate: { updateCalls += 1 },
+            finishScheduledLaunch: { finishCalls += 1 }
+        )
+
+        delegate.applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 0)
+        XCTAssertEqual(updateCalls, 0)
+        XCTAssertEqual(finishCalls, 1)
+    }
+
     func testScheduledSignatureUpdateModeAlwaysHidesDockEvenWhenUserPrefersDock() {
         var settings = AppSettings.default
         settings.hideFromDock = false
