@@ -12,44 +12,41 @@ final class MenuBarManagerTests: XCTestCase {
         )
     }
 
-    func testMainWindowPresentationRequestBeforeActionInstallationRunsOnce() async {
-        let lifecycle = MainWindowPresentationLifecycle()
-        var openCalls = 0
+    func testMainWindowRegistryFactoryIsLazyAndResettable() {
+        let registry = MainWindowControllerRegistry()
+        let first = MainWindowControllerMock()
+        let second = MainWindowControllerMock()
+        var firstFactoryCalls = 0
+        var secondFactoryCalls = 0
 
-        let request = Task { await lifecycle.requestPresentation() }
-        await Task.yield()
-        XCTAssertEqual(openCalls, 0)
+        registry.installFactory {
+            firstFactoryCalls += 1
+            return first
+        }
+        XCTAssertEqual(firstFactoryCalls, 0)
 
-        lifecycle.install { openCalls += 1 }
-        await request.value
+        XCTAssertTrue(registry.makeController() === first)
+        XCTAssertEqual(firstFactoryCalls, 1)
 
-        XCTAssertEqual(openCalls, 1)
+        registry.installFactory {
+            secondFactoryCalls += 1
+            return second
+        }
+        XCTAssertTrue(registry.makeController() === second)
+        XCTAssertEqual(secondFactoryCalls, 1)
     }
 
-    func testMainWindowPresentationInstallBeforeRequestRunsOnce() async {
-        let lifecycle = MainWindowPresentationLifecycle()
-        var openCalls = 0
-        lifecycle.install { openCalls += 1 }
+    func testMainWindowRegistryRoutesMenuRequestsWithoutOwningController() {
+        let registry = MainWindowControllerRegistry()
+        var selections: [NavigationTab?] = []
+        registry.installRouter { selections.append($0) }
 
-        await lifecycle.requestPresentation()
-        await lifecycle.requestPresentation()
+        registry.showMainWindow(selecting: nil)
+        registry.showMainWindow(selecting: .settings)
 
-        XCTAssertEqual(openCalls, 1)
-    }
-
-    func testMainWindowPresentationCoalescesConcurrentPendingRequests() async {
-        let lifecycle = MainWindowPresentationLifecycle()
-        var openCalls = 0
-
-        let first = Task { await lifecycle.requestPresentation() }
-        let second = Task { await lifecycle.requestPresentation() }
-        await Task.yield()
-        lifecycle.install { openCalls += 1 }
-        await first.value
-        await second.value
-        await lifecycle.requestPresentation()
-
-        XCTAssertEqual(openCalls, 1)
+        XCTAssertEqual(selections.count, 2)
+        XCTAssertNil(selections[0])
+        XCTAssertEqual(selections[1], .settings)
     }
 
     func testApplicationDelegateSupportsRuntimeDefaultInitialization() {
@@ -177,7 +174,7 @@ final class MenuBarManagerTests: XCTestCase {
         )
     }
 
-    func testApplicationUsesSingleWindowAndAppLifetimePresentationBridge() throws {
+    func testApplicationUsesMenuBarAsItsOnlySceneWithoutOpenWindowBridge() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -186,10 +183,66 @@ final class MenuBarManagerTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains("Window(Self.mainWindowTitle, id: Self.mainWindowID)"))
+        XCTAssertFalse(source.contains("Window(Self.mainWindowTitle, id: Self.mainWindowID)"))
         XCTAssertFalse(source.contains("WindowGroup(Self.mainWindowTitle, id: Self.mainWindowID)"))
-        XCTAssertTrue(source.contains("MainWindowPresentationBridge"))
+        XCTAssertFalse(source.contains("MainWindowPresentationBridge"))
+        XCTAssertFalse(source.contains("OpenWindowAction"))
+        XCTAssertTrue(source.contains("MenuBarExtra"))
         XCTAssertFalse(source.contains("@StateObject private var initialLaunchHandler"))
+    }
+
+    func testVisibleInteractiveDelegateLazilyCreatesAndRetainsOneMainWindowController() async {
+        let application = MenuBarApplicationMock()
+        let controller = MainWindowControllerMock()
+        var factoryCalls = 0
+        let maintenanceRan = expectation(description: "maintenance ran")
+        let delegate = MenuBarApplicationDelegate(
+            manager: MenuBarManager(application: application),
+            settingsProvider: { .default },
+            argumentsProvider: { [] },
+            mainWindowControllerFactory: {
+                factoryCalls += 1
+                return controller
+            },
+            runInitialApplicationLaunch: { _ in maintenanceRan.fulfill() }
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await fulfillment(of: [maintenanceRan], timeout: 1)
+        delegate.showMainWindow(selecting: .settings)
+
+        XCTAssertEqual(factoryCalls, 1)
+        XCTAssertEqual(controller.selections.count, 2)
+        XCTAssertNil(controller.selections[0])
+        XCTAssertEqual(controller.selections[1], .settings)
+    }
+
+    func testHiddenInteractiveAndScheduledSignatureLaunchesDoNotCreateMainWindowController() async {
+        for arguments in [[], ["--scheduled-signature-update"]] {
+            let application = MenuBarApplicationMock()
+            var settings = AppSettings.default
+            settings.hideFromDock = true
+            var factoryCalls = 0
+            let delegate = MenuBarApplicationDelegate(
+                manager: MenuBarManager(application: application),
+                settingsProvider: { settings },
+                argumentsProvider: { arguments },
+                mainWindowControllerFactory: {
+                    factoryCalls += 1
+                    return MainWindowControllerMock()
+                },
+                runInitialApplicationLaunch: { _ in },
+                runScheduledSignatureUpdate: {}
+            )
+
+            delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+            delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+            await Task.yield()
+
+            XCTAssertEqual(factoryCalls, 0, arguments.description)
+        }
     }
 
     func testMainWindowCandidateIgnoresUnrelatedAndPanelWindows() {
@@ -582,6 +635,15 @@ private final class MainCapableTestWindow: NSWindow {
 
 private final class MainCapableTestPanel: NSPanel {
     override var canBecomeMain: Bool { true }
+}
+
+@MainActor
+private final class MainWindowControllerMock: MainWindowControlling {
+    private(set) var selections: [NavigationTab?] = []
+
+    func showMainWindow(selecting selection: NavigationTab?) {
+        selections.append(selection)
+    }
 }
 
 private actor MenuBarAsyncGate {
