@@ -4,6 +4,14 @@ import XCTest
 
 @MainActor
 final class MenuBarManagerTests: XCTestCase {
+    func testApplicationBundleStartsAsUIElement() {
+        XCTAssertEqual(
+            Bundle(for: MenuBarApplicationDelegate.self)
+                .object(forInfoDictionaryKey: "LSUIElement") as? Bool,
+            true
+        )
+    }
+
     func testInitialLaunchHandlerDrainsInteractiveRequestsOnce() async {
         let handler = InitialLaunchHandler()
         var drainCalls = 0
@@ -185,6 +193,25 @@ final class MenuBarManagerTests: XCTestCase {
 
         XCTAssertEqual(application.requestedPolicies, [.accessory])
         XCTAssertEqual(application.closeMainWindowCalls, 1)
+    }
+
+    func testApplicationDelegatePromotesVisibleInteractiveLaunchToRegularPolicy() {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var settings = AppSettings.default
+        settings.hideFromDock = false
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { [] }
+        )
+
+        delegate.applicationWillFinishLaunching(
+            Notification(name: NSApplication.willFinishLaunchingNotification)
+        )
+
+        XCTAssertEqual(application.requestedPolicies, [.regular])
+        XCTAssertFalse(manager.isDockHidden)
     }
 
     func testScheduledSignatureUpdateLaunchUsesAccessoryModeAndClosesMainWindow() async {
