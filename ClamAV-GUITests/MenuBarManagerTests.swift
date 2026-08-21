@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import XCTest
 @testable import ClamAV_GUI
 
@@ -49,6 +50,70 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(selections[1], .settings)
     }
 
+    func testConcreteMainWindowControllerRetainsOneWindowAndExactSharedState() throws {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        let appState = AppState(startsInteractiveBackgroundServices: false)
+        let controller = MainWindowController(
+            appState: appState,
+            menuBarManager: manager,
+            preferredColorScheme: nil
+        )
+        let window = try XCTUnwrap(controller.windowController.window)
+
+        XCTAssertTrue(controller.appState === appState)
+        XCTAssertTrue(controller.menuBarManager === manager)
+        XCTAssertEqual(window.identifier?.rawValue, ClamAVApp.mainWindowID)
+        XCTAssertEqual(window.title, ClamAVApp.mainWindowTitle)
+        XCTAssertEqual(window.frame.size, NSSize(width: 1_060, height: 720))
+        XCTAssertEqual(window.contentMinSize, NSSize(width: 800, height: 600))
+        XCTAssertEqual(window.isReleasedWhenClosed, false)
+        XCTAssertEqual(window.tabbingMode, .disallowed)
+        XCTAssertTrue(window.styleMask.contains(.fullSizeContentView))
+
+        controller.showMainWindow(selecting: .settings)
+        XCTAssertEqual(appState.selectedTab, .settings)
+        XCTAssertEqual(application.activationCalls, [true])
+        window.close()
+
+        controller.showMainWindow(selecting: .dashboard)
+        XCTAssertTrue(controller.windowController.window === window)
+        XCTAssertEqual(appState.selectedTab, .dashboard)
+        XCTAssertEqual(application.activationCalls, [true, true])
+        window.close()
+    }
+
+    func testDockVisibilityObservationRunsWindowlessAndReinstallCancelsOldPublisher() {
+        let firstApplication = MenuBarApplicationMock()
+        let secondApplication = MenuBarApplicationMock()
+        let firstSettings = CurrentValueSubject<AppSettings, Never>(.default)
+        let secondSettings = CurrentValueSubject<AppSettings, Never>(.default)
+        let lifecycle = DockVisibilityLifecycle()
+
+        lifecycle.install(
+            settings: firstSettings.eraseToAnyPublisher(),
+            launchMode: .interactive,
+            isUITesting: false,
+            manager: MenuBarManager(application: firstApplication)
+        )
+        var hiddenSettings = AppSettings.default
+        hiddenSettings.hideFromDock = true
+        firstSettings.send(hiddenSettings)
+        XCTAssertEqual(firstApplication.requestedPolicies, [.accessory])
+
+        lifecycle.install(
+            settings: secondSettings.eraseToAnyPublisher(),
+            launchMode: .interactive,
+            isUITesting: false,
+            manager: MenuBarManager(application: secondApplication)
+        )
+        firstSettings.send(.default)
+        secondSettings.send(hiddenSettings)
+
+        XCTAssertEqual(firstApplication.requestedPolicies, [.accessory])
+        XCTAssertEqual(secondApplication.requestedPolicies, [.accessory])
+    }
+
     func testApplicationDelegateSupportsRuntimeDefaultInitialization() {
         let delegateType: NSObject.Type = MenuBarApplicationDelegate.self
 
@@ -85,93 +150,6 @@ final class MenuBarManagerTests: XCTestCase {
 
         XCTAssertEqual(application.requestedPolicies, [.accessory])
         XCTAssertFalse(manager.isDockHidden)
-    }
-
-    func testActivatingMainWindowOpensWindowAndRaisesApplication() {
-        let application = MenuBarApplicationMock()
-        let manager = MenuBarManager(application: application)
-
-        manager.activateMainWindow {
-            application.events.append(.openWindow)
-        }
-
-        XCTAssertEqual(application.activationCalls, [true])
-        XCTAssertEqual(application.events, [.activateApplication, .focusMainWindow, .openWindow])
-    }
-
-    func testActivatingMainWindowFocusesExistingWindowWithoutOpeningAnother() {
-        let application = MenuBarApplicationMock()
-        application.focusMainWindowResult = true
-        let manager = MenuBarManager(application: application)
-
-        manager.activateMainWindow {
-            application.events.append(.openWindow)
-        }
-
-        XCTAssertEqual(application.activationCalls, [true])
-        XCTAssertEqual(application.events, [.activateApplication, .focusMainWindow])
-    }
-
-    func testUnidentifiedTitledWindowDoesNotMasqueradeAsMainWindow() {
-        let pendingMainWindow = MainCapableTestWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        pendingMainWindow.title = "SafeMac AV"
-
-        XCTAssertNil(pendingMainWindow.identifier)
-        XCTAssertTrue(pendingMainWindow.canBecomeMain)
-        XCTAssertNil(MenuBarManager.mainWindowCandidate(in: [pendingMainWindow]))
-    }
-
-    func testPendingMainWindowRequiresPositiveIdentityWhenUnrelatedWindowComesFirst() {
-        let unrelatedWindow = MainCapableTestWindow(
-            contentRect: .zero,
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        unrelatedWindow.title = "Import"
-        let pendingMainWindow = MainCapableTestWindow(
-            contentRect: .zero,
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        pendingMainWindow.title = "SafeMac AV"
-        pendingMainWindow.identifier = NSUserInterfaceItemIdentifier(ClamAVApp.mainWindowID)
-
-        XCTAssertTrue(
-            MenuBarManager.mainWindowCandidate(
-                in: [unrelatedWindow, pendingMainWindow]
-            ) === pendingMainWindow
-        )
-    }
-
-    func testMainWindowCandidateIgnoresUnidentifiedUtilityWindowBeforePendingMain() {
-        let utilityWindow = NSWindow(
-            contentRect: .zero,
-            styleMask: [.titled, .utilityWindow],
-            backing: .buffered,
-            defer: false
-        )
-        utilityWindow.title = "SafeMac AV"
-        let pendingMainWindow = MainCapableTestWindow(
-            contentRect: .zero,
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        pendingMainWindow.title = "SafeMac AV"
-        pendingMainWindow.identifier = NSUserInterfaceItemIdentifier(ClamAVApp.mainWindowID)
-
-        XCTAssertTrue(
-            MenuBarManager.mainWindowCandidate(
-                in: [utilityWindow, pendingMainWindow]
-            ) === pendingMainWindow
-        )
     }
 
     func testApplicationUsesMenuBarAsItsOnlySceneWithoutOpenWindowBridge() throws {
@@ -245,59 +223,50 @@ final class MenuBarManagerTests: XCTestCase {
         }
     }
 
-    func testMainWindowCandidateIgnoresUnrelatedAndPanelWindows() {
-        let unrelatedWindow = MainCapableTestWindow(
-            contentRect: .zero,
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        unrelatedWindow.identifier = NSUserInterfaceItemIdentifier("settings-window")
-        let panel = MainCapableTestPanel(
-            contentRect: .zero,
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
+    func testHiddenInteractiveMenuRequestLazilyCreatesControllerAfterLaunch() async {
+        let application = MenuBarApplicationMock()
+        var settings = AppSettings.default
+        settings.hideFromDock = true
+        let controller = MainWindowControllerMock()
+        var factoryCalls = 0
+        let maintenanceRan = expectation(description: "hidden maintenance ran")
+        let delegate = MenuBarApplicationDelegate(
+            manager: MenuBarManager(application: application),
+            settingsProvider: { settings },
+            argumentsProvider: { [] },
+            mainWindowControllerFactory: {
+                factoryCalls += 1
+                return controller
+            },
+            runInitialApplicationLaunch: { _ in maintenanceRan.fulfill() }
         )
 
-        XCTAssertNil(MenuBarManager.mainWindowCandidate(in: [unrelatedWindow]))
-        XCTAssertNil(MenuBarManager.mainWindowCandidate(in: [panel]))
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await fulfillment(of: [maintenanceRan], timeout: 1)
+        XCTAssertEqual(factoryCalls, 0)
+
+        XCTAssertTrue(delegate.showMainWindow(selecting: .settings))
+        XCTAssertEqual(factoryCalls, 1)
+        XCTAssertEqual(controller.selections, [.settings])
     }
 
-    func testHiddenDockLaunchSuppressesInitialMainWindowAfterAccessoryPolicyIsAccepted() {
-        let application = MenuBarApplicationMock()
-        let manager = MenuBarManager(application: application)
-
-        let shouldSuppress = manager.prepareForLaunch(hidden: true)
-        manager.suppressInitialMainWindow(if: shouldSuppress)
-
-        XCTAssertEqual(application.requestedPolicies, [.accessory])
-        XCTAssertEqual(application.closeMainWindowCalls, 1)
-    }
-
-    func testRegularLaunchKeepsInitialMainWindowVisible() {
-        let application = MenuBarApplicationMock()
-        let manager = MenuBarManager(application: application)
-
-        let shouldSuppress = manager.prepareForLaunch(hidden: false)
-        manager.suppressInitialMainWindow(if: shouldSuppress)
-
-        XCTAssertEqual(application.requestedPolicies, [.regular])
-        XCTAssertEqual(application.closeMainWindowCalls, 0)
-    }
-
-    func testHiddenDockScheduledLaunchKeepsInitialWindowForScheduledTask() {
-        let application = MenuBarApplicationMock()
-        let manager = MenuBarManager(application: application)
-
-        let shouldSuppress = manager.prepareForLaunch(
-            hidden: true,
-            suppressInitialMainWindow: false
+    func testVisibleLaunchWithMissingControllerFactoryFailsClosedWithoutMaintenance() async {
+        var maintenanceCalls = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: MenuBarManager(application: MenuBarApplicationMock()),
+            settingsProvider: { .default },
+            argumentsProvider: { [] },
+            mainWindowControllerFactory: { nil },
+            runInitialApplicationLaunch: { _ in maintenanceCalls += 1 }
         )
-        manager.suppressInitialMainWindow(if: shouldSuppress)
 
-        XCTAssertEqual(application.requestedPolicies, [.accessory])
-        XCTAssertEqual(application.closeMainWindowCalls, 0)
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+
+        XCTAssertEqual(maintenanceCalls, 0)
+        XCTAssertFalse(delegate.showMainWindow(selecting: nil))
     }
 
     func testApplicationDelegateUsesPersistedHiddenDockSettingOnInteractiveRestart() async {
@@ -317,7 +286,6 @@ final class MenuBarManagerTests: XCTestCase {
         await Task.yield()
 
         XCTAssertEqual(application.requestedPolicies, [.accessory])
-        XCTAssertEqual(application.closeMainWindowCalls, 1)
     }
 
     func testApplicationDelegatePromotesVisibleInteractiveLaunchToRegularPolicy() {
@@ -339,21 +307,18 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertFalse(manager.isDockHidden)
     }
 
-    func testVisibleInteractiveDelegateFocusesExistingMainBeforeMaintenance() async {
+    func testVisibleInteractiveDelegatePresentsBeforeMaintenance() async {
         let application = MenuBarApplicationMock()
-        application.focusMainWindowResults = [true]
         let manager = MenuBarManager(application: application)
+        let controller = MainWindowControllerMock()
+        controller.onShow = { application.events.append(.showMainWindow) }
         let maintenanceRan = expectation(description: "initial maintenance ran")
-        var presentationRequests = 0
         let delegate = MenuBarApplicationDelegate(
             manager: manager,
             settingsProvider: { .default },
             argumentsProvider: { [] },
             nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
-            requestMainWindowPresentation: {
-                presentationRequests += 1
-                application.events.append(.requestMainWindow)
-            },
+            mainWindowControllerFactory: { controller },
             runInitialApplicationLaunch: { _ in
                 application.events.append(.runInitialMaintenance)
                 maintenanceRan.fulfill()
@@ -364,33 +329,28 @@ final class MenuBarManagerTests: XCTestCase {
         delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
         await fulfillment(of: [maintenanceRan], timeout: 1)
 
-        XCTAssertEqual(presentationRequests, 0)
         XCTAssertEqual(
             application.events,
-            [.nextMainRunLoopTurn, .activateApplication, .focusMainWindow,
-             .nextMainRunLoopTurn, .runInitialMaintenance]
+            [.showMainWindow, .nextMainRunLoopTurn, .runInitialMaintenance]
         )
     }
 
-    func testVisibleInteractiveDelegateRequestsWindowThenFocusesBeforeMaintenance() async {
+    func testVisibleInteractiveDelegateHandlesDuplicateDidFinishOnlyOnce() async {
         let application = MenuBarApplicationMock()
-        application.focusMainWindowResults = [false, false, true]
         let manager = MenuBarManager(application: application)
+        let controller = MainWindowControllerMock()
         let maintenanceRan = expectation(description: "initial maintenance ran")
-        var presentationRequests = 0
+        var factoryCalls = 0
         let delegate = MenuBarApplicationDelegate(
             manager: manager,
             settingsProvider: { .default },
             argumentsProvider: { [] },
-            nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
-            requestMainWindowPresentation: {
-                presentationRequests += 1
-                application.events.append(.requestMainWindow)
+            nextMainRunLoopTurn: {},
+            mainWindowControllerFactory: {
+                factoryCalls += 1
+                return controller
             },
-            runInitialApplicationLaunch: { _ in
-                application.events.append(.runInitialMaintenance)
-                maintenanceRan.fulfill()
-            }
+            runInitialApplicationLaunch: { _ in maintenanceRan.fulfill() }
         )
 
         delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
@@ -398,14 +358,8 @@ final class MenuBarManagerTests: XCTestCase {
         delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
         await fulfillment(of: [maintenanceRan], timeout: 1)
 
-        XCTAssertEqual(presentationRequests, 1)
-        XCTAssertEqual(
-            application.events,
-            [.nextMainRunLoopTurn, .activateApplication, .focusMainWindow,
-             .requestMainWindow, .nextMainRunLoopTurn, .activateApplication,
-             .focusMainWindow, .nextMainRunLoopTurn, .activateApplication,
-             .focusMainWindow, .runInitialMaintenance]
-        )
+        XCTAssertEqual(factoryCalls, 1)
+        XCTAssertEqual(controller.selections.count, 1)
     }
 
     func testHiddenInteractiveDelegateRunsMaintenanceWithoutPresentingWindow() async {
@@ -414,13 +368,16 @@ final class MenuBarManagerTests: XCTestCase {
         var settings = AppSettings.default
         settings.hideFromDock = true
         let maintenanceRan = expectation(description: "hidden maintenance ran")
-        var presentationRequests = 0
+        var factoryCalls = 0
         let delegate = MenuBarApplicationDelegate(
             manager: manager,
             settingsProvider: { settings },
             argumentsProvider: { [] },
             nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
-            requestMainWindowPresentation: { presentationRequests += 1 },
+            mainWindowControllerFactory: {
+                factoryCalls += 1
+                return MainWindowControllerMock()
+            },
             runInitialApplicationLaunch: { _ in maintenanceRan.fulfill() }
         )
 
@@ -428,10 +385,9 @@ final class MenuBarManagerTests: XCTestCase {
         delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
         await fulfillment(of: [maintenanceRan], timeout: 1)
 
-        XCTAssertEqual(presentationRequests, 0)
+        XCTAssertEqual(factoryCalls, 0)
         XCTAssertEqual(application.activationCalls, [])
         XCTAssertEqual(application.events, [])
-        XCTAssertEqual(application.closeMainWindowCalls, 1)
     }
 
     func testActiveMaintenanceWaitsForInitialInteractiveLaunchToFinish() async {
@@ -470,20 +426,17 @@ final class MenuBarManagerTests: XCTestCase {
 
     func testScheduledScanDelegatePresentsWindowThenRunsAppLifetimeScan() async {
         let application = MenuBarApplicationMock()
-        application.focusMainWindowResults = [false, true]
         let manager = MenuBarManager(application: application)
+        let controller = MainWindowControllerMock()
+        controller.onShow = { application.events.append(.showMainWindow) }
         let launchRan = expectation(description: "scheduled scan launch ran")
         var receivedMode: LaunchMode?
-        var presentationRequests = 0
         let delegate = MenuBarApplicationDelegate(
             manager: manager,
             settingsProvider: { .default },
             argumentsProvider: { ["--scheduled-scan", "--path", "/tmp/scheduled"] },
             nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
-            requestMainWindowPresentation: {
-                presentationRequests += 1
-                application.events.append(.requestMainWindow)
-            },
+            mainWindowControllerFactory: { controller },
             runInitialApplicationLaunch: { mode in
                 receivedMode = mode
                 application.events.append(.runInitialMaintenance)
@@ -496,18 +449,13 @@ final class MenuBarManagerTests: XCTestCase {
         await fulfillment(of: [launchRan], timeout: 1)
 
         XCTAssertEqual(receivedMode, .scheduledScan(jobID: nil, paths: [URL(fileURLWithPath: "/tmp/scheduled")]))
-        XCTAssertEqual(presentationRequests, 1)
-        XCTAssertEqual(application.activationCalls, [true, true])
-        XCTAssertEqual(application.focusMainWindowResults.count, 0)
         XCTAssertEqual(
             application.events,
-            [.nextMainRunLoopTurn, .activateApplication, .focusMainWindow,
-             .requestMainWindow, .nextMainRunLoopTurn, .activateApplication,
-             .focusMainWindow, .runInitialMaintenance]
+            [.showMainWindow, .nextMainRunLoopTurn, .runInitialMaintenance]
         )
     }
 
-    func testScheduledSignatureUpdateLaunchUsesAccessoryModeAndClosesMainWindow() async {
+    func testScheduledSignatureUpdateLaunchUsesAccessoryModeWithoutCreatingMainWindow() async {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
         var settings = AppSettings.default
@@ -524,9 +472,7 @@ final class MenuBarManagerTests: XCTestCase {
         await Task.yield()
 
         XCTAssertEqual(application.requestedPolicies, [.accessory])
-        XCTAssertEqual(application.closeMainWindowCalls, 1)
         XCTAssertEqual(application.activationCalls, [])
-        XCTAssertFalse(application.events.contains(.focusMainWindow))
     }
 
     func testApplicationDelegateRetainsDelayedScheduledUpdateUntilItFinishesThenExits() async {
@@ -555,7 +501,6 @@ final class MenuBarManagerTests: XCTestCase {
         await fulfillment(of: [updateStarted], timeout: 1)
 
         XCTAssertEqual(application.requestedPolicies, [.accessory])
-        XCTAssertEqual(application.closeMainWindowCalls, 1)
         XCTAssertEqual(finishCalls, 0)
 
         await gate.open()
@@ -582,7 +527,6 @@ final class MenuBarManagerTests: XCTestCase {
         await Task.yield()
 
         XCTAssertEqual(application.requestedPolicies, [.accessory])
-        XCTAssertEqual(application.closeMainWindowCalls, 0)
         XCTAssertEqual(updateCalls, 0)
         XCTAssertEqual(finishCalls, 1)
     }
@@ -629,20 +573,14 @@ final class MenuBarManagerTests: XCTestCase {
     }
 }
 
-private final class MainCapableTestWindow: NSWindow {
-    override var canBecomeMain: Bool { true }
-}
-
-private final class MainCapableTestPanel: NSPanel {
-    override var canBecomeMain: Bool { true }
-}
-
 @MainActor
 private final class MainWindowControllerMock: MainWindowControlling {
     private(set) var selections: [NavigationTab?] = []
+    var onShow: (() -> Void)?
 
     func showMainWindow(selecting selection: NavigationTab?) {
         selections.append(selection)
+        onShow?()
     }
 }
 
@@ -661,10 +599,8 @@ private actor MenuBarAsyncGate {
 
 private enum MenuBarApplicationEvent: Equatable {
     case activateApplication
-    case focusMainWindow
-    case openWindow
     case nextMainRunLoopTurn
-    case requestMainWindow
+    case showMainWindow
     case runInitialMaintenance
 }
 
@@ -673,9 +609,6 @@ private final class MenuBarApplicationMock: ApplicationActivationPolicyApplying 
     var shouldAcceptPolicy = true
     private(set) var requestedPolicies: [NSApplication.ActivationPolicy] = []
     private(set) var activationCalls: [Bool] = []
-    private(set) var closeMainWindowCalls = 0
-    var focusMainWindowResult = false
-    var focusMainWindowResults: [Bool] = []
     var events: [MenuBarApplicationEvent] = []
 
     func setActivationPolicy(_ activationPolicy: NSApplication.ActivationPolicy) -> Bool {
@@ -688,15 +621,4 @@ private final class MenuBarApplicationMock: ApplicationActivationPolicyApplying 
         events.append(.activateApplication)
     }
 
-    func closeMainWindows() {
-        closeMainWindowCalls += 1
-    }
-
-    func focusMainWindow() -> Bool {
-        events.append(.focusMainWindow)
-        if !focusMainWindowResults.isEmpty {
-            return focusMainWindowResults.removeFirst()
-        }
-        return focusMainWindowResult
-    }
 }

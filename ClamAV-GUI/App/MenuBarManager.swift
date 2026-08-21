@@ -1,86 +1,26 @@
 import AppKit
-import SwiftUI
+import Combine
 
 @MainActor
-final class ScheduledSignatureUpdateLifecycle {
-    static let shared = ScheduledSignatureUpdateLifecycle()
+final class DockVisibilityLifecycle {
+    static let shared = DockVisibilityLifecycle()
 
-    private var operation: (() async -> Void)?
-
-    func install(operation: @escaping () async -> Void) {
-        self.operation = operation
-    }
-
-    func run() async {
-        await operation?()
-    }
-}
-
-@MainActor
-final class MainWindowPresentationLifecycle {
-    static let shared = MainWindowPresentationLifecycle()
-
-    private var openWindow: (() -> Void)?
-    private var pendingRequests: [CheckedContinuation<Void, Never>] = []
-    private var didPresent = false
-
-    func install(openWindow: @escaping () -> Void) {
-        guard !didPresent else { return }
-        self.openWindow = openWindow
-        presentIfReady()
-    }
-
-    func requestPresentation() async {
-        guard !didPresent else { return }
-        await withCheckedContinuation { continuation in
-            pendingRequests.append(continuation)
-            presentIfReady()
-        }
-    }
-
-    private func presentIfReady() {
-        guard !didPresent, let openWindow, !pendingRequests.isEmpty else { return }
-        didPresent = true
-        self.openWindow = nil
-        let requests = pendingRequests
-        pendingRequests.removeAll()
-        openWindow()
-        requests.forEach { $0.resume() }
-    }
-}
-
-@MainActor
-final class ApplicationLaunchLifecycle {
-    static let shared = ApplicationLaunchLifecycle()
-
-    private var runInitialInteractive: () async -> Void = {}
-    private var runActiveInteractive: () async -> Void = {}
-    private var runScheduledScan: (UUID?, [URL]) async -> Void = { _, _ in }
+    private var observation: AnyCancellable?
 
     func install(
-        runInitialInteractive: @escaping () async -> Void,
-        runActiveInteractive: @escaping () async -> Void,
-        runScheduledScan: @escaping (UUID?, [URL]) async -> Void
+        settings: AnyPublisher<AppSettings, Never>,
+        launchMode: LaunchMode,
+        isUITesting: Bool,
+        manager: MenuBarManager
     ) {
-        self.runInitialInteractive = runInitialInteractive
-        self.runActiveInteractive = runActiveInteractive
-        self.runScheduledScan = runScheduledScan
-    }
-
-    func runInitial(mode: LaunchMode) async {
-        switch mode {
-        case .interactive:
-            await runInitialInteractive()
-        case .scheduledScan(let jobID, let paths):
-            await runScheduledScan(jobID, paths)
-        case .scheduledSignatureUpdate:
-            break
-        }
-    }
-
-    func runActiveMaintenance(mode: LaunchMode) async {
-        guard mode.isInteractive else { return }
-        await runActiveInteractive()
+        observation?.cancel()
+        observation = settings
+            .dropFirst()
+            .map { launchMode.hidesDock(settings: $0, isUITesting: isUITesting) }
+            .removeDuplicates()
+            .sink { hidden in
+                manager.applyDockVisibility(hidden: hidden)
+            }
     }
 }
 
@@ -89,25 +29,9 @@ protocol ApplicationActivationPolicyApplying: AnyObject {
     @discardableResult
     func setActivationPolicy(_ activationPolicy: NSApplication.ActivationPolicy) -> Bool
     func activate(ignoringOtherApps: Bool)
-    func closeMainWindows()
-    func focusMainWindow() -> Bool
 }
 
-extension NSApplication: ApplicationActivationPolicyApplying {
-    func closeMainWindows() {
-        windows
-            .filter(\.canBecomeMain)
-            .forEach { $0.close() }
-    }
-
-    func focusMainWindow() -> Bool {
-        guard let window = MenuBarManager.mainWindowCandidate(in: windows) else {
-            return false
-        }
-        window.makeKeyAndOrderFront(nil)
-        return true
-    }
-}
+extension NSApplication: ApplicationActivationPolicyApplying {}
 
 @MainActor
 final class MenuBarManager: ObservableObject {
@@ -119,10 +43,6 @@ final class MenuBarManager: ObservableObject {
         self.application = application ?? NSApplication.shared
     }
 
-    static func mainWindowCandidate(in windows: [NSWindow]) -> NSWindow? {
-        windows.first { $0.identifier?.rawValue == ClamAVApp.mainWindowID }
-    }
-
     @discardableResult
     func applyDockVisibility(hidden: Bool) -> Bool {
         let activationPolicy: NSApplication.ActivationPolicy = hidden ? .accessory : .regular
@@ -131,45 +51,23 @@ final class MenuBarManager: ObservableObject {
         return true
     }
 
-    func prepareForLaunch(
-        hidden: Bool,
-        suppressInitialMainWindow: Bool = true
-    ) -> Bool {
-        applyDockVisibility(hidden: hidden) && hidden && suppressInitialMainWindow
-    }
-
-    func suppressInitialMainWindow(if shouldSuppress: Bool) {
-        guard shouldSuppress else { return }
-        application.closeMainWindows()
-    }
-
-    func activateMainWindow(openWindow: () -> Void) {
+    func activateApplication() {
         application.activate(ignoringOtherApps: true)
-        if !application.focusMainWindow() {
-            openWindow()
-        }
-    }
-
-    @discardableResult
-    func focusMainWindow() -> Bool {
-        application.activate(ignoringOtherApps: true)
-        return application.focusMainWindow()
     }
 }
 
 @MainActor
 final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
-    private let providedManager: MenuBarManager?
-    private let settingsProvider: () -> AppSettings
-    private let argumentsProvider: () -> [String]
-    private let nextMainRunLoopTurn: () async -> Void
-    private let requestMainWindowPresentation: () async -> Void
-    private let runInitialApplicationLaunch: (LaunchMode) async -> Void
-    private let runActiveInteractiveMaintenance: (LaunchMode) async -> Void
-    private let runScheduledSignatureUpdate: () async -> Void
-    private let finishScheduledLaunch: () -> Void
-    private var launchManager: MenuBarManager?
-    private var shouldSuppressInitialMainWindow = false
+    private var providedManager: MenuBarManager?
+    private var settingsProvider: () -> AppSettings
+    private var argumentsProvider: () -> [String]
+    private var nextMainRunLoopTurn: () async -> Void
+    private var mainWindowControllerFactory: () -> MainWindowControlling?
+    private var runInitialApplicationLaunch: (LaunchMode) async -> Void
+    private var runActiveInteractiveMaintenance: (LaunchMode) async -> Void
+    private var runScheduledSignatureUpdate: () async -> Void
+    private var finishScheduledLaunch: () -> Void
+    private var mainWindowController: MainWindowControlling?
     private var launchMode: LaunchMode = .interactive
     private var canRunScheduledSignatureUpdate = false
     private var shouldPresentMainWindowAtLaunch = false
@@ -185,18 +83,12 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         settingsProvider = { ConfigManager().loadSettings() }
         argumentsProvider = { CommandLine.arguments }
         nextMainRunLoopTurn = { await Self.waitForNextMainRunLoopTurn() }
-        requestMainWindowPresentation = {
-            await MainWindowPresentationLifecycle.shared.requestPresentation()
+        mainWindowControllerFactory = {
+            MainWindowControllerRegistry.shared.makeController()
         }
-        runInitialApplicationLaunch = { mode in
-            await ApplicationLaunchLifecycle.shared.runInitial(mode: mode)
-        }
-        runActiveInteractiveMaintenance = { mode in
-            await ApplicationLaunchLifecycle.shared.runActiveMaintenance(mode: mode)
-        }
-        runScheduledSignatureUpdate = {
-            await ScheduledSignatureUpdateLifecycle.shared.run()
-        }
+        runInitialApplicationLaunch = { _ in }
+        runActiveInteractiveMaintenance = { _ in }
+        runScheduledSignatureUpdate = {}
         finishScheduledLaunch = {
             NSApplication.shared.terminate(nil)
         }
@@ -210,7 +102,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         nextMainRunLoopTurn: @escaping () async -> Void = {
             await MenuBarApplicationDelegate.waitForNextMainRunLoopTurn()
         },
-        requestMainWindowPresentation: @escaping () async -> Void = {},
+        mainWindowControllerFactory: @escaping () -> MainWindowControlling? = { nil },
         runInitialApplicationLaunch: @escaping (LaunchMode) async -> Void = { _ in },
         runActiveInteractiveMaintenance: @escaping (LaunchMode) async -> Void = { _ in },
         runScheduledSignatureUpdate: @escaping () async -> Void = {},
@@ -220,12 +112,31 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         self.settingsProvider = settingsProvider
         self.argumentsProvider = argumentsProvider
         self.nextMainRunLoopTurn = nextMainRunLoopTurn
-        self.requestMainWindowPresentation = requestMainWindowPresentation
+        self.mainWindowControllerFactory = mainWindowControllerFactory
         self.runInitialApplicationLaunch = runInitialApplicationLaunch
         self.runActiveInteractiveMaintenance = runActiveInteractiveMaintenance
         self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
         self.finishScheduledLaunch = finishScheduledLaunch
         super.init()
+    }
+
+    func configure(
+        manager: MenuBarManager,
+        settingsProvider: @escaping () -> AppSettings,
+        argumentsProvider: @escaping () -> [String],
+        runInitialApplicationLaunch: @escaping (LaunchMode) async -> Void,
+        runActiveInteractiveMaintenance: @escaping (LaunchMode) async -> Void,
+        runScheduledSignatureUpdate: @escaping () async -> Void
+    ) {
+        providedManager = manager
+        self.settingsProvider = settingsProvider
+        self.argumentsProvider = argumentsProvider
+        mainWindowControllerFactory = {
+            MainWindowControllerRegistry.shared.makeController()
+        }
+        self.runInitialApplicationLaunch = runInitialApplicationLaunch
+        self.runActiveInteractiveMaintenance = runActiveInteractiveMaintenance
+        self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -246,32 +157,17 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         case .scheduledSignatureUpdate:
             shouldPresentMainWindowAtLaunch = false
         }
-        let shouldSuppressWindow: Bool
-        switch mode {
-        case .interactive:
-            shouldSuppressWindow = true
-        case .scheduledScan:
-            shouldSuppressWindow = false
-        case .scheduledSignatureUpdate:
-            shouldSuppressWindow = true
-        }
-
-        shouldSuppressInitialMainWindow = manager.prepareForLaunch(
-            hidden: hidesDock,
-            suppressInitialMainWindow: shouldSuppressWindow
-        )
+        let didApplyDockPolicy = manager.applyDockVisibility(hidden: hidesDock)
         canRunScheduledSignatureUpdate = mode != .scheduledSignatureUpdate
-            || shouldSuppressInitialMainWindow
-        launchManager = manager
+            || (hidesDock && didApplyDockPolicy)
+        MainWindowControllerRegistry.shared.installRouter { [weak self] selection in
+            self?.showMainWindow(selecting: selection)
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !didHandleApplicationLaunch else { return }
         didHandleApplicationLaunch = true
-        if shouldSuppressInitialMainWindow, let launchManager {
-            launchManager.suppressInitialMainWindow(if: true)
-        }
-
         if launchMode == .scheduledSignatureUpdate {
             guard canRunScheduledSignatureUpdate else {
                 finishScheduledLaunch()
@@ -282,6 +178,10 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
                 finishScheduledLaunch()
             }
             return
+        }
+
+        if shouldPresentMainWindowAtLaunch {
+            guard showMainWindow(selecting: nil) else { return }
         }
 
         applicationLaunchTask = Task { [weak self] in
@@ -302,7 +202,9 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     private func runInitialLaunch() async {
         switch launchMode {
         case .interactive:
-            await presentMainWindowIfNeeded()
+            if shouldPresentMainWindowAtLaunch {
+                await nextMainRunLoopTurn()
+            }
             await runInitialApplicationLaunch(launchMode)
             didCompleteInitialInteractiveLaunch = true
             if pendingActiveMaintenance {
@@ -310,28 +212,33 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
                 startActiveMaintenance()
             }
         case .scheduledScan:
-            await presentMainWindowIfNeeded()
+            await nextMainRunLoopTurn()
             await runInitialApplicationLaunch(launchMode)
         case .scheduledSignatureUpdate:
             break
         }
     }
 
-    private func presentMainWindowIfNeeded() async {
-        guard shouldPresentMainWindowAtLaunch, let launchManager else { return }
-        await nextMainRunLoopTurn()
-        if launchManager.focusMainWindow() {
-            await nextMainRunLoopTurn()
-            return
+    @discardableResult
+    func showMainWindow(selecting selection: NavigationTab?) -> Bool {
+        guard launchMode.presentsUserInterface else { return false }
+        if mainWindowController == nil {
+            mainWindowController = mainWindowControllerFactory()
         }
+        guard let mainWindowController else { return false }
+        mainWindowController.showMainWindow(selecting: selection)
+        return true
+    }
 
-        await requestMainWindowPresentation()
-        for _ in 0..<3 {
-            await nextMainRunLoopTurn()
-            if launchManager.focusMainWindow() {
-                return
-            }
-        }
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        showMainWindow(selecting: nil)
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     private func startActiveMaintenance() {
