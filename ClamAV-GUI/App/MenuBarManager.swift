@@ -89,6 +89,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     private var launchManager: MenuBarManager?
     private var shouldSuppressInitialMainWindow = false
     private var launchMode: LaunchMode = .interactive
+    private var canRunScheduledSignatureUpdate = false
     private var scheduledLaunchTask: Task<Void, Never>?
 
     override init() {
@@ -139,6 +140,8 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
             hidden: mode.hidesDock(settings: settings, isUITesting: arguments.contains("--ui-testing")),
             suppressInitialMainWindow: shouldSuppressWindow
         )
+        canRunScheduledSignatureUpdate = mode != .scheduledSignatureUpdate
+            || shouldSuppressInitialMainWindow
         launchManager = manager
     }
 
@@ -147,6 +150,10 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
             launchManager.suppressInitialMainWindow(if: true)
         }
         guard launchMode == .scheduledSignatureUpdate else { return }
+        guard canRunScheduledSignatureUpdate else {
+            finishScheduledLaunch()
+            return
+        }
         scheduledLaunchTask = Task { [runScheduledSignatureUpdate, finishScheduledLaunch] in
             await runScheduledSignatureUpdate()
             finishScheduledLaunch()

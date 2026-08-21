@@ -18,6 +18,10 @@ enum LaunchMode: Equatable {
         isInteractive
     }
 
+    var startsInteractiveBackgroundServices: Bool {
+        self != .scheduledSignatureUpdate
+    }
+
     func hidesDock(settings: AppSettings, isUITesting: Bool) -> Bool {
         switch self {
         case .interactive, .scheduledScan:

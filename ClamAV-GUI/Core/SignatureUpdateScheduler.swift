@@ -90,6 +90,7 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
                 )
                 try dataWriter(replacement, plistURL, .atomic)
                 mutation.replacementWritten = true
+                try normalizePermissions(at: plistURL)
                 mutation.replacementBootstrapAttempted = true
                 try bootstrap(plistURL: plistURL)
             } else if snapshot.plistData != nil {
@@ -180,6 +181,7 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
                 withIntermediateDirectories: true
             )
             try dataWriter(plistData, url, .atomic)
+            try normalizePermissions(at: url)
         } else if fileManager.fileExists(atPath: url.path) {
             try fileManager.removeItem(at: url)
         }
@@ -194,6 +196,13 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
 
     private func bootstrap(plistURL: URL) throws {
         try launchctlRunner(.bootstrap(domain: domain, plistURL: plistURL))
+    }
+
+    private func normalizePermissions(at url: URL) throws {
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: url.path
+        )
     }
 
     private func bootout() throws {

@@ -9,14 +9,18 @@ struct ClamAVApp: App {
     @StateObject private var appState: AppState
     @StateObject private var menuBarManager = MenuBarManager()
     @StateObject private var initialLaunchHandler = InitialLaunchHandler()
-    private let launchMode = LaunchModeParser.parse(arguments: CommandLine.arguments)
-    @State private var presentsMenuBarExtra = LaunchModeParser
-        .parse(arguments: CommandLine.arguments)
-        .presentsUserInterface
+    private let launchMode: LaunchMode
+    @State private var presentsMenuBarExtra: Bool
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        let appState = AppState()
+        let launchMode = LaunchModeParser.parse(arguments: CommandLine.arguments)
+        self.launchMode = launchMode
+        _presentsMenuBarExtra = State(initialValue: launchMode.presentsUserInterface)
+
+        let appState = AppState(
+            startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices
+        )
         _appState = StateObject(wrappedValue: appState)
         ScheduledSignatureUpdateLifecycle.shared.install {
             await appState.runScheduledSignatureUpdate()

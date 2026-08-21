@@ -59,7 +59,8 @@ final class AppState: ObservableObject {
         externalScanRequestStore: ExternalScanRequestStore = ExternalScanRequestStore(),
         scanHistoryManager: ScanHistoryManager = ScanHistoryManager(),
         launchAtLoginManager: any LaunchAtLoginManaging = LaunchAtLoginManager(),
-        signatureUpdateScheduler: any SignatureUpdateScheduling = SignatureUpdateScheduler()
+        signatureUpdateScheduler: any SignatureUpdateScheduling = SignatureUpdateScheduler(),
+        startsInteractiveBackgroundServices: Bool = true
     ) {
         var loadedSettings = configManager.loadSettings()
         let settingsLoadState = configManager.lastSettingsLoadState
@@ -100,9 +101,11 @@ final class AppState: ObservableObject {
 
         loadQuarantinedFiles()
         resolvedNotificationManager.setupNotificationCategories()
-        setupNotifications()
-        setupFileWatcherAutoScan()
-        configureMonitoring()
+        if startsInteractiveBackgroundServices {
+            setupNotifications()
+            setupFileWatcherAutoScan()
+            configureMonitoring()
+        }
 
         if shouldPersistLaunchAtLoginStatus, settingsLoadState.allowsStartupReconciliationPersistence {
             persistLaunchAtLoginReconciliation()
@@ -344,7 +347,7 @@ final class AppState: ObservableObject {
         do {
             try signatureUpdateScheduler.reconcile(enabled: enabled, schedule: schedule)
         } catch {
-            if case SignatureUpdateSchedulerError.reconciliationAndRollbackFailed = error {
+            if Self.requiresIndeterminateScheduleState(after: error) {
                 signatureUpdateScheduleState = .indeterminate
             } else {
                 signatureUpdateScheduleState = .configured(
@@ -415,6 +418,17 @@ final class AppState: ObservableObject {
             return
         }
         await updateSignatures(using: settings)
+    }
+
+    private static func requiresIndeterminateScheduleState(after error: Error) -> Bool {
+        switch error {
+        case SignatureUpdateSchedulerError.reconciliationAndRollbackFailed:
+            return true
+        case SignatureUpdateSchedulerError.launchctlFailed(let command, _):
+            return command == "print"
+        default:
+            return false
+        }
     }
 
     func setLaunchAtLoginEnabled(_ enabled: Bool) {
