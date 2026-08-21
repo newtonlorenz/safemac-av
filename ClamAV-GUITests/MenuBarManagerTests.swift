@@ -100,6 +100,108 @@ final class MenuBarManagerTests: XCTestCase {
         window.close()
     }
 
+    func testMainWindowOrdersBeforeDeferredActivationAndCoalescesPendingFocus() {
+        let presentationEvents = MainWindowPresentationRecorder()
+        let application = MenuBarApplicationMock()
+        application.presentationEvents = presentationEvents
+        let manager = MenuBarManager(application: application)
+        let appState = AppState(startsInteractiveBackgroundServices: false)
+        let window = MainWindowOrderingWindow(
+            selectedTab: { appState.selectedTab },
+            presentationEvents: presentationEvents
+        )
+        let windowController = NSWindowController(window: window)
+        var scheduledActivations: [() -> Void] = []
+        let controller = MainWindowController(
+            appState: appState,
+            menuBarManager: manager,
+            windowController: windowController,
+            scheduleActivation: { scheduledActivations.append($0) }
+        )
+
+        controller.showMainWindow(selecting: .settings)
+        controller.showMainWindow(selecting: .dashboard)
+
+        XCTAssertEqual(appState.selectedTab, .dashboard)
+        XCTAssertEqual(window.selectionsWhenOrdered, [.settings, .dashboard])
+        XCTAssertEqual(
+            presentationEvents.events,
+            [.focus, .order, .focus, .order]
+        )
+        XCTAssertTrue(application.activationCalls.isEmpty)
+        XCTAssertEqual(scheduledActivations.count, 1)
+
+        scheduledActivations.removeFirst()()
+
+        XCTAssertEqual(application.activationCalls, [true])
+        XCTAssertEqual(presentationEvents.events.suffix(2), [.activate, .focus])
+
+        window.close()
+        controller.showMainWindow(selecting: .settings)
+
+        XCTAssertTrue(controller.windowController.window === window)
+        XCTAssertEqual(window.selectionsWhenOrdered.last, .settings)
+        XCTAssertEqual(scheduledActivations.count, 1)
+        XCTAssertEqual(application.activationCalls, [true])
+
+        scheduledActivations.removeFirst()()
+
+        XCTAssertEqual(application.activationCalls, [true, true])
+        XCTAssertEqual(presentationEvents.events.suffix(2), [.activate, .focus])
+        window.close()
+    }
+
+    func testMainWindowActivationRetriesOnlyOnceWhenApplicationRemainsInactive() {
+        let presentationEvents = MainWindowPresentationRecorder()
+        let application = MenuBarApplicationMock()
+        application.presentationEvents = presentationEvents
+        application.activationResults = [false, false]
+        let manager = MenuBarManager(application: application)
+        let appState = AppState(startsInteractiveBackgroundServices: false)
+        let window = MainWindowOrderingWindow(
+            selectedTab: { appState.selectedTab },
+            presentationEvents: presentationEvents,
+            allowsKeyStatus: false
+        )
+        var scheduledActivations: [() -> Void] = []
+        let controller = MainWindowController(
+            appState: appState,
+            menuBarManager: manager,
+            windowController: NSWindowController(window: window),
+            scheduleActivation: { scheduledActivations.append($0) }
+        )
+
+        controller.showMainWindow(selecting: nil)
+        XCTAssertEqual(scheduledActivations.count, 1)
+
+        scheduledActivations.removeFirst()()
+        XCTAssertEqual(scheduledActivations.count, 1)
+
+        scheduledActivations.removeFirst()()
+        XCTAssertTrue(scheduledActivations.isEmpty)
+        XCTAssertEqual(application.activationCalls, [true, true])
+        XCTAssertEqual(
+            presentationEvents.events.suffix(4),
+            [.activate, .focus, .activate, .focus]
+        )
+        window.close()
+    }
+
+    func testApplyingUnchangedDockVisibilityDoesNotPublishDuringViewUpdates() {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var publicationCount = 0
+        let observation = manager.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        XCTAssertTrue(manager.applyDockVisibility(hidden: false))
+
+        XCTAssertEqual(application.requestedPolicies, [.regular])
+        XCTAssertEqual(publicationCount, 0)
+        withExtendedLifetime(observation) {}
+    }
+
     func testDockVisibilityObservationRunsWindowlessAndReinstallCancelsOldPublisher() {
         let firstApplication = MenuBarApplicationMock()
         let secondApplication = MenuBarApplicationMock()
@@ -801,6 +903,64 @@ private final class MainWindowControllerMock: MainWindowControlling {
     }
 }
 
+@MainActor
+private final class MainWindowOrderingWindow: NSWindow {
+    private let selectedTab: () -> NavigationTab
+    private let presentationEvents: MainWindowPresentationRecorder
+    private let allowsKeyStatus: Bool
+    private(set) var selectionsWhenOrdered: [NavigationTab] = []
+    private var reportsKeyWindow = false
+
+    init(
+        selectedTab: @escaping () -> NavigationTab,
+        presentationEvents: MainWindowPresentationRecorder,
+        allowsKeyStatus: Bool = true
+    ) {
+        self.selectedTab = selectedTab
+        self.presentationEvents = presentationEvents
+        self.allowsKeyStatus = allowsKeyStatus
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        isReleasedWhenClosed = false
+    }
+
+    override var isKeyWindow: Bool {
+        reportsKeyWindow
+    }
+
+    override func orderFront(_ sender: Any?) {
+        selectionsWhenOrdered.append(selectedTab())
+        presentationEvents.events.append(.order)
+        super.orderFront(sender)
+    }
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        presentationEvents.events.append(.focus)
+        reportsKeyWindow = allowsKeyStatus
+        super.makeKeyAndOrderFront(sender)
+    }
+
+    override func close() {
+        reportsKeyWindow = false
+        super.close()
+    }
+}
+
+private enum MainWindowPresentationEvent: Equatable {
+    case order
+    case activate
+    case focus
+}
+
+@MainActor
+private final class MainWindowPresentationRecorder {
+    var events: [MainWindowPresentationEvent] = []
+}
+
 private actor MenuBarAsyncGate {
     private var continuation: CheckedContinuation<Void, Never>?
 
@@ -824,9 +984,12 @@ private enum MenuBarApplicationEvent: Equatable {
 @MainActor
 private final class MenuBarApplicationMock: ApplicationActivationPolicyApplying {
     var shouldAcceptPolicy = true
+    var activationResults: [Bool] = [true]
+    var presentationEvents: MainWindowPresentationRecorder?
     private(set) var requestedPolicies: [NSApplication.ActivationPolicy] = []
     private(set) var activationCalls: [Bool] = []
     var events: [MenuBarApplicationEvent] = []
+    private(set) var isActive = false
 
     func setActivationPolicy(_ activationPolicy: NSApplication.ActivationPolicy) -> Bool {
         requestedPolicies.append(activationPolicy)
@@ -836,6 +999,15 @@ private final class MenuBarApplicationMock: ApplicationActivationPolicyApplying 
     func activate(ignoringOtherApps: Bool) {
         activationCalls.append(ignoringOtherApps)
         events.append(.activateApplication)
+    }
+
+    func activateApplication() -> Bool {
+        activationCalls.append(true)
+        events.append(.activateApplication)
+        presentationEvents?.events.append(.activate)
+        let result = activationResults.isEmpty ? true : activationResults.removeFirst()
+        isActive = result
+        return result
     }
 
 }
