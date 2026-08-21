@@ -15,6 +15,18 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(manager.status, .enabled)
     }
 
+    func testLaunchAtLoginManagerAttemptsRegistrationFromNotFoundStatus() throws {
+        let service = AppStateMockLoginItemService(status: .notFound)
+        service.statusAfterRegister = .enabled
+        let manager = LaunchAtLoginManager(service: service)
+
+        try manager.setEnabled(true)
+
+        XCTAssertEqual(service.registerCalls, 1)
+        XCTAssertEqual(service.unregisterCalls, 0)
+        XCTAssertEqual(manager.status, .enabled)
+    }
+
     func testLaunchAtLoginManagerMapsSystemStatuses() {
         let service = AppStateMockLoginItemService(status: .notRegistered)
         let manager = LaunchAtLoginManager(service: service)
@@ -135,6 +147,25 @@ final class AppStateTests: XCTestCase {
     func testEnablingLaunchAtLoginPersistsRegisteredState() {
         let mockConfig = AppStateMockConfigManager(settings: .default)
         let service = AppStateMockLoginItemService(status: .notRegistered)
+        service.statusAfterRegister = .enabled
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: service)
+        )
+
+        appState.setLaunchAtLoginEnabled(true)
+
+        XCTAssertEqual(service.registerCalls, 1)
+        XCTAssertTrue(appState.settings.launchAtLogin)
+        XCTAssertTrue(mockConfig.settings.launchAtLogin)
+        XCTAssertEqual(appState.launchAtLoginStatus, .enabled)
+        XCTAssertNil(appState.launchAtLoginError)
+    }
+
+    func testEnablingLaunchAtLoginFromNotFoundStatusPersistsRegisteredState() {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let service = AppStateMockLoginItemService(status: .notFound)
         service.statusAfterRegister = .enabled
         let appState = AppState(
             configManager: mockConfig,
