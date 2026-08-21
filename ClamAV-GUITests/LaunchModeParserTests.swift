@@ -7,6 +7,16 @@ final class LaunchModeParserTests: XCTestCase {
         XCTAssertEqual(mode, .interactive)
     }
 
+    func testParsesScheduledSignatureUpdateMode() {
+        let mode = LaunchModeParser.parse(arguments: [
+            "ClamAV-GUI",
+            "--scheduled-signature-update"
+        ])
+
+        XCTAssertEqual(mode, .scheduledSignatureUpdate)
+        XCTAssertFalse(mode.isInteractive)
+    }
+
     func testParsesScheduledScanWithRepeatedPaths() {
         let jobID = UUID()
         let mode = LaunchModeParser.parse(arguments: [
