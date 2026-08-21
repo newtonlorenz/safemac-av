@@ -101,6 +101,8 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
             shouldSuppressWindow = true
         case .scheduledScan:
             shouldSuppressWindow = false
+        case .signatureUpdate:
+            shouldSuppressWindow = true
         }
 
         shouldSuppressInitialMainWindow = manager.prepareForLaunch(

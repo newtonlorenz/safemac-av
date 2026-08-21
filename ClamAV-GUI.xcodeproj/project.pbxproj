@@ -25,6 +25,7 @@
 		A1000001200000000000033 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000036 /* OnboardingView.swift */; };
 		A1000001200000000000034 /* AutomationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000037 /* AutomationSettingsView.swift */; };
 		A1000001200000000000038 /* LaunchAtLoginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000038 /* LaunchAtLoginManager.swift */; };
+		A1000001200000000000076 /* SignatureUpdateScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000076 /* SignatureUpdateScheduler.swift */; };
 		A1000001200000000000039 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000039 /* Assets.xcassets */; };
 		A1000001200000000000041 /* FinderExtensionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000041 /* FinderExtensionManager.swift */; };
 		A1000001200000000000073 /* GlassDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000073 /* GlassDesignSystem.swift */; };
@@ -61,6 +62,7 @@
 		A1000001200000000000072 /* GlassAppearancePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000072 /* GlassAppearancePolicyTests.swift */; };
 		C0DE00012000000000000075 /* MenuBarManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000075 /* MenuBarManagerTests.swift */; };
 		A1000001200000000000074 /* NotificationManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000074 /* NotificationManagerTests.swift */; };
+		A1000001200000000000077 /* SignatureUpdateSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000077 /* SignatureUpdateSchedulerTests.swift */; };
 			A1000001200000000000070 /* ClamAV_GUIUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000070 /* ClamAV_GUIUITests.swift */; };
 			A1000001200000000000057 /* FinderSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000057 /* FinderSync.swift */; };
 			A1000001200000000000058 /* ClamAV-GUI-Finder.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A1000002200000000000059 /* ClamAV-GUI-Finder.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -141,6 +143,7 @@
 		A1000002200000000000036 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		A1000002200000000000037 /* AutomationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationSettingsView.swift; sourceTree = "<group>"; };
 		A1000002200000000000038 /* LaunchAtLoginManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginManager.swift; sourceTree = "<group>"; };
+		A1000002200000000000076 /* SignatureUpdateScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureUpdateScheduler.swift; sourceTree = "<group>"; };
 		A1000002200000000000039 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A1000002200000000000041 /* FinderExtensionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderExtensionManager.swift; sourceTree = "<group>"; };
 		A1000002200000000000073 /* GlassDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassDesignSystem.swift; sourceTree = "<group>"; };
@@ -162,6 +165,7 @@
 		A1000002200000000000072 /* GlassAppearancePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassAppearancePolicyTests.swift; sourceTree = "<group>"; };
 		C0DE00022000000000000075 /* MenuBarManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarManagerTests.swift; sourceTree = "<group>"; };
 		A1000002200000000000074 /* NotificationManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManagerTests.swift; sourceTree = "<group>"; };
+		A1000002200000000000077 /* SignatureUpdateSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureUpdateSchedulerTests.swift; sourceTree = "<group>"; };
 		A1000002200000000000070 /* ClamAV_GUIUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClamAV_GUIUITests.swift; sourceTree = "<group>"; };
 		A1000002200000000000071 /* ClamAV-GUIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "ClamAV-GUIUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000002200000000000057 /* FinderSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderSync.swift; sourceTree = "<group>"; };
@@ -270,6 +274,7 @@
 				A1000002200000000000033 /* AutoScanManager.swift */,
 				A1000002200000000000034 /* IdleDetector.swift */,
 				A1000002200000000000038 /* LaunchAtLoginManager.swift */,
+				A1000002200000000000076 /* SignatureUpdateScheduler.swift */,
 				A1000002200000000000041 /* FinderExtensionManager.swift */,
 			);
 			path = Core;
@@ -408,6 +413,7 @@
 				A1000002200000000000072 /* GlassAppearancePolicyTests.swift */,
 				C0DE00022000000000000075 /* MenuBarManagerTests.swift */,
 				A1000002200000000000074 /* NotificationManagerTests.swift */,
+				A1000002200000000000077 /* SignatureUpdateSchedulerTests.swift */,
 			);
 			path = "ClamAV-GUITests";
 			sourceTree = "<group>";
@@ -627,6 +633,7 @@
 				A1000001200000000000033 /* OnboardingView.swift in Sources */,
 				A1000001200000000000034 /* AutomationSettingsView.swift in Sources */,
 				A1000001200000000000038 /* LaunchAtLoginManager.swift in Sources */,
+				A1000001200000000000076 /* SignatureUpdateScheduler.swift in Sources */,
 				A1000001200000000000041 /* FinderExtensionManager.swift in Sources */,
 				A1000001200000000000073 /* GlassDesignSystem.swift in Sources */,
 			);
@@ -647,6 +654,7 @@
 				A1000001200000000000072 /* GlassAppearancePolicyTests.swift in Sources */,
 				C0DE00012000000000000075 /* MenuBarManagerTests.swift in Sources */,
 				A1000001200000000000074 /* NotificationManagerTests.swift in Sources */,
+				A1000001200000000000077 /* SignatureUpdateSchedulerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

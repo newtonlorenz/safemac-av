@@ -85,10 +85,15 @@ struct ClamAVApp: App {
         await initialLaunchHandler.handle(
             arguments: CommandLine.arguments,
             drainExternalScanRequests: {
+                appState.configureSignatureUpdateSchedule()
                 await appState.drainExternalScanRequests()
             },
             runScheduledScan: { jobID, paths in
                 await appState.runScheduledScan(jobID: jobID, paths: paths)
+            },
+            runSignatureUpdate: {
+                await appState.runScheduledSignatureUpdate()
+                NSApplication.shared.terminate(nil)
             }
         )
     }
@@ -101,7 +106,8 @@ final class InitialLaunchHandler: ObservableObject {
     func handle(
         arguments: [String],
         drainExternalScanRequests: () async -> Void,
-        runScheduledScan: (UUID?, [URL]) async -> Void
+        runScheduledScan: (UUID?, [URL]) async -> Void,
+        runSignatureUpdate: () async -> Void
     ) async {
         guard !didHandleInitialLaunch else { return }
         didHandleInitialLaunch = true
@@ -111,6 +117,8 @@ final class InitialLaunchHandler: ObservableObject {
             await drainExternalScanRequests()
         case .scheduledScan(let jobID, let paths):
             await runScheduledScan(jobID, paths)
+        case .signatureUpdate:
+            await runSignatureUpdate()
         }
     }
 }

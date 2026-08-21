@@ -3,6 +3,7 @@ import Foundation
 enum LaunchMode: Equatable {
     case interactive
     case scheduledScan(jobID: UUID?, paths: [URL])
+    case signatureUpdate
 
     var isInteractive: Bool {
         if case .interactive = self { return true }
@@ -12,6 +13,10 @@ enum LaunchMode: Equatable {
 
 enum LaunchModeParser {
     static func parse(arguments: [String]) -> LaunchMode {
+        if arguments.contains("--update-signatures") {
+            return .signatureUpdate
+        }
+
         guard arguments.contains("--scheduled-scan") else { return .interactive }
 
         var jobID: UUID?
