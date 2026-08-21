@@ -189,6 +189,25 @@ final class MenuBarManagerTests: XCTestCase {
         )
     }
 
+    func testMainWindowCandidateIgnoresUnrelatedAndPanelWindows() {
+        let unrelatedWindow = MainCapableTestWindow(
+            contentRect: .zero,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        unrelatedWindow.identifier = NSUserInterfaceItemIdentifier("settings-window")
+        let panel = MainCapableTestPanel(
+            contentRect: .zero,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+
+        XCTAssertNil(MenuBarManager.mainWindowCandidate(in: [unrelatedWindow]))
+        XCTAssertNil(MenuBarManager.mainWindowCandidate(in: [panel]))
+    }
+
     func testHiddenDockLaunchSuppressesInitialMainWindowAfterAccessoryPolicyIsAccepted() {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
@@ -385,6 +404,10 @@ final class MenuBarManagerTests: XCTestCase {
 }
 
 private final class MainCapableTestWindow: NSWindow {
+    override var canBecomeMain: Bool { true }
+}
+
+private final class MainCapableTestPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
