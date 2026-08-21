@@ -69,6 +69,20 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(application.requestedPolicies, [.regular])
         XCTAssertEqual(application.closeMainWindowCalls, 0)
     }
+
+    func testHiddenDockScheduledLaunchKeepsInitialWindowForScheduledTask() {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+
+        let shouldSuppress = manager.prepareForLaunch(
+            hidden: true,
+            suppressInitialMainWindow: false
+        )
+        manager.suppressInitialMainWindow(if: shouldSuppress)
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 0)
+    }
 }
 
 private enum MenuBarApplicationEvent: Equatable {
