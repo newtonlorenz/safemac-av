@@ -27,6 +27,7 @@ final class ConfigManagerTests: XCTestCase {
         XCTAssertFalse(settings.freshclamPath.isEmpty)
         XCTAssertFalse(settings.quarantineDirectory.isEmpty)
         XCTAssertFalse(settings.defaultExclusions.isEmpty)
+        XCTAssertEqual(configManager.lastSettingsLoadState, .missing)
     }
 
     func testDefaultExclusionsContainCommonPaths() {
@@ -47,6 +48,7 @@ final class ConfigManagerTests: XCTestCase {
 
         XCTAssertEqual(loadedSettings.customExclusions, ["test_exclusion"])
         XCTAssertEqual(loadedSettings.batchScanIntervalMinutes, 10)
+        XCTAssertEqual(configManager.lastSettingsLoadState, .loaded)
     }
 
     func testLoadCorruptedSettingsReturnsDefaultsWithoutOverwritingFile() throws {
@@ -60,6 +62,10 @@ final class ConfigManagerTests: XCTestCase {
 
         XCTAssertEqual(loadedSettings, .default)
         XCTAssertEqual(try Data(contentsOf: settingsURL), corruptedData)
+        guard case .fallbackDueToError(let reason) = configManager.lastSettingsLoadState else {
+            return XCTFail("Expected fallbackDueToError, got \(configManager.lastSettingsLoadState)")
+        }
+        XCTAssertFalse(reason.isEmpty)
     }
 
     func testSaveSettingsThrowsWhenDestinationCannotBeWritten() throws {

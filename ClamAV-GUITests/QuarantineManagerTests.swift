@@ -294,6 +294,7 @@ final class QuarantineManagerTests: XCTestCase {
 
 class MockConfigManager: ConfigManagerProtocol {
     private let mockQuarantineDirectory: String
+    let lastSettingsLoadState: SettingsLoadState = .loaded
 
     init(quarantineDirectory: String) {
         self.mockQuarantineDirectory = quarantineDirectory

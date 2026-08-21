@@ -31,6 +31,7 @@ SafeMac AV turns ClamAV's command-line engine into a complete local malware-scan
 - **Respond to detections.** Review findings, quarantine suspicious files, verify restores, and confirm permanent deletion.
 - **Automate routine checks.** Schedule daily, weekly, or monthly scans and keep signatures current with `freshclam`.
 - **Start protection with your Mac.** Enable SafeMac AV as a login item from Settings, with its current macOS approval status shown in the app.
+- **Receive local alerts.** Get scan, detection, signature-update, and scheduled-scan notifications, with optional clean-download notices.
 - **Stay in control.** Configure exclusions and limits, inspect history and logs, and pause, resume, or cancel scans.
 - **Use your preferred engine mode.** Run `clamscan` directly or connect to an optional local `clamdscan` service.
 
@@ -176,6 +177,8 @@ Local state can contain sensitive path names and threat results:
 - Quarantine by default: `~/.clamav-quarantine/`
 - Logs and scan history: held in application memory for the current run
 
+Local notifications deliberately omit file names, full paths, threat signatures, schedule names, and raw update errors. Open SafeMac AV to review those details. Notification permission and preferences, including threat sounds and clean-download alerts, are controlled in Settings; clean-download alerts are off by default.
+
 The existing `ClamAV-GUI` support paths, scheduled-job metadata and labels, bundle identifiers, target, and scheme remain unchanged for compatibility with installed settings, Finder integration, and existing build automation.
 
 See [SECURITY.md](SECURITY.md) for the supported reporting process.
@@ -187,7 +190,7 @@ See [SECURITY.md](SECURITY.md) for the supported reporting process.
 - Scheduled scans are per-user `launchd` jobs. The app must remain at the path captured by the job, and the user must be logged in.
 - The Finder extension must be signed with the app and enabled manually in System Settings. Forks also need their own compatible bundle/app-group configuration.
 - Launch at login uses the macOS 13+ Login Items service. macOS may require the user to approve SafeMac AV in System Settings before it can open automatically.
-- User notifications and a standalone menu-bar experience are not complete yet.
+- A standalone menu-bar experience is not complete yet.
 - Source builds are unsigned unless you configure an Apple Developer identity. A successful local build is not the same as a signed and notarized distribution.
 
 ## Project layout
