@@ -74,6 +74,8 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     private var pendingMainWindowSelection: NavigationTab?
     private var shouldStartInitialLaunchAfterPresentation = false
     private var didStartInitialApplicationLaunch = false
+    private var isConfiguredForLaunch: Bool
+    private var hasPendingLaunchUntilConfigured = false
     private var launchMode: LaunchMode = .interactive
     private var canRunScheduledSignatureUpdate = false
     private var shouldPresentMainWindowAtLaunch = false
@@ -101,6 +103,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         finishScheduledLaunch = {
             NSApplication.shared.terminate(nil)
         }
+        isConfiguredForLaunch = false
         super.init()
     }
 
@@ -116,7 +119,8 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         runInitialApplicationLaunch: @escaping (LaunchMode) async -> Void = { _ in },
         runActiveInteractiveMaintenance: @escaping (LaunchMode) async -> Void = { _ in },
         runScheduledSignatureUpdate: @escaping () async -> Void = {},
-        finishScheduledLaunch: @escaping () -> Void = {}
+        finishScheduledLaunch: @escaping () -> Void = {},
+        startsConfigured: Bool = true
     ) {
         providedManager = manager
         self.settingsProvider = settingsProvider
@@ -128,6 +132,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         self.runActiveInteractiveMaintenance = runActiveInteractiveMaintenance
         self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
         self.finishScheduledLaunch = finishScheduledLaunch
+        isConfiguredForLaunch = startsConfigured
         super.init()
     }
 
@@ -148,6 +153,11 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         self.runInitialApplicationLaunch = runInitialApplicationLaunch
         self.runActiveInteractiveMaintenance = runActiveInteractiveMaintenance
         self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
+        isConfiguredForLaunch = true
+        if hasPendingLaunchUntilConfigured {
+            hasPendingLaunchUntilConfigured = false
+            continueApplicationLaunch()
+        }
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -179,11 +189,19 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !didHandleApplicationLaunch else { return }
         didHandleApplicationLaunch = true
+        if launchMode == .scheduledSignatureUpdate, !canRunScheduledSignatureUpdate {
+            finishScheduledLaunch()
+            return
+        }
+        guard isConfiguredForLaunch else {
+            hasPendingLaunchUntilConfigured = true
+            return
+        }
+        continueApplicationLaunch()
+    }
+
+    private func continueApplicationLaunch() {
         if launchMode == .scheduledSignatureUpdate {
-            guard canRunScheduledSignatureUpdate else {
-                finishScheduledLaunch()
-                return
-            }
             scheduledLaunchTask = Task { [runScheduledSignatureUpdate, finishScheduledLaunch] in
                 await runScheduledSignatureUpdate()
                 finishScheduledLaunch()
