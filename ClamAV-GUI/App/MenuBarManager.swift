@@ -12,7 +12,7 @@ protocol ApplicationActivationPolicyApplying: AnyObject {
 extension NSApplication: ApplicationActivationPolicyApplying {
     func closeMainWindows() {
         windows
-            .filter { $0.canBecomeMain && $0.isVisible }
+            .filter(\.canBecomeMain)
             .forEach { $0.close() }
     }
 }
@@ -35,8 +35,11 @@ final class MenuBarManager: ObservableObject {
         return true
     }
 
-    func prepareForLaunch(hidden: Bool) -> Bool {
-        applyDockVisibility(hidden: hidden) && hidden
+    func prepareForLaunch(
+        hidden: Bool,
+        suppressInitialMainWindow: Bool = true
+    ) -> Bool {
+        applyDockVisibility(hidden: hidden) && hidden && suppressInitialMainWindow
     }
 
     func suppressInitialMainWindow(if shouldSuppress: Bool) {
@@ -52,15 +55,40 @@ final class MenuBarManager: ObservableObject {
 
 @MainActor
 final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
+    private let providedManager: MenuBarManager?
+    private let settingsProvider: () -> AppSettings
+    private let argumentsProvider: () -> [String]
     private var launchManager: MenuBarManager?
     private var shouldSuppressInitialMainWindow = false
 
-    func applicationWillFinishLaunching(_ notification: Notification) {
-        let manager = MenuBarManager()
-        let settings = ConfigManager().loadSettings()
-        let shouldHideDock = settings.hideFromDock && !CommandLine.arguments.contains("--ui-testing")
+    init(
+        manager: MenuBarManager? = nil,
+        settingsProvider: (() -> AppSettings)? = nil,
+        argumentsProvider: (() -> [String])? = nil
+    ) {
+        providedManager = manager
+        self.settingsProvider = settingsProvider ?? { ConfigManager().loadSettings() }
+        self.argumentsProvider = argumentsProvider ?? { CommandLine.arguments }
+        super.init()
+    }
 
-        shouldSuppressInitialMainWindow = manager.prepareForLaunch(hidden: shouldHideDock)
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        let manager = providedManager ?? MenuBarManager()
+        let settings = settingsProvider()
+        let arguments = argumentsProvider()
+        let shouldHideDock = settings.hideFromDock && !arguments.contains("--ui-testing")
+        let shouldSuppressWindow: Bool
+        switch LaunchModeParser.parse(arguments: arguments) {
+        case .interactive:
+            shouldSuppressWindow = true
+        case .scheduledScan:
+            shouldSuppressWindow = false
+        }
+
+        shouldSuppressInitialMainWindow = manager.prepareForLaunch(
+            hidden: shouldHideDock,
+            suppressInitialMainWindow: shouldSuppressWindow
+        )
         launchManager = manager
     }
 
