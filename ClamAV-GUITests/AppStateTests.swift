@@ -134,6 +134,136 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(appState.isUpdatingSignatures)
     }
 
+    func testThreatScanSendsDetectionNotificationInsteadOfCompletionNotification() async throws {
+        var settings = AppSettings.default
+        settings.showNotifications = true
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications
+        )
+        let privatePath = "/Users/alice/Private/medical-record.pdf"
+        runner.nextScanReportInfectedFiles = [
+            ScanResult(path: privatePath, threatName: "Test.Signature")
+        ]
+        var options = ScanOptions.default
+        options.quarantineInfected = false
+
+        let scan = Task {
+            await appState.startScan(
+                paths: [URL(fileURLWithPath: privatePath)],
+                options: options,
+                source: .manual
+            )
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan()
+        let _ = await scan.value
+
+        XCTAssertEqual(notifications.threatNotifications.count, 1)
+        XCTAssertEqual(notifications.threatNotifications.first?.first?.path, privatePath)
+        XCTAssertTrue(notifications.scanCompleteReports.isEmpty)
+    }
+
+    func testCleanDownloadNotificationIsOnlyRequestedWhenOptedIn() async throws {
+        var settings = AppSettings.default
+        settings.showNotifications = true
+        settings.notifyOnCleanFiles = false
+        let mockConfig = AppStateMockConfigManager(settings: settings)
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications
+        )
+        let firstDownload = URL(fileURLWithPath: "/Users/alice/Downloads/first.pdf")
+
+        let firstScan = Task {
+            await appState.startScan(paths: [firstDownload], options: .default, source: .download)
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan()
+        let _ = await firstScan.value
+        XCTAssertTrue(notifications.cleanFileURLs.isEmpty)
+
+        appState.settings.notifyOnCleanFiles = true
+        let secondDownload = URL(fileURLWithPath: "/Users/alice/Downloads/second.pdf")
+        let secondScan = Task {
+            await appState.startScan(paths: [secondDownload], options: .default, source: .download)
+        }
+        try await waitUntil { runner.scanPaths.count == 2 }
+        runner.resumeNextScan()
+        let _ = await secondScan.value
+
+        XCTAssertEqual(notifications.cleanFileURLs, [secondDownload])
+        XCTAssertTrue(notifications.scanCompleteReports.isEmpty)
+    }
+
+    func testSignatureUpdateSendsResultNotification() async throws {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let freshclamRunner = AppStateDelayedFreshclamRunner()
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            freshclamRunner: freshclamRunner,
+            notificationManager: notifications
+        )
+
+        let update = Task { await appState.updateSignatures() }
+        try await waitUntil { freshclamRunner.updateCalls == 1 }
+        freshclamRunner.complete(with: .success(main: "63", daily: "28022", bytecode: "339"))
+        await update.value
+
+        XCTAssertEqual(notifications.signatureResults.map(\.status), [.success])
+    }
+
+    func testScheduledScanSendsStartingNotificationBeforeRunning() async throws {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications
+        )
+        let scheduledPath = URL(fileURLWithPath: "/tmp/scheduled")
+
+        let scan = Task {
+            await appState.runScheduledScan(jobID: nil, paths: [scheduledPath])
+        }
+        try await waitUntil {
+            notifications.scheduledJobNames == ["Scheduled scan"] && runner.scanPaths.count == 1
+        }
+        runner.resumeNextScan()
+        await scan.value
+
+        XCTAssertEqual(notifications.scheduledJobNames, ["Scheduled scan"])
+    }
+
+    func testRequestNotificationPermissionPublishesManagerState() async {
+        let notifications = AppStateMockNotificationManager()
+        notifications.permissionStatus = .notDetermined
+        notifications.statusAfterRequest = .authorized
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            notificationManager: notifications
+        )
+
+        await appState.requestNotificationPermission()
+
+        XCTAssertEqual(appState.notificationPermissionStatus, .authorized)
+        XCTAssertNil(appState.notificationPermissionError)
+    }
+
     func testProtectionScoreIsCachedDuringScanProgressUpdates() {
         var settings = AppSettings.default
         settings.monitoringEnabled = false
@@ -551,5 +681,46 @@ private final class AppStateControlledRunner: ClamAVRunnerProtocol {
 
     func resumeScan() {
         scanIsPaused = false
+    }
+}
+
+@MainActor
+private final class AppStateMockNotificationManager: NotificationManaging {
+    var permissionStatus: NotificationPermissionStatus = .authorized
+    var permissionError: String?
+    var statusAfterRequest: NotificationPermissionStatus?
+    private(set) var threatNotifications: [[ScanResult]] = []
+    private(set) var scanCompleteReports: [ScanReport] = []
+    private(set) var cleanFileURLs: [URL] = []
+    private(set) var signatureResults: [UpdateResult] = []
+    private(set) var scheduledJobNames: [String] = []
+
+    func setupNotificationCategories() {}
+    func refreshPermissionStatus() async {}
+
+    func requestPermission() async {
+        if let statusAfterRequest {
+            permissionStatus = statusAfterRequest
+        }
+    }
+
+    func sendScanComplete(report: ScanReport, settings: AppSettings) async {
+        scanCompleteReports.append(report)
+    }
+
+    func sendThreatDetected(threats: [ScanResult], settings: AppSettings) async {
+        threatNotifications.append(threats)
+    }
+
+    func sendFileClean(url: URL, settings: AppSettings) async {
+        cleanFileURLs.append(url)
+    }
+
+    func sendSignaturesUpdated(result: UpdateResult, settings: AppSettings) async {
+        signatureResults.append(result)
+    }
+
+    func sendScheduledScanStarting(jobName: String, settings: AppSettings) async {
+        scheduledJobNames.append(jobName)
     }
 }
