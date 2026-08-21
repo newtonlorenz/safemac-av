@@ -12,16 +12,12 @@ final class MenuBarManagerTests: XCTestCase {
         await handler.handle(
             launchMode: .interactive,
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in scheduledCalls += 1 },
-            runScheduledSignatureUpdate: {},
-            finishScheduledLaunch: {}
+            runScheduledScan: { _, _ in scheduledCalls += 1 }
         )
         await handler.handle(
             launchMode: .interactive,
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in scheduledCalls += 1 },
-            runScheduledSignatureUpdate: {},
-            finishScheduledLaunch: {}
+            runScheduledScan: { _, _ in scheduledCalls += 1 }
         )
 
         XCTAssertEqual(drainCalls, 1)
@@ -38,16 +34,12 @@ final class MenuBarManagerTests: XCTestCase {
         await handler.handle(
             launchMode: .scheduledScan(jobID: jobID, paths: [scheduledPath]),
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) },
-            runScheduledSignatureUpdate: {},
-            finishScheduledLaunch: {}
+            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
         )
         await handler.handle(
             launchMode: .scheduledScan(jobID: jobID, paths: [scheduledPath]),
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) },
-            runScheduledSignatureUpdate: {},
-            finishScheduledLaunch: {}
+            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
         )
 
         XCTAssertEqual(drainCalls, 0)
@@ -59,27 +51,21 @@ final class MenuBarManagerTests: XCTestCase {
     func testInitialLaunchHandlerLeavesScheduledSignatureUpdateToApplicationLifecycle() async {
         let handler = InitialLaunchHandler()
         var drainCalls = 0
-        var signatureUpdateCalls = 0
-        var finishCalls = 0
+        var scheduledScanCalls = 0
 
         await handler.handle(
             launchMode: .scheduledSignatureUpdate,
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in },
-            runScheduledSignatureUpdate: { signatureUpdateCalls += 1 },
-            finishScheduledLaunch: { finishCalls += 1 }
+            runScheduledScan: { _, _ in scheduledScanCalls += 1 }
         )
         await handler.handle(
             launchMode: .scheduledSignatureUpdate,
             drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in },
-            runScheduledSignatureUpdate: { signatureUpdateCalls += 1 },
-            finishScheduledLaunch: { finishCalls += 1 }
+            runScheduledScan: { _, _ in scheduledScanCalls += 1 }
         )
 
         XCTAssertEqual(drainCalls, 0)
-        XCTAssertEqual(signatureUpdateCalls, 0)
-        XCTAssertEqual(finishCalls, 0)
+        XCTAssertEqual(scheduledScanCalls, 0)
     }
 
     func testApplicationDelegateSupportsRuntimeDefaultInitialization() {

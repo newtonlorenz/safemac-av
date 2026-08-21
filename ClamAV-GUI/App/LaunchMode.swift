@@ -14,6 +14,10 @@ enum LaunchMode: Equatable {
         self != .scheduledSignatureUpdate
     }
 
+    var runsActiveSceneMaintenance: Bool {
+        isInteractive
+    }
+
     func hidesDock(settings: AppSettings, isUITesting: Bool) -> Bool {
         switch self {
         case .interactive, .scheduledScan:
@@ -56,5 +60,21 @@ enum LaunchModeParser {
 
         guard jobID != nil || !paths.isEmpty else { return .interactive }
         return .scheduledScan(jobID: jobID, paths: paths)
+    }
+}
+
+enum SignatureScheduleReconciliationPolicy {
+    private static let canonicalInstalledBundleURL = URL(
+        fileURLWithPath: "/Applications/SafeMac AV.app",
+        isDirectory: true
+    )
+
+    static func shouldReconcile(bundleURL: URL, isAutomatedTest: Bool) -> Bool {
+        guard !isAutomatedTest else { return false }
+        return normalized(bundleURL) == normalized(canonicalInstalledBundleURL)
+    }
+
+    private static func normalized(_ url: URL) -> URL {
+        url.standardizedFileURL.resolvingSymlinksInPath()
     }
 }

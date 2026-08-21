@@ -343,6 +343,46 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         }
     }
 
+    func testDefaultLaunchctlPrintRecognizesMissingServiceWithoutMutatingDisk() throws {
+        let fixture = try makeFixture()
+        let scheduler = SignatureUpdateScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            userID: getuid()
+        )
+
+        try scheduler.reconcile(enabled: false, schedule: .daily9am)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
+    }
+
+    func testDefaultLaunchctlRunnerBootstrapsAndToleratesMissingBootout() throws {
+        let fixture = try makeFixture()
+        let successfulLaunchctl = try makeLaunchctlStub(exitStatus: 0, in: fixture)
+        let installer = SignatureUpdateScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            userID: userID,
+            launchctlExecutableURL: successfulLaunchctl,
+            loadedStatusProvider: { false }
+        )
+
+        try installer.reconcile(enabled: true, schedule: .daily9am)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.plistURL.path))
+
+        let missingServiceLaunchctl = try makeLaunchctlStub(exitStatus: 113, in: fixture)
+        let remover = SignatureUpdateScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            userID: userID,
+            launchctlExecutableURL: missingServiceLaunchctl,
+            loadedStatusProvider: { true }
+        )
+
+        try remover.reconcile(enabled: false, schedule: .daily9am)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
+    }
+
     private var domain: String { "gui/\(userID)" }
     private var serviceTarget: String { "\(domain)/\(SignatureUpdateScheduler.label)" }
 
@@ -369,6 +409,18 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         return try XCTUnwrap(
             PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         )
+    }
+
+    private func makeLaunchctlStub(
+        exitStatus: Int,
+        in fixture: SignatureSchedulerFixture
+    ) throws -> URL {
+        let url = fixture.launchAgentsDirectory
+            .deletingLastPathComponent()
+            .appendingPathComponent("launchctl-\(exitStatus)")
+        try Data("#!/bin/sh\nexit \(exitStatus)\n".utf8).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        return url
     }
 
     private func makeFixture() throws -> SignatureSchedulerFixture {

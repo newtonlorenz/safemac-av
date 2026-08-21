@@ -2,6 +2,21 @@ import AppKit
 import SwiftUI
 
 @MainActor
+final class ScheduledSignatureUpdateLifecycle {
+    static let shared = ScheduledSignatureUpdateLifecycle()
+
+    private var operation: (() async -> Void)?
+
+    func install(operation: @escaping () async -> Void) {
+        self.operation = operation
+    }
+
+    func run() async {
+        await operation?()
+    }
+}
+
+@MainActor
 protocol ApplicationActivationPolicyApplying: AnyObject {
     @discardableResult
     func setActivationPolicy(_ activationPolicy: NSApplication.ActivationPolicy) -> Bool
@@ -69,24 +84,38 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     private let providedManager: MenuBarManager?
     private let settingsProvider: () -> AppSettings
     private let argumentsProvider: () -> [String]
+    private let runScheduledSignatureUpdate: () async -> Void
+    private let finishScheduledLaunch: () -> Void
     private var launchManager: MenuBarManager?
     private var shouldSuppressInitialMainWindow = false
+    private var launchMode: LaunchMode = .interactive
+    private var scheduledLaunchTask: Task<Void, Never>?
 
     override init() {
         providedManager = nil
         settingsProvider = { ConfigManager().loadSettings() }
         argumentsProvider = { CommandLine.arguments }
+        runScheduledSignatureUpdate = {
+            await ScheduledSignatureUpdateLifecycle.shared.run()
+        }
+        finishScheduledLaunch = {
+            NSApplication.shared.terminate(nil)
+        }
         super.init()
     }
 
     init(
         manager: MenuBarManager,
         settingsProvider: @escaping () -> AppSettings,
-        argumentsProvider: @escaping () -> [String]
+        argumentsProvider: @escaping () -> [String],
+        runScheduledSignatureUpdate: @escaping () async -> Void = {},
+        finishScheduledLaunch: @escaping () -> Void = {}
     ) {
         providedManager = manager
         self.settingsProvider = settingsProvider
         self.argumentsProvider = argumentsProvider
+        self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
+        self.finishScheduledLaunch = finishScheduledLaunch
         super.init()
     }
 
@@ -95,6 +124,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         let settings = settingsProvider()
         let arguments = argumentsProvider()
         let mode = LaunchModeParser.parse(arguments: arguments)
+        launchMode = mode
         let shouldSuppressWindow: Bool
         switch mode {
         case .interactive:
@@ -113,9 +143,13 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard shouldSuppressInitialMainWindow, let launchManager else { return }
-        DispatchQueue.main.async {
+        if shouldSuppressInitialMainWindow, let launchManager {
             launchManager.suppressInitialMainWindow(if: true)
+        }
+        guard launchMode == .scheduledSignatureUpdate else { return }
+        scheduledLaunchTask = Task { [runScheduledSignatureUpdate, finishScheduledLaunch] in
+            await runScheduledSignatureUpdate()
+            finishScheduledLaunch()
         }
     }
 }

@@ -909,6 +909,10 @@ private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol, @un
         }
     }
 
+    func update(using settings: AppSettings) async throws -> UpdateResult {
+        try await update()
+    }
+
     func checkForUpdates() async throws -> Bool {
         true
     }
