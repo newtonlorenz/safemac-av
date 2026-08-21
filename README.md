@@ -17,7 +17,7 @@
 
 SafeMac AV turns ClamAV's command-line engine into a complete local malware-scanning workflow. Scan on demand, watch folders, update signatures, quarantine detections, and schedule repeat checks. Review history and start scans from Finder. There are no subscriptions, telemetry, or cloud uploads.
 
-**[Download the latest signed and notarized release →](https://github.com/newtonlorenz/safemac-av/releases/latest)** *(v1.0.0 uses the previous ClamAV GUI package name)*
+**[Download the latest signed and notarized release →](https://github.com/newtonlorenz/safemac-av/releases/latest)** *(v1.0.0 uses the previous ClamAV GUI package name; v1.1.0 and later use SafeMac AV)*
 
 ![SafeMac AV dashboard](docs/images/dashboard.png)
 
@@ -48,7 +48,7 @@ Both Apple silicon (`/opt/homebrew`) and Intel Homebrew (`/usr/local`) defaults 
 Download the latest compiled build from [GitHub Releases](https://github.com/newtonlorenz/safemac-av/releases/latest).
 
 > [!NOTE]
-> v1.0.0 predates the SafeMac AV rename and is distributed as `ClamAV-GUI-1.0.0.dmg` containing `ClamAV-GUI.app`. Future releases use `SafeMac-AV.dmg` containing `SafeMac AV.app`.
+> v1.0.0 predates the SafeMac AV rename and is distributed as `ClamAV-GUI-1.0.0.dmg` containing `ClamAV-GUI.app`. Releases from v1.1.0 use a `SafeMac-AV` DMG containing `SafeMac AV.app`.
 
 Each release provides:
 
@@ -69,7 +69,7 @@ Download the DMG and checksum file into the same folder. Verify the download:
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-Open the DMG and drag the included app into `Applications`. It is named `ClamAV-GUI` in v1.0.0 and `SafeMac AV` in subsequent releases.
+Open the DMG and drag the included app into `Applications`. It is named `ClamAV-GUI` in v1.0.0 and `SafeMac AV` from v1.1.0.
 
 When upgrading from an older ClamAV GUI build, launch SafeMac AV and re-save any enabled schedules so their LaunchAgents point to the renamed app. Remove the old app after confirming the new build works.
 
