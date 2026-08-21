@@ -175,7 +175,7 @@ final class MenuBarManagerTests: XCTestCase {
     }
 
     func testPendingUnidentifiedMainWindowIsPreferredOverOpeningDuplicate() {
-        let pendingMainWindow = NSWindow(
+        let pendingMainWindow = MainCapableTestWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
             styleMask: [.titled, .closable],
             backing: .buffered,
@@ -382,6 +382,10 @@ final class MenuBarManagerTests: XCTestCase {
             isAutomatedTest: true
         ))
     }
+}
+
+private final class MainCapableTestWindow: NSWindow {
+    override var canBecomeMain: Bool { true }
 }
 
 private actor MenuBarAsyncGate {

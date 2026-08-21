@@ -12,6 +12,7 @@ struct ClamAVApp: App {
     private let launchMode: LaunchMode
     @State private var presentsMenuBarExtra: Bool
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openWindow) private var openWindow
 
     init() {
         let launchMode = LaunchModeParser.parse(arguments: CommandLine.arguments)
@@ -114,6 +115,12 @@ struct ClamAVApp: App {
     private func handleInitialLaunch() async {
         await initialLaunchHandler.handle(
             launchMode: launchMode,
+            shouldPresentInteractiveMainWindow: !currentLaunchModeHidesDock,
+            presentInteractiveMainWindow: {
+                menuBarManager.activateMainWindow {
+                    openWindow(id: Self.mainWindowID)
+                }
+            },
             drainExternalScanRequests: {
                 if SignatureScheduleReconciliationPolicy.shouldReconcile(
                     bundleURL: Bundle.main.bundleURL,
@@ -136,6 +143,8 @@ final class InitialLaunchHandler: ObservableObject {
 
     func handle(
         launchMode: LaunchMode,
+        shouldPresentInteractiveMainWindow: Bool,
+        presentInteractiveMainWindow: () -> Void,
         drainExternalScanRequests: () async -> Void,
         runScheduledScan: (UUID?, [URL]) async -> Void
     ) async {
@@ -144,6 +153,9 @@ final class InitialLaunchHandler: ObservableObject {
 
         switch launchMode {
         case .interactive:
+            if shouldPresentInteractiveMainWindow {
+                presentInteractiveMainWindow()
+            }
             await drainExternalScanRequests()
         case .scheduledScan(let jobID, let paths):
             await runScheduledScan(jobID, paths)

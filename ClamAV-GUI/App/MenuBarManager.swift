@@ -33,7 +33,7 @@ extension NSApplication: ApplicationActivationPolicyApplying {
     }
 
     func focusMainWindow() -> Bool {
-        guard let window = windows.first(where: { $0.identifier?.rawValue == ClamAVApp.mainWindowID }) else {
+        guard let window = MenuBarManager.mainWindowCandidate(in: windows) else {
             return false
         }
         window.makeKeyAndOrderFront(nil)
@@ -49,6 +49,11 @@ final class MenuBarManager: ObservableObject {
 
     init(application: ApplicationActivationPolicyApplying? = nil) {
         self.application = application ?? NSApplication.shared
+    }
+
+    static func mainWindowCandidate(in windows: [NSWindow]) -> NSWindow? {
+        windows.first { $0.identifier?.rawValue == ClamAVApp.mainWindowID }
+            ?? windows.first { $0.identifier == nil && $0.canBecomeMain }
     }
 
     @discardableResult
