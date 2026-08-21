@@ -68,6 +68,34 @@ final class SignatureUpdateAppStateTests: XCTestCase {
         XCTAssertNotNil(appState.signatureUpdateScheduleError)
     }
 
+    func testPersistenceAndRollbackFailurePublishesIndeterminateScheduleState() {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = false
+        let config = SignatureScheduleConfigMock(settings: settings)
+        config.saveError = SignatureScheduleTestError.settingsFailure
+        let scheduler = SignatureScheduleMock()
+        scheduler.failOnCalls = [2]
+        let appState = makeAppState(config: config, scheduler: scheduler)
+
+        appState.setAutomaticSignatureUpdates(enabled: true, schedule: .daily9am)
+
+        XCTAssertEqual(appState.settings, settings)
+        XCTAssertEqual(config.settings, settings)
+        XCTAssertEqual(appState.signatureUpdateScheduleState, .indeterminate)
+        XCTAssertNotNil(appState.signatureUpdateScheduleError)
+    }
+
+    func testSuccessfulReconciliationPublishesConfiguredScheduleState() {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = true
+        let config = SignatureScheduleConfigMock(settings: settings)
+        let appState = makeAppState(config: config, scheduler: SignatureScheduleMock())
+
+        appState.reconcileSignatureUpdateSchedule()
+
+        XCTAssertEqual(appState.signatureUpdateScheduleState, .configured(enabled: true))
+    }
+
     func testStartupReconciliationUsesLoadedSettingsButSkipsCorruptFallback() {
         var settings = AppSettings.default
         settings.autoUpdateSignatures = true

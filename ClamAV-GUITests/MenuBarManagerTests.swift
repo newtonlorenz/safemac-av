@@ -56,7 +56,7 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(scheduledCalls.first?.1, [scheduledPath])
     }
 
-    func testInitialLaunchHandlerRunsScheduledSignatureUpdateOnceThenFinishes() async {
+    func testInitialLaunchHandlerLeavesScheduledSignatureUpdateToApplicationLifecycle() async {
         let handler = InitialLaunchHandler()
         var drainCalls = 0
         var signatureUpdateCalls = 0
@@ -78,8 +78,8 @@ final class MenuBarManagerTests: XCTestCase {
         )
 
         XCTAssertEqual(drainCalls, 0)
-        XCTAssertEqual(signatureUpdateCalls, 1)
-        XCTAssertEqual(finishCalls, 1)
+        XCTAssertEqual(signatureUpdateCalls, 0)
+        XCTAssertEqual(finishCalls, 0)
     }
 
     func testApplicationDelegateSupportsRuntimeDefaultInitialization() {
@@ -221,6 +221,40 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(application.closeMainWindowCalls, 1)
     }
 
+    func testApplicationDelegateRetainsDelayedScheduledUpdateUntilItFinishesThenExits() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        let updateStarted = expectation(description: "scheduled update started")
+        let launchFinished = expectation(description: "scheduled launch finished")
+        let gate = MenuBarAsyncGate()
+        var finishCalls = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { ["--scheduled-signature-update"] },
+            runScheduledSignatureUpdate: {
+                updateStarted.fulfill()
+                await gate.wait()
+            },
+            finishScheduledLaunch: {
+                finishCalls += 1
+                launchFinished.fulfill()
+            }
+        )
+
+        delegate.applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        await fulfillment(of: [updateStarted], timeout: 1)
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 1)
+        XCTAssertEqual(finishCalls, 0)
+
+        await gate.open()
+        await fulfillment(of: [launchFinished], timeout: 1)
+        XCTAssertEqual(finishCalls, 1)
+    }
+
     func testScheduledSignatureUpdateModeAlwaysHidesDockEvenWhenUserPrefersDock() {
         var settings = AppSettings.default
         settings.hideFromDock = false
@@ -236,6 +270,43 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertTrue(LaunchMode.scheduledScan(jobID: nil, paths: []).hidesDock(settings: settings, isUITesting: false))
         XCTAssertFalse(LaunchMode.interactive.hidesDock(settings: settings, isUITesting: true))
         XCTAssertFalse(LaunchMode.scheduledScan(jobID: nil, paths: []).hidesDock(settings: settings, isUITesting: true))
+    }
+
+    func testOnlyCanonicalInstalledAppMayAutomaticallyReconcileSignatureSchedule() {
+        XCTAssertTrue(SignatureScheduleReconciliationPolicy.shouldReconcile(
+            bundleURL: URL(fileURLWithPath: "/Applications/SafeMac AV.app"),
+            isAutomatedTest: false
+        ))
+
+        let unsafePaths = [
+            "/Users/test/Library/Developer/Xcode/DerivedData/SafeMac/Build/Products/Debug/SafeMac AV.app",
+            "/private/var/folders/xx/AppTranslocation/123/d/SafeMac AV.app",
+            "/Users/test/Downloads/SafeMac AV.app",
+            "/Applications/SafeMac AV Backup.app"
+        ]
+        for path in unsafePaths {
+            XCTAssertFalse(SignatureScheduleReconciliationPolicy.shouldReconcile(
+                bundleURL: URL(fileURLWithPath: path),
+                isAutomatedTest: false
+            ), path)
+        }
+        XCTAssertFalse(SignatureScheduleReconciliationPolicy.shouldReconcile(
+            bundleURL: URL(fileURLWithPath: "/Applications/SafeMac AV.app"),
+            isAutomatedTest: true
+        ))
+    }
+}
+
+private actor MenuBarAsyncGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func open() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 

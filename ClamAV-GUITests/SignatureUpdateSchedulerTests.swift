@@ -2,68 +2,49 @@ import XCTest
 @testable import ClamAV_GUI
 
 final class SignatureUpdateSchedulerTests: XCTestCase {
-    private enum TestError: Error {
-        case intentionalWriteFailure
-    }
-
+    private enum TestError: Error { case intentionalWriteFailure }
+    private let userID: uid_t = 501
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {
-        for directory in temporaryDirectories {
-            try? FileManager.default.removeItem(at: directory)
-        }
+        for directory in temporaryDirectories { try? FileManager.default.removeItem(at: directory) }
         temporaryDirectories = []
         try super.tearDownWithError()
     }
 
-    func testDailyScheduleInstallsPrivacySafeLaunchAgentAtomically() throws {
+    func testDailyScheduleBootstrapsPrivacySafeLaunchAgentAtomically() throws {
         let fixture = try makeFixture()
-        var commands: [(String, URL)] = []
+        var operations: [SignatureUpdateLaunchctlOperation] = []
         var writeOptions: [Data.WritingOptions] = []
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            applicationBundlePath: "/Applications/SafeMac AV.app",
+        let scheduler = makeScheduler(
+            fixture: fixture,
             dataWriter: { data, url, options in
                 writeOptions.append(options)
                 try data.write(to: url, options: options)
             },
-            launchctlRunner: { command, url in commands.append((command, url)) }
+            launchctlRunner: { operations.append($0) }
         )
-        let schedule = ScanSchedule(
-            frequency: .daily,
-            time: DateComponents(hour: 6, minute: 45)
-        )
+        let schedule = ScanSchedule(frequency: .daily, time: DateComponents(hour: 6, minute: 45))
 
         try scheduler.reconcile(enabled: true, schedule: schedule)
 
-        let data = try Data(contentsOf: fixture.plistURL)
-        let plist = try XCTUnwrap(
-            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        )
-        XCTAssertEqual(plist["Label"] as? String, "com.newtonlorenz.ClamAV-GUI.signature-update")
+        let plist = try readPlist(at: fixture.plistURL)
+        XCTAssertEqual(plist["Label"] as? String, SignatureUpdateScheduler.label)
         XCTAssertEqual(plist["ProgramArguments"] as? [String], [
             "/Applications/SafeMac AV.app/Contents/MacOS/ClamAV-GUI",
             "--scheduled-signature-update"
         ])
-        XCTAssertEqual(plist["StartCalendarInterval"] as? [String: Int], [
-            "Hour": 6,
-            "Minute": 45
-        ])
+        XCTAssertEqual(plist["StartCalendarInterval"] as? [String: Int], ["Hour": 6, "Minute": 45])
         XCTAssertNil(plist["StandardOutPath"])
         XCTAssertNil(plist["StandardErrorPath"])
-        XCTAssertEqual(commands.map(\.0), ["load"])
-        XCTAssertEqual(commands.map(\.1), [fixture.plistURL])
+        XCTAssertEqual(operations, [.bootstrap(domain: domain, plistURL: fixture.plistURL)])
         XCTAssertEqual(writeOptions.count, 1)
         XCTAssertTrue(writeOptions.allSatisfy { $0.contains(.atomic) })
     }
 
     func testWeeklyScheduleIncludesSelectedWeekday() throws {
         let fixture = try makeFixture()
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            applicationBundlePath: "/Applications/SafeMac AV.app",
-            launchctlRunner: { _, _ in }
-        )
+        let scheduler = makeScheduler(fixture: fixture)
         let schedule = ScanSchedule(
             frequency: .weekly,
             time: DateComponents(hour: 12, minute: 5),
@@ -72,10 +53,7 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
 
         try scheduler.reconcile(enabled: true, schedule: schedule)
 
-        let data = try Data(contentsOf: fixture.plistURL)
-        let plist = try XCTUnwrap(
-            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        )
+        let plist = try readPlist(at: fixture.plistURL)
         XCTAssertEqual(plist["StartCalendarInterval"] as? [String: Int], [
             "Weekday": 4,
             "Hour": 12,
@@ -83,38 +61,74 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         ])
     }
 
-    func testReplacementUnloadsOldAgentBeforeLoadingAtomicReplacement() throws {
+    func testLoadedReplacementBootsOutOldAgentBeforeBootstrappingReplacement() throws {
         let fixture = try makeFixture()
         let oldData = Data("old plist".utf8)
         try oldData.write(to: fixture.plistURL)
-        var commands: [String] = []
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            applicationBundlePath: "/Applications/SafeMac AV.app",
-            launchctlRunner: { command, _ in commands.append(command) }
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: true,
+            launchctlRunner: { operations.append($0) }
         )
 
         try scheduler.reconcile(enabled: true, schedule: .daily9am)
 
-        XCTAssertEqual(commands, ["unload", "load"])
+        XCTAssertEqual(operations, [
+            .bootout(serviceTarget: serviceTarget),
+            .bootstrap(domain: domain, plistURL: fixture.plistURL)
+        ])
         XCTAssertNotEqual(try Data(contentsOf: fixture.plistURL), oldData)
     }
 
-    func testFailedReplacementLoadRestoresPreviousAgent() throws {
+    func testPresentButUnloadedPlistConvergesWithoutSpuriousBootout() throws {
+        let fixture = try makeFixture()
+        try Data("stale plist".utf8).write(to: fixture.plistURL)
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: false,
+            launchctlRunner: { operations.append($0) }
+        )
+
+        try scheduler.reconcile(enabled: true, schedule: .daily9am)
+
+        XCTAssertEqual(operations, [.bootstrap(domain: domain, plistURL: fixture.plistURL)])
+    }
+
+    func testLoadedJobWithMissingPlistIsBootedOutAndRecreated() throws {
+        let fixture = try makeFixture()
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: true,
+            launchctlRunner: { operations.append($0) }
+        )
+
+        try scheduler.reconcile(enabled: true, schedule: .daily9am)
+
+        XCTAssertEqual(operations, [
+            .bootout(serviceTarget: serviceTarget),
+            .bootstrap(domain: domain, plistURL: fixture.plistURL)
+        ])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.plistURL.path))
+    }
+
+    func testFailedReplacementBootstrapRestoresPreviousLoadedAgent() throws {
         let fixture = try makeFixture()
         let oldData = Data("old plist".utf8)
         try oldData.write(to: fixture.plistURL)
-        var commands: [String] = []
-        var loadCount = 0
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            applicationBundlePath: "/Applications/SafeMac AV.app",
-            launchctlRunner: { command, _ in
-                commands.append(command)
-                if command == "load" {
-                    loadCount += 1
-                    if loadCount == 1 {
-                        throw SignatureUpdateSchedulerError.launchctlFailed(command: command, status: 5)
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        var bootstrapCount = 0
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: true,
+            launchctlRunner: { operation in
+                operations.append(operation)
+                if case .bootstrap = operation {
+                    bootstrapCount += 1
+                    if bootstrapCount == 1 {
+                        throw SignatureUpdateSchedulerError.launchctlFailed(command: "bootstrap", status: 5)
                     }
                 }
             }
@@ -123,68 +137,122 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         XCTAssertThrowsError(try scheduler.reconcile(enabled: true, schedule: .daily9am))
 
         XCTAssertEqual(try Data(contentsOf: fixture.plistURL), oldData)
-        XCTAssertEqual(commands, ["unload", "load", "unload", "load"])
+        XCTAssertEqual(operations, [
+            .bootout(serviceTarget: serviceTarget),
+            .bootstrap(domain: domain, plistURL: fixture.plistURL),
+            .bootout(serviceTarget: serviceTarget),
+            .bootstrap(domain: domain, plistURL: fixture.plistURL)
+        ])
     }
 
-    func testFailedAtomicWriteRestoresPreviousAgent() throws {
+    func testRollbackFailureIsReportedInsteadOfSilentlyClaimingRestoration() throws {
+        let fixture = try makeFixture()
+        try Data("old plist".utf8).write(to: fixture.plistURL)
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: true,
+            launchctlRunner: { operation in
+                if case .bootstrap = operation {
+                    throw SignatureUpdateSchedulerError.launchctlFailed(command: "bootstrap", status: 5)
+                }
+            }
+        )
+
+        XCTAssertThrowsError(try scheduler.reconcile(enabled: true, schedule: .daily9am)) { error in
+            guard case SignatureUpdateSchedulerError.reconciliationAndRollbackFailed = error else {
+                return XCTFail("Expected reconciliationAndRollbackFailed, got \(error)")
+            }
+        }
+    }
+
+    func testFailedAtomicWriteRestoresPreviousLoadedAgent() throws {
         let fixture = try makeFixture()
         let oldData = Data("old plist".utf8)
         try oldData.write(to: fixture.plistURL)
-        var commands: [String] = []
+        var operations: [SignatureUpdateLaunchctlOperation] = []
         var writes = 0
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            applicationBundlePath: "/Applications/SafeMac AV.app",
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: true,
             dataWriter: { data, url, options in
                 writes += 1
                 if writes == 1 { throw TestError.intentionalWriteFailure }
                 try data.write(to: url, options: options)
             },
-            launchctlRunner: { command, _ in commands.append(command) }
+            launchctlRunner: { operations.append($0) }
         )
 
         XCTAssertThrowsError(try scheduler.reconcile(enabled: true, schedule: .daily9am))
 
         XCTAssertEqual(try Data(contentsOf: fixture.plistURL), oldData)
-        XCTAssertEqual(commands, ["unload", "load"])
+        XCTAssertEqual(operations, [
+            .bootout(serviceTarget: serviceTarget),
+            .bootstrap(domain: domain, plistURL: fixture.plistURL)
+        ])
     }
 
-    func testDisablingUnloadsAndRemovesExistingAgent() throws {
+    func testDisablingLoadedAgentBootsOutAndRemovesExistingPlist() throws {
         let fixture = try makeFixture()
         try Data("existing".utf8).write(to: fixture.plistURL)
-        var commands: [String] = []
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            applicationBundlePath: "/Applications/SafeMac AV.app",
-            launchctlRunner: { command, _ in commands.append(command) }
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: true,
+            launchctlRunner: { operations.append($0) }
         )
 
         try scheduler.reconcile(enabled: false, schedule: .daily9am)
 
-        XCTAssertEqual(commands, ["unload"])
+        XCTAssertEqual(operations, [.bootout(serviceTarget: serviceTarget)])
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
     }
 
-    func testDisablingWithoutInstalledAgentIsNoOp() throws {
+    func testDisablingLoadedJobWithMissingPlistStillBootsItOut() throws {
         let fixture = try makeFixture()
-        var commands: [String] = []
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            launchctlRunner: { command, _ in commands.append(command) }
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: true,
+            launchctlRunner: { operations.append($0) }
         )
 
         try scheduler.reconcile(enabled: false, schedule: .daily9am)
 
-        XCTAssertTrue(commands.isEmpty)
+        XCTAssertEqual(operations, [.bootout(serviceTarget: serviceTarget)])
+    }
+
+    func testDisablingPresentButUnloadedPlistRemovesWithoutBootout() throws {
+        let fixture = try makeFixture()
+        try Data("existing".utf8).write(to: fixture.plistURL)
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: false,
+            launchctlRunner: { operations.append($0) }
+        )
+
+        try scheduler.reconcile(enabled: false, schedule: .daily9am)
+
+        XCTAssertTrue(operations.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
+    }
+
+    func testDisablingWithoutDiskOrRuntimeAgentIsNoOp() throws {
+        let fixture = try makeFixture()
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            launchctlRunner: { operations.append($0) }
+        )
+
+        try scheduler.reconcile(enabled: false, schedule: .daily9am)
+
+        XCTAssertTrue(operations.isEmpty)
     }
 
     func testMonthlyScheduleUsesDayOfMonthForExistingModelCompatibility() throws {
         let fixture = try makeFixture()
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            applicationBundlePath: "/Applications/SafeMac AV.app",
-            launchctlRunner: { _, _ in }
-        )
+        let scheduler = makeScheduler(fixture: fixture)
         let schedule = ScanSchedule(
             frequency: .monthly,
             time: DateComponents(hour: 3, minute: 20),
@@ -193,10 +261,7 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
 
         try scheduler.reconcile(enabled: true, schedule: schedule)
 
-        let data = try Data(contentsOf: fixture.plistURL)
-        let plist = try XCTUnwrap(
-            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        )
+        let plist = try readPlist(at: fixture.plistURL)
         XCTAssertEqual(plist["StartCalendarInterval"] as? [String: Int], [
             "Day": 14,
             "Hour": 3,
@@ -204,12 +269,12 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         ])
     }
 
-    func testInvalidWeeklyScheduleFailsBeforeWritingOrLoading() throws {
+    func testInvalidWeeklyScheduleFailsBeforeWritingOrBootstrapping() throws {
         let fixture = try makeFixture()
-        var commands: [String] = []
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            launchctlRunner: { command, _ in commands.append(command) }
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            launchctlRunner: { operations.append($0) }
         )
         let invalidSchedule = ScanSchedule(
             frequency: .weekly,
@@ -222,43 +287,75 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
                 return XCTFail("Expected invalid schedule, got \(error)")
             }
         }
-        XCTAssertTrue(commands.isEmpty)
+        XCTAssertTrue(operations.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
     }
 
-    func testFailedFirstLoadRemovesIncompleteNewAgent() throws {
+    func testFailedFirstBootstrapRemovesIncompleteNewAgent() throws {
         let fixture = try makeFixture()
-        var commands: [String] = []
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            launchctlRunner: { command, _ in
-                commands.append(command)
-                if command == "load" {
-                    throw SignatureUpdateSchedulerError.launchctlFailed(command: command, status: 5)
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            launchctlRunner: { operation in
+                operations.append(operation)
+                if case .bootstrap = operation {
+                    throw SignatureUpdateSchedulerError.launchctlFailed(command: "bootstrap", status: 5)
                 }
             }
         )
 
         XCTAssertThrowsError(try scheduler.reconcile(enabled: true, schedule: .daily9am))
 
-        XCTAssertEqual(commands, ["load", "unload"])
+        XCTAssertEqual(operations, [
+            .bootstrap(domain: domain, plistURL: fixture.plistURL),
+            .bootout(serviceTarget: serviceTarget)
+        ])
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
     }
 
-    func testFailedDisableUnloadPreservesExistingAgent() throws {
+    func testFailedDisableBootoutPreservesExistingAgent() throws {
         let fixture = try makeFixture()
         let oldData = Data("existing".utf8)
         try oldData.write(to: fixture.plistURL)
-        let scheduler = SignatureUpdateScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            launchctlRunner: { command, _ in
-                throw SignatureUpdateSchedulerError.launchctlFailed(command: command, status: 5)
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: true,
+            launchctlRunner: { _ in
+                throw SignatureUpdateSchedulerError.launchctlFailed(command: "bootout", status: 5)
             }
         )
 
         XCTAssertThrowsError(try scheduler.reconcile(enabled: false, schedule: .daily9am))
 
         XCTAssertEqual(try Data(contentsOf: fixture.plistURL), oldData)
+    }
+
+    private var domain: String { "gui/\(userID)" }
+    private var serviceTarget: String { "\(domain)/\(SignatureUpdateScheduler.label)" }
+
+    private func makeScheduler(
+        fixture: SignatureSchedulerFixture,
+        isLoaded: Bool = false,
+        dataWriter: @escaping SignatureUpdateScheduler.DataWriter = { data, url, options in
+            try data.write(to: url, options: options)
+        },
+        launchctlRunner: @escaping (SignatureUpdateLaunchctlOperation) throws -> Void = { _ in }
+    ) -> SignatureUpdateScheduler {
+        SignatureUpdateScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            userID: userID,
+            dataWriter: dataWriter,
+            loadedStatusProvider: { isLoaded },
+            launchctlRunner: launchctlRunner
+        )
+    }
+
+    private func readPlist(at url: URL) throws -> [String: Any] {
+        let data = try Data(contentsOf: url)
+        return try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
     }
 
     private func makeFixture() throws -> SignatureSchedulerFixture {
