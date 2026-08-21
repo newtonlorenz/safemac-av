@@ -376,6 +376,10 @@ final class AppState: ObservableObject {
     }
 
     func runScheduledSignatureUpdate() async {
+        guard allowsSignatureScheduleStartupReconciliation else {
+            addLog(.error, "Skipped scheduled signature update because settings could not be loaded safely")
+            return
+        }
         guard settings.autoUpdateSignatures else {
             addLog(.info, "Skipped scheduled signature update because automatic updates are disabled")
             return

@@ -111,6 +111,26 @@ final class SignatureUpdateAppStateTests: XCTestCase {
         XCTAssertTrue(notifications.signatureResults.isEmpty)
     }
 
+    func testCorruptSettingsScheduledLaunchIsNoOp() async {
+        var settings = AppSettings.default
+        settings.autoUpdateSignatures = true
+        let config = SignatureScheduleConfigMock(settings: settings)
+        config.lastSettingsLoadState = .fallbackDueToError(reason: "corrupt")
+        let runner = SignatureScheduleFreshclamMock()
+        let notifications = SignatureScheduleNotificationMock()
+        let appState = makeAppState(
+            config: config,
+            scheduler: SignatureScheduleMock(),
+            freshclamRunner: runner,
+            notifications: notifications
+        )
+
+        await appState.runScheduledSignatureUpdate()
+
+        XCTAssertEqual(runner.updateCalls, 0)
+        XCTAssertTrue(notifications.signatureResults.isEmpty)
+    }
+
     func testEnabledScheduledLaunchUsesExistingUpdateAndNotificationPath() async {
         var settings = AppSettings.default
         settings.autoUpdateSignatures = true

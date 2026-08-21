@@ -13,6 +13,15 @@ enum LaunchMode: Equatable {
     var presentsUserInterface: Bool {
         self != .scheduledSignatureUpdate
     }
+
+    func hidesDock(settings: AppSettings, isUITesting: Bool) -> Bool {
+        switch self {
+        case .interactive, .scheduledScan:
+            settings.hideFromDock && !isUITesting
+        case .scheduledSignatureUpdate:
+            true
+        }
+    }
 }
 
 enum LaunchModeParser {
