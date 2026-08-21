@@ -12,114 +12,44 @@ final class MenuBarManagerTests: XCTestCase {
         )
     }
 
-    func testInitialLaunchHandlerDrainsInteractiveRequestsOnce() async {
-        let handler = InitialLaunchHandler()
-        var presentMainWindowCalls = 0
-        var drainCalls = 0
-        var scheduledCalls = 0
-        var presentationCompleted = false
-        var drainedBeforePresentationCompleted = false
+    func testMainWindowPresentationRequestBeforeActionInstallationRunsOnce() async {
+        let lifecycle = MainWindowPresentationLifecycle()
+        var openCalls = 0
 
-        await handler.handle(
-            launchMode: .interactive,
-            shouldPresentInteractiveMainWindow: true,
-            presentInteractiveMainWindow: {
-                presentMainWindowCalls += 1
-                DispatchQueue.main.async {
-                    presentationCompleted = true
-                }
-            },
-            drainExternalScanRequests: {
-                drainCalls += 1
-                drainedBeforePresentationCompleted = !presentationCompleted
-            },
-            runScheduledScan: { _, _ in scheduledCalls += 1 }
-        )
-        await handler.handle(
-            launchMode: .interactive,
-            shouldPresentInteractiveMainWindow: true,
-            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
-            drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in scheduledCalls += 1 }
-        )
+        let request = Task { await lifecycle.requestPresentation() }
+        await Task.yield()
+        XCTAssertEqual(openCalls, 0)
 
-        XCTAssertEqual(presentMainWindowCalls, 1)
-        XCTAssertEqual(drainCalls, 1)
-        XCTAssertEqual(scheduledCalls, 0)
-        XCTAssertFalse(drainedBeforePresentationCompleted)
+        lifecycle.install { openCalls += 1 }
+        await request.value
+
+        XCTAssertEqual(openCalls, 1)
     }
 
-    func testInitialLaunchHandlerPreservesHiddenDockInteractiveLaunch() async {
-        let handler = InitialLaunchHandler()
-        var presentMainWindowCalls = 0
-        var drainCalls = 0
+    func testMainWindowPresentationInstallBeforeRequestRunsOnce() async {
+        let lifecycle = MainWindowPresentationLifecycle()
+        var openCalls = 0
+        lifecycle.install { openCalls += 1 }
 
-        await handler.handle(
-            launchMode: .interactive,
-            shouldPresentInteractiveMainWindow: false,
-            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
-            drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in }
-        )
+        await lifecycle.requestPresentation()
+        await lifecycle.requestPresentation()
 
-        XCTAssertEqual(presentMainWindowCalls, 0)
-        XCTAssertEqual(drainCalls, 1)
+        XCTAssertEqual(openCalls, 1)
     }
 
-    func testInitialLaunchHandlerRoutesScheduledScanOnce() async {
-        let handler = InitialLaunchHandler()
-        let jobID = UUID()
-        let scheduledPath = URL(fileURLWithPath: "/tmp/scheduled")
-        var presentMainWindowCalls = 0
-        var drainCalls = 0
-        var scheduledCalls: [(UUID?, [URL])] = []
+    func testMainWindowPresentationCoalescesConcurrentPendingRequests() async {
+        let lifecycle = MainWindowPresentationLifecycle()
+        var openCalls = 0
 
-        await handler.handle(
-            launchMode: .scheduledScan(jobID: jobID, paths: [scheduledPath]),
-            shouldPresentInteractiveMainWindow: true,
-            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
-            drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
-        )
-        await handler.handle(
-            launchMode: .scheduledScan(jobID: jobID, paths: [scheduledPath]),
-            shouldPresentInteractiveMainWindow: true,
-            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
-            drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { jobID, paths in scheduledCalls.append((jobID, paths)) }
-        )
+        let first = Task { await lifecycle.requestPresentation() }
+        let second = Task { await lifecycle.requestPresentation() }
+        await Task.yield()
+        lifecycle.install { openCalls += 1 }
+        await first.value
+        await second.value
+        await lifecycle.requestPresentation()
 
-        XCTAssertEqual(presentMainWindowCalls, 0)
-        XCTAssertEqual(drainCalls, 0)
-        XCTAssertEqual(scheduledCalls.count, 1)
-        XCTAssertEqual(scheduledCalls.first?.0, jobID)
-        XCTAssertEqual(scheduledCalls.first?.1, [scheduledPath])
-    }
-
-    func testInitialLaunchHandlerLeavesScheduledSignatureUpdateToApplicationLifecycle() async {
-        let handler = InitialLaunchHandler()
-        var presentMainWindowCalls = 0
-        var drainCalls = 0
-        var scheduledScanCalls = 0
-
-        await handler.handle(
-            launchMode: .scheduledSignatureUpdate,
-            shouldPresentInteractiveMainWindow: true,
-            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
-            drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in scheduledScanCalls += 1 }
-        )
-        await handler.handle(
-            launchMode: .scheduledSignatureUpdate,
-            shouldPresentInteractiveMainWindow: true,
-            presentInteractiveMainWindow: { presentMainWindowCalls += 1 },
-            drainExternalScanRequests: { drainCalls += 1 },
-            runScheduledScan: { _, _ in scheduledScanCalls += 1 }
-        )
-
-        XCTAssertEqual(presentMainWindowCalls, 0)
-        XCTAssertEqual(drainCalls, 0)
-        XCTAssertEqual(scheduledScanCalls, 0)
+        XCTAssertEqual(openCalls, 1)
     }
 
     func testApplicationDelegateSupportsRuntimeDefaultInitialization() {
@@ -247,7 +177,7 @@ final class MenuBarManagerTests: XCTestCase {
         )
     }
 
-    func testApplicationDeclaresSingleInstanceMainWindowScene() throws {
+    func testApplicationUsesSingleWindowAndAppLifetimePresentationBridge() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -258,6 +188,8 @@ final class MenuBarManagerTests: XCTestCase {
 
         XCTAssertTrue(source.contains("Window(Self.mainWindowTitle, id: Self.mainWindowID)"))
         XCTAssertFalse(source.contains("WindowGroup(Self.mainWindowTitle, id: Self.mainWindowID)"))
+        XCTAssertTrue(source.contains("MainWindowPresentationBridge"))
+        XCTAssertFalse(source.contains("@StateObject private var initialLaunchHandler"))
     }
 
     func testMainWindowCandidateIgnoresUnrelatedAndPanelWindows() {
@@ -352,6 +284,127 @@ final class MenuBarManagerTests: XCTestCase {
 
         XCTAssertEqual(application.requestedPolicies, [.regular])
         XCTAssertFalse(manager.isDockHidden)
+    }
+
+    func testVisibleInteractiveDelegateFocusesExistingMainBeforeMaintenance() async {
+        let application = MenuBarApplicationMock()
+        application.focusMainWindowResults = [true]
+        let manager = MenuBarManager(application: application)
+        let maintenanceRan = expectation(description: "initial maintenance ran")
+        var presentationRequests = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { [] },
+            nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
+            requestMainWindowPresentation: {
+                presentationRequests += 1
+                application.events.append(.requestMainWindow)
+            },
+            runInitialApplicationLaunch: { _ in
+                application.events.append(.runInitialMaintenance)
+                maintenanceRan.fulfill()
+            }
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await fulfillment(of: [maintenanceRan], timeout: 1)
+
+        XCTAssertEqual(presentationRequests, 0)
+        XCTAssertEqual(
+            application.events,
+            [.nextMainRunLoopTurn, .activateApplication, .focusMainWindow,
+             .nextMainRunLoopTurn, .runInitialMaintenance]
+        )
+    }
+
+    func testVisibleInteractiveDelegateRequestsWindowThenFocusesBeforeMaintenance() async {
+        let application = MenuBarApplicationMock()
+        application.focusMainWindowResults = [false, true]
+        let manager = MenuBarManager(application: application)
+        let maintenanceRan = expectation(description: "initial maintenance ran")
+        var presentationRequests = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { [] },
+            nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
+            requestMainWindowPresentation: {
+                presentationRequests += 1
+                application.events.append(.requestMainWindow)
+            },
+            runInitialApplicationLaunch: { _ in
+                application.events.append(.runInitialMaintenance)
+                maintenanceRan.fulfill()
+            }
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await fulfillment(of: [maintenanceRan], timeout: 1)
+
+        XCTAssertEqual(presentationRequests, 1)
+        XCTAssertEqual(
+            application.events,
+            [.nextMainRunLoopTurn, .activateApplication, .focusMainWindow,
+             .requestMainWindow, .nextMainRunLoopTurn, .activateApplication,
+             .focusMainWindow, .runInitialMaintenance]
+        )
+    }
+
+    func testHiddenInteractiveDelegateRunsMaintenanceWithoutPresentingWindow() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var settings = AppSettings.default
+        settings.hideFromDock = true
+        let maintenanceRan = expectation(description: "hidden maintenance ran")
+        var presentationRequests = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { [] },
+            nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
+            requestMainWindowPresentation: { presentationRequests += 1 },
+            runInitialApplicationLaunch: { _ in maintenanceRan.fulfill() }
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await fulfillment(of: [maintenanceRan], timeout: 1)
+
+        XCTAssertEqual(presentationRequests, 0)
+        XCTAssertEqual(application.activationCalls, [])
+        XCTAssertEqual(application.events, [.nextMainRunLoopTurn])
+        XCTAssertEqual(application.closeMainWindowCalls, 1)
+    }
+
+    func testScheduledScanDelegateRunsAppLifetimeScanWithoutPresentingWindow() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        let launchRan = expectation(description: "scheduled scan launch ran")
+        var receivedMode: LaunchMode?
+        var presentationRequests = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { ["--scheduled-scan", "--path", "/tmp/scheduled"] },
+            requestMainWindowPresentation: { presentationRequests += 1 },
+            runInitialApplicationLaunch: { mode in
+                receivedMode = mode
+                launchRan.fulfill()
+            }
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await fulfillment(of: [launchRan], timeout: 1)
+
+        XCTAssertEqual(receivedMode, .scheduledScan(jobID: nil, paths: [URL(fileURLWithPath: "/tmp/scheduled")]))
+        XCTAssertEqual(presentationRequests, 0)
+        XCTAssertEqual(application.activationCalls, [])
+        XCTAssertEqual(application.focusMainWindowResults.count, 0)
     }
 
     func testScheduledSignatureUpdateLaunchUsesAccessoryModeAndClosesMainWindow() async {
@@ -499,6 +552,9 @@ private enum MenuBarApplicationEvent: Equatable {
     case activateApplication
     case focusMainWindow
     case openWindow
+    case nextMainRunLoopTurn
+    case requestMainWindow
+    case runInitialMaintenance
 }
 
 @MainActor
@@ -508,6 +564,7 @@ private final class MenuBarApplicationMock: ApplicationActivationPolicyApplying 
     private(set) var activationCalls: [Bool] = []
     private(set) var closeMainWindowCalls = 0
     var focusMainWindowResult = false
+    var focusMainWindowResults: [Bool] = []
     var events: [MenuBarApplicationEvent] = []
 
     func setActivationPolicy(_ activationPolicy: NSApplication.ActivationPolicy) -> Bool {
@@ -526,6 +583,9 @@ private final class MenuBarApplicationMock: ApplicationActivationPolicyApplying 
 
     func focusMainWindow() -> Bool {
         events.append(.focusMainWindow)
+        if !focusMainWindowResults.isEmpty {
+            return focusMainWindowResults.removeFirst()
+        }
         return focusMainWindowResult
     }
 }
