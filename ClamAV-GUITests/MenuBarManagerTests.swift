@@ -83,6 +83,26 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(application.requestedPolicies, [.accessory])
         XCTAssertEqual(application.closeMainWindowCalls, 0)
     }
+
+    func testApplicationDelegateUsesPersistedHiddenDockSettingOnInteractiveRestart() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        var settings = AppSettings.default
+        settings.hideFromDock = true
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { settings },
+            argumentsProvider: { [] }
+        )
+
+        delegate.applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(application.requestedPolicies, [.accessory])
+        XCTAssertEqual(application.closeMainWindowCalls, 1)
+    }
 }
 
 private enum MenuBarApplicationEvent: Equatable {
