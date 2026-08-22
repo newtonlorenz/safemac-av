@@ -40,6 +40,77 @@ contains_arch() {
     [[ " $archs " == *" $expected "* ]]
 }
 
+signature_details() {
+    codesign -dv --verbose=4 "$1" 2>&1 \
+        || fail "unable to inspect code signature: $1"
+}
+
+resolve_sparkle_version_dir() {
+    local framework_path="$1"
+    local version_dir=""
+    local candidate
+
+    while IFS= read -r candidate; do
+        [[ -z "$version_dir" ]] || fail "multiple Sparkle framework versions found: $framework_path"
+        version_dir="$candidate"
+    done < <(find "$framework_path/Versions" \
+        -mindepth 1 \
+        -maxdepth 1 \
+        -type d \
+        -print)
+
+    [[ -n "$version_dir" ]] || fail "Sparkle framework version directory not found: $framework_path"
+    printf '%s\n' "$version_dir"
+}
+
+verify_distribution_code() {
+    local target="$1"
+    local executable_path="$2"
+    local expected_team_id="$3"
+    local details
+    local archs
+
+    [[ -e "$target" ]] || fail "nested code not found: $target"
+    require_file "$executable_path" "nested executable"
+
+    codesign --verify --strict --verbose=2 "$target"
+    details="$(signature_details "$target")"
+
+    grep -Fq 'Authority=Developer ID Application:' <<< "$details" \
+        || fail "Developer ID Application authority missing: $target"
+    grep -Fq "TeamIdentifier=$expected_team_id" <<< "$details" \
+        || fail "Developer ID Team mismatch: $target"
+    grep -Eq '^Timestamp=.+$' <<< "$details" \
+        || fail "secure timestamp missing: $target"
+    if grep -Fq 'Timestamp=none' <<< "$details"; then
+        fail "secure timestamp missing: $target"
+    fi
+    grep -Fq 'runtime' <<< "$details" \
+        || fail "hardened runtime flag missing: $target"
+    if grep -Fq 'adhoc' <<< "$details"; then
+        fail "ad-hoc signature found in release code: $target"
+    fi
+
+    archs="$(lipo -archs "$executable_path")" \
+        || fail "unable to inspect executable architectures: $executable_path"
+    contains_arch "$archs" arm64 \
+        || fail "nested executable is missing arm64 slice: $executable_path ($archs)"
+    contains_arch "$archs" x86_64 \
+        || fail "nested executable is missing x86_64 slice: $executable_path ($archs)"
+}
+
+verify_sparkle_autoupdate_entitlement() {
+    local autoupdate_path="$1"
+    local entitlements
+
+    entitlements="$(codesign -d --entitlements :- "$autoupdate_path" 2>/dev/null)" \
+        || fail "unable to inspect Sparkle Autoupdate entitlements"
+    grep -Fq '<key>com.apple.application-identifier</key>' <<< "$entitlements" \
+        || fail "Sparkle Autoupdate application identifier entitlement is missing"
+    grep -Fq '<string>org.sparkle-project.Sparkle.Autoupdate</string>' <<< "$entitlements" \
+        || fail "Sparkle Autoupdate application identifier entitlement changed unexpectedly"
+}
+
 mounted_app_path=""
 mount_point=""
 
@@ -98,6 +169,12 @@ verify_app_bundle() {
     local executable_path
     local executable_name
     local archs
+    local app_details
+    local expected_team_id
+    local sparkle_framework
+    local sparkle_version
+    local finder_extension
+    local finder_executable
 
     resolve_app_path
     executable_name="$(bundle_value CFBundleExecutable)"
@@ -113,8 +190,49 @@ verify_app_bundle() {
     contains_arch "$archs" x86_64 || fail "app executable is missing x86_64 slice: $archs"
 
     codesign --verify --strict --verbose=2 "$mounted_app_path"
+    xcrun stapler validate "$mounted_app_path"
     spctl --assess --type execute --verbose "$mounted_app_path"
-    info "mounted app signature, Gatekeeper assessment, and universal architectures: $archs"
+
+    app_details="$(signature_details "$mounted_app_path")"
+    grep -Fq 'Authority=Developer ID Application:' <<< "$app_details" \
+        || fail "app is not signed by a Developer ID Application identity"
+    expected_team_id="$(sed -n 's/^TeamIdentifier=//p' <<< "$app_details" | head -1)"
+    [[ -n "$expected_team_id" && "$expected_team_id" != "not set" ]] \
+        || fail "app signature has no Developer ID Team identifier"
+    verify_distribution_code "$mounted_app_path" "$executable_path" "$expected_team_id"
+
+    sparkle_framework="$mounted_app_path/Contents/Frameworks/Sparkle.framework"
+    [[ -d "$sparkle_framework" ]] || fail "Sparkle framework not found: $sparkle_framework"
+    sparkle_version="$(resolve_sparkle_version_dir "$sparkle_framework")"
+
+    verify_distribution_code \
+        "$sparkle_version/Updater.app" \
+        "$sparkle_version/Updater.app/Contents/MacOS/Updater" \
+        "$expected_team_id"
+    verify_distribution_code \
+        "$sparkle_version/XPCServices/Downloader.xpc" \
+        "$sparkle_version/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
+        "$expected_team_id"
+    verify_distribution_code \
+        "$sparkle_version/XPCServices/Installer.xpc" \
+        "$sparkle_version/XPCServices/Installer.xpc/Contents/MacOS/Installer" \
+        "$expected_team_id"
+    verify_distribution_code \
+        "$sparkle_version/Autoupdate" \
+        "$sparkle_version/Autoupdate" \
+        "$expected_team_id"
+    verify_sparkle_autoupdate_entitlement "$sparkle_version/Autoupdate"
+    verify_distribution_code \
+        "$sparkle_framework" \
+        "$sparkle_version/Sparkle" \
+        "$expected_team_id"
+
+    finder_extension="$mounted_app_path/Contents/PlugIns/ClamAV-GUI-Finder.appex"
+    finder_executable="$finder_extension/Contents/MacOS/ClamAV-GUI-Finder"
+    verify_distribution_code "$finder_extension" "$finder_executable" "$expected_team_id"
+
+    codesign --verify --deep --strict --verbose=2 "$mounted_app_path"
+    info "mounted app, Finder extension, and nested Sparkle code use Developer ID Team $expected_team_id, hardened runtime, secure timestamps, and universal architectures"
 }
 
 verify_appcast() {

@@ -172,10 +172,10 @@ NOTARY_ISSUER_ID='00000000-0000-0000-0000-000000000000' \
   ./scripts/create-dmg.sh
 ```
 
-Create the Keychain profile separately with `xcrun notarytool store-credentials`. Credentials should stay in Keychain or in an external `.p8` file outside the repository and must never be committed or passed as plain-text script arguments. The resulting DMG and `SHA256SUMS.txt` are written under the ignored `build/` directory. Only the notarization modes submit to Apple; always verify a release artifact before publishing it.
+Create the Keychain profile separately with `xcrun notarytool store-credentials`. Credentials should stay in Keychain or in an external `.p8` file outside the repository and must never be committed or passed as plain-text script arguments. The resulting DMG and `SHA256SUMS.txt` are written under the ignored `build/` directory. Only the notarization modes submit to Apple; they staple both the app bundle and DMG and verify nested embedded code before publication.
 If Keychain contains duplicate Developer ID certificate names, set `SIGNING_IDENTITY` to the SHA-1 hash shown by `security find-identity -v -p codesigning`.
 
-Maintainers can also run the manual **Release package** GitHub Actions workflow to build a signed, notarized, stapled DMG and checksum file without publishing a GitHub Release. It requires these repository secrets:
+Maintainers can also run the manual **Release package** GitHub Actions workflow to build a signed, notarized, stapled app-in-DMG package and checksum file without publishing a GitHub Release. It requires these repository secrets:
 
 - `DEVELOPER_ID_CERTIFICATE_BASE64`: base64-encoded Developer ID Application `.p12`
 - `DEVELOPER_ID_CERTIFICATE_PASSWORD`: password for that `.p12`

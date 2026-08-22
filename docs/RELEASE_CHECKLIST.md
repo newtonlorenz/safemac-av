@@ -51,7 +51,7 @@ Do not package final release assets from a moving branch ref. After release publ
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-- [ ] Verify notarization on a Mac:
+- [ ] Verify notarization, stapling, nested embedded-code signatures, and Gatekeeper on a Mac:
 
 ```bash
 ./scripts/verify-release-package.sh build
