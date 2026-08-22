@@ -599,6 +599,57 @@ final class AppStateTests: XCTestCase {
         let _ = await manualScan.value
     }
 
+    func testOverlappingFinderRequestsAreAdmittedOnceWithoutOverlapping() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+        let first = try store.enqueue(
+            paths: ["/tmp/finder-first"],
+            source: ExternalScanRequestStore.finderSource
+        )
+        let second = try store.enqueue(
+            paths: ["/tmp/finder-second"],
+            source: ExternalScanRequestStore.finderSource
+        )
+        let runner = AppStateControlledRunner()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            externalScanRequestStore: store,
+            startsInteractiveBackgroundServices: false
+        )
+
+        let firstWake = Task { @MainActor in
+            await appState.drainExternalScanRequest(id: first.id)
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+
+        let secondWake = Task { @MainActor in
+            await appState.drainExternalScanRequest(id: second.id)
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(runner.scanPaths, [[URL(fileURLWithPath: "/tmp/finder-first")]])
+
+        runner.resumeNextScan()
+        try await waitUntil { runner.scanPaths.count == 2 }
+        runner.resumeNextScan()
+        _ = await (firstWake.value, secondWake.value)
+
+        XCTAssertEqual(
+            runner.scanPaths,
+            [
+                [URL(fileURLWithPath: "/tmp/finder-first")],
+                [URL(fileURLWithPath: "/tmp/finder-second")]
+            ]
+        )
+        XCTAssertTrue(try store.drainRequests().isEmpty)
+    }
+
     func testRequestNotificationPermissionPublishesManagerState() async {
         let notifications = AppStateMockNotificationManager()
         notifications.permissionStatus = .notDetermined

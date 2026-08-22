@@ -48,6 +48,9 @@ final class AppState: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var pendingAutomaticDownloadPaths: [URL] = []
     private var isProcessingAutomaticDownloads = false
+    private var pendingExternalScanRequestIDs = Set<UUID>()
+    private var shouldLoadAllExternalScanRequests = false
+    private var isConsumingExternalScanRequests = false
 
     init(
         configManager: ConfigManagerProtocol = ConfigManager(),
@@ -533,37 +536,69 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func drainExternalScanRequests() async -> Int {
-        do {
-            let requests = try externalScanRequestStore.drainRequests()
-            await runExternalScanRequests(requests)
-            return requests.count
-        } catch {
-            addLog(.error, "Failed to load external scan requests: \(error.localizedDescription)")
-            return 0
-        }
+        shouldLoadAllExternalScanRequests = true
+        return await consumeExternalScanRequests()
     }
 
     @discardableResult
     func drainExternalScanRequest(id: UUID) async -> Int {
-        do {
-            let requests = try externalScanRequestStore.drainRequest(id: id)
-            await runExternalScanRequests(requests)
-            return requests.count
-        } catch {
-            addLog(.error, "Failed to load external scan request: \(error.localizedDescription)")
-            return 0
-        }
+        pendingExternalScanRequestIDs.insert(id)
+        return await consumeExternalScanRequests()
     }
 
-    private func runExternalScanRequests(_ requests: [ExternalScanRequest]) async {
-        for request in requests {
-            await startScan(
-                paths: request.paths.map { URL(fileURLWithPath: $0) },
-                options: .default,
-                scanType: .custom,
-                source: ScanSource(rawValue: request.source) ?? .finder
-            )
+    private func consumeExternalScanRequests() async -> Int {
+        guard !isConsumingExternalScanRequests else { return 0 }
+
+        isConsumingExternalScanRequests = true
+        defer { isConsumingExternalScanRequests = false }
+        var admittedCount = 0
+
+        while shouldLoadAllExternalScanRequests || !pendingExternalScanRequestIDs.isEmpty {
+            let loadAll = shouldLoadAllExternalScanRequests
+            let requestIDs = pendingExternalScanRequestIDs
+            shouldLoadAllExternalScanRequests = false
+            pendingExternalScanRequestIDs.removeAll()
+
+            let requests: [ExternalScanRequest]
+            do {
+                if loadAll {
+                    requests = try externalScanRequestStore.loadRequests()
+                } else {
+                    requests = try requestIDs.flatMap { try externalScanRequestStore.loadRequest(id: $0) }
+                        .sorted { $0.createdAt < $1.createdAt }
+                }
+            } catch {
+                addLog(.error, "SafeMac AV could not read the Finder scan request queue.")
+                continue
+            }
+
+            for request in requests {
+                await scanCoordinator.waitUntilIdle()
+                var didAcknowledge = false
+                let outcome = await startScan(
+                    paths: request.paths.map { URL(fileURLWithPath: $0) },
+                    options: .default,
+                    scanType: .custom,
+                    source: .finder
+                ) { [weak self] in
+                    guard let self else { return }
+                    do {
+                        try self.externalScanRequestStore.acknowledgeRequest(id: request.id)
+                        didAcknowledge = true
+                    } catch {
+                        self.addLog(.error, "SafeMac AV could not acknowledge a Finder scan request.")
+                    }
+                }
+
+                if didAcknowledge {
+                    admittedCount += 1
+                } else if case .skippedAlreadyRunning = outcome {
+                    pendingExternalScanRequestIDs.insert(request.id)
+                }
+            }
         }
+
+        return admittedCount
     }
 
     func runScheduledScan(jobID: UUID?, paths: [URL]) async {

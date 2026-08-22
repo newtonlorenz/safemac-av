@@ -83,9 +83,11 @@ Schedules run in the logged-in user's context. Moving or deleting the built app 
 
 ### Finder request
 
-The Finder Sync extension receives the current Finder selection, writes a JSON request when a shared container is available, posts a distributed notification as a wake signal, and opens the main app when necessary. The main app drains requests serially and submits them through the same scan coordinator as interactive scans.
+The Finder Sync extension receives the current Finder selection, writes a bounded JSON request into the signed app group's shared container, posts a distributed notification containing at most the request UUID as a wake signal, and opens the main app when necessary. The notification never carries file paths or raw errors. The main app uses one `AppState`-owned consumer to coalesce wakeups, wait for the scan coordinator to become idle, load requests without removing them, and acknowledge each request only after the coordinator admits its scan. This prevents overlapping in-process wakeups from deleting work that a running scan would reject and admits each validated request once during a healthy app process. A crash before admission leaves the record available for a later retry; a crash after admission may interrupt the scan after its record has been acknowledged. The queue therefore does not claim crash-safe exactly-once or at-least-once execution after admission.
 
-A distributable build must sign the app and extension consistently and configure the matching app group. The notification and bundle identifiers are namespaced to the upstream project and must change together in a fork.
+The store requires the fixed Finder source, fresh request timestamps, absolute normalized paths, UUID-matched filenames, bounded record and queue sizes, and current-user `0700` directory and `0600` file permissions. Invalid records are isolated so they do not block valid requests. If the shared container is unavailable or a request is stale, oversized, symlinked, malformed, or over-permissive, the handoff fails closed. The Finder extension shows one fixed generic error without exposing selected paths or filesystem details.
+
+A distributable build signs the app and extension consistently with the unprovisioned macOS app group `CQPH8YR62A.com.newtonlorenz.ClamAV-GUI`, whose prefix matches the Developer ID team. The notification, team-prefixed app group, and bundle identifiers are namespaced to the upstream project and must change together in a fork.
 
 ### Standalone menu-bar operation
 
@@ -105,7 +107,7 @@ Notification content is intentionally summary-only. It includes counts and gener
 | --- | --- | --- |
 | Settings | `~/Library/Application Support/ClamAV-GUI/settings.json` | Persistent |
 | Scheduled-job definitions | `~/Library/Application Support/ClamAV-GUI/scheduled_jobs.json` | Persistent |
-| Finder request queue | App-group container when configured, otherwise Application Support | Drained after processing |
+| Finder request queue | App-group container `CQPH8YR62A.com.newtonlorenz.ClamAV-GUI` | Acknowledged after scan admission; invalid records are removed during validation |
 | LaunchAgent definitions | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.scan.*.plist` | Until job removal |
 | Signature-update LaunchAgent | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.signature-update.plist` | Until automatic updates are disabled |
 | Main-app login item | macOS System Settings › General › Login Items | Until disabled by the user or app |
