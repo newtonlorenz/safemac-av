@@ -43,7 +43,7 @@ xcodebuild build \
 
 Do not package final release assets from a moving branch ref. After release publication is approved:
 
-- [ ] Create tag `vX.Y.Z` on the verified commit.
+- [ ] Create an annotated tag `vX.Y.Z` on the verified commit: `git tag -a vX.Y.Z -m "SafeMac AV vX.Y.Z"`.
 - [ ] Dispatch the manual **Release package** workflow from `main` with `release_ref` set to the full annotated tag ref `refs/tags/vX.Y.Z`. The workflow rejects tags whose resolved commit is not on `origin/main` before any release secret is exposed.
 - [ ] Download the workflow artifact.
 

@@ -187,6 +187,33 @@ run_arch_failure_case() {
     fi
 }
 
+run_embedded_feed_url_failure_cases() {
+    local original_url="https://updates.example.com/appcast.xml"
+    local invalid_url
+    local -a invalid_urls=(
+        "https://user@updates.example.com/appcast.xml"
+        "https://user:password@updates.example.com/appcast.xml"
+        "https://updates.example.com/appcast.xml?token=secret"
+        "https://updates.example.com/appcast.xml#fragment"
+    )
+
+    for invalid_url in "${invalid_urls[@]}"; do
+        cp "$WORK_DIR/SafeMac AV.app/Contents/Info.plist" "$WORK_DIR/Info.plist.bak"
+        INVALID_URL="$invalid_url" perl -0pi -e \
+            's|https://updates\.example\.com/appcast\.xml|$ENV{INVALID_URL}|' \
+            "$WORK_DIR/SafeMac AV.app/Contents/Info.plist"
+        if PATH="$WORK_DIR/bin:$PATH" \
+           EXPECTED_SPARKLE_FEED_URL="$invalid_url" \
+           SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "unsafe embedded Sparkle feed URL was accepted: $invalid_url"
+        fi
+        mv "$WORK_DIR/Info.plist.bak" "$WORK_DIR/SafeMac AV.app/Contents/Info.plist"
+        grep -Fq "$original_url" "$WORK_DIR/SafeMac AV.app/Contents/Info.plist" \
+            || fail "embedded Sparkle feed URL fixture was not restored"
+    done
+}
+
 run_appcast_failure_case() {
     perl -0pi -e 's/sparkle:version="3"/sparkle:version="4"/' "$WORK_DIR/package/appcast/appcast.xml"
     if PATH="$WORK_DIR/bin:$PATH" \
@@ -499,6 +526,7 @@ main() {
     make_fixture
     make_fake_tools
     run_success_case
+    run_embedded_feed_url_failure_cases
     run_arch_failure_case
     run_nested_adhoc_failure_cases
     run_nested_arch_failure_case

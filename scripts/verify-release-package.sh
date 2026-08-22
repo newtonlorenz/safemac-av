@@ -252,9 +252,20 @@ import Foundation
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 guard arguments.count == 2 else { exit(1) }
-guard let components = URLComponents(string: arguments[0]),
+let feedURL = arguments[0]
+guard feedURL.unicodeScalars.allSatisfy({
+          !$0.properties.isWhitespace && !CharacterSet.controlCharacters.contains($0)
+      }),
+      let components = URLComponents(string: feedURL),
       components.scheme == "https",
-      components.host?.isEmpty == false else {
+      components.host?.isEmpty == false,
+      components.user == nil,
+      components.password == nil,
+      components.query == nil,
+      components.fragment == nil,
+      !components.percentEncodedPath.isEmpty,
+      let url = components.url,
+      url.absoluteString == feedURL else {
     exit(1)
 }
 guard let publicKey = Data(base64Encoded: arguments[1]),

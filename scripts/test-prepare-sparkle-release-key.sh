@@ -140,11 +140,15 @@ test_workflow_runs_preflight_before_signing() {
     local validation_line
     local preflight_line
     local certificate_line
+    local credential_cleanup_line
+    local upload_line
 
     validation_line="$(grep -n 'name: Validate immutable release tag' "$workflow" | cut -d: -f1)"
     preflight_line="$(grep -n 'name: Preflight Sparkle release trust' "$workflow" | cut -d: -f1)"
     certificate_line="$(grep -n 'name: Import Developer ID certificate' "$workflow" | cut -d: -f1)"
-    [[ -n "$validation_line" && -n "$preflight_line" && -n "$certificate_line" ]] \
+    credential_cleanup_line="$(grep -n 'name: Remove release credentials before artifact upload' "$workflow" | cut -d: -f1 || true)"
+    upload_line="$(grep -n 'name: Upload release artifacts' "$workflow" | cut -d: -f1)"
+    [[ -n "$validation_line" && -n "$preflight_line" && -n "$certificate_line" && -n "$upload_line" ]] \
         || fail "workflow trust steps are missing"
     [[ "$validation_line" -lt "$preflight_line" && "$preflight_line" -lt "$certificate_line" ]] \
         || fail "workflow does not validate the release tag before secret-bearing steps"
@@ -160,6 +164,85 @@ test_workflow_runs_preflight_before_signing() {
         || fail "workflow does not require the tag commit to be on main"
     grep -Fq '"$RUNNER_TEMP/sparkle_private_ed_key"' "$workflow" \
         || fail "workflow does not clean up the Sparkle private key"
+    [[ -n "$credential_cleanup_line" && "$credential_cleanup_line" -lt "$upload_line" ]] \
+        || fail "workflow does not remove release credentials before artifact upload"
+    grep -Fq 'security delete-keychain "$RUNNER_TEMP/safemac-release.keychain-db"' "$workflow" \
+        || fail "workflow cleanup does not cover a partially-created deterministic keychain"
+    grep -Fq 'echo "SPARKLE_PRIVATE_ED_KEY="' "$workflow" \
+        || fail "workflow does not clear signing-material paths before artifact upload"
+}
+
+extract_release_ref_validation() {
+    local workflow="$PROJECT_DIR/.github/workflows/release-package.yml"
+
+    awk '
+        /name: Validate immutable release tag/ { in_step = 1; next }
+        in_step && /^        run: \|$/ { in_run = 1; next }
+        in_run && /^      - name:/ { exit }
+        in_run { sub(/^          /, ""); print }
+    ' "$workflow"
+}
+
+run_workflow_validation() {
+    local repository="$1"
+    local release_ref="$2"
+    local github_output="$WORK_DIR/github-output"
+    local validation_script="$WORK_DIR/validate-release-ref.sh"
+
+    : > "$github_output"
+    extract_release_ref_validation > "$validation_script"
+    chmod +x "$validation_script"
+    (
+        cd "$repository"
+        GITHUB_REF="refs/heads/main" \
+        GITHUB_OUTPUT="$github_output" \
+        RELEASE_REF="$release_ref" \
+            bash "$validation_script"
+    )
+}
+
+test_workflow_release_ref_validation_behavior() {
+    local origin="$WORK_DIR/release-origin.git"
+    local source="$WORK_DIR/release-source"
+    local runner="$WORK_DIR/release-runner"
+    local main_commit
+
+    git init --bare -q "$origin"
+    git init -q -b main "$source"
+    git -C "$source" config user.name "SafeMac Test"
+    git -C "$source" config user.email "test@example.com"
+    printf 'main\n' > "$source/release.txt"
+    git -C "$source" add release.txt
+    git -C "$source" commit -q -m "main release"
+    main_commit="$(git -C "$source" rev-parse HEAD)"
+    git -C "$source" remote add origin "$origin"
+    git -C "$source" push -q -u origin main
+
+    git -C "$source" tag -a v1.2.3 -m "SafeMac AV v1.2.3"
+    git -C "$source" tag v1.2.4
+    git -C "$source" switch -q -c not-main
+    printf 'not main\n' >> "$source/release.txt"
+    git -C "$source" commit -qam "off-main release"
+    git -C "$source" tag -a v1.2.5 -m "SafeMac AV v1.2.5"
+    git -C "$source" push -q origin refs/tags/v1.2.3 refs/tags/v1.2.4 refs/tags/v1.2.5
+
+    git clone -q --branch main "$origin" "$runner"
+    run_workflow_validation "$runner" "refs/tags/v1.2.3" >/dev/null
+    grep -Fxq "release_commit=$main_commit" "$WORK_DIR/github-output" \
+        || fail "valid annotated tag did not resolve to the expected commit"
+
+    if run_workflow_validation "$runner" "refs/tags/v1.2.4" >/dev/null 2>&1; then
+        fail "lightweight release tag was accepted"
+    fi
+    if run_workflow_validation "$runner" "refs/tags/v1.2.5" >/dev/null 2>&1; then
+        fail "release tag outside main was accepted"
+    fi
+    if run_workflow_validation "$runner" "refs/heads/main" >/dev/null 2>&1; then
+        fail "branch release ref was accepted"
+    fi
+    if run_workflow_validation "$runner" "refs/tags/release-1.2.3" >/dev/null 2>&1; then
+        fail "malformed release tag ref was accepted"
+    fi
 }
 
 main() {
@@ -172,6 +255,7 @@ main() {
     test_existing_output_survives_failure
     test_symlink_output_is_rejected
     test_workflow_runs_preflight_before_signing
+    test_workflow_release_ref_validation_behavior
     printf 'Sparkle release preflight tests passed\n'
 }
 

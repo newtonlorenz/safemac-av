@@ -171,6 +171,21 @@ jobs:
           EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX: ${{ vars.SPARKLE_DOWNLOAD_URL_PREFIX }}
         run: ./scripts/verify-release-package.sh build
 
+      - name: Remove release credentials before artifact upload
+        run: |
+          set -Eeuo pipefail
+
+          security delete-keychain "$RUNNER_TEMP/safemac-release.keychain-db" 2>/dev/null || true
+          rm -f \
+            "$RUNNER_TEMP/sparkle_private_ed_key" \
+            "$RUNNER_TEMP/developer-id.p12" \
+            "$RUNNER_TEMP/AuthKey.p8"
+          {
+            echo "SPARKLE_PRIVATE_ED_KEY="
+            echo "NOTARY_KEY_PATH="
+            echo "RELEASE_KEYCHAIN_PATH="
+          } >> "$GITHUB_ENV"
+
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -190,6 +205,4 @@ jobs:
             "$RUNNER_TEMP/sparkle_private_ed_key" \
             "$RUNNER_TEMP/developer-id.p12" \
             "$RUNNER_TEMP/AuthKey.p8"
-          if [[ -n "${RELEASE_KEYCHAIN_PATH:-}" && -f "$RELEASE_KEYCHAIN_PATH" ]]; then
-            security delete-keychain "$RELEASE_KEYCHAIN_PATH"
-          fi
+          security delete-keychain "$RUNNER_TEMP/safemac-release.keychain-db" 2>/dev/null || true
