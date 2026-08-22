@@ -495,6 +495,35 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.lastUpdateResult?.status, .upToDate)
     }
 
+    func testDashboardRecentScanReviewNavigatesWithoutStartingScan() async throws {
+        let mockConfig = AppStateMockConfigManager(settings: .default)
+        let runner = AppStateControlledRunner()
+        let appState = AppState(
+            configManager: mockConfig,
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner)
+        )
+        let component = ScoreComponent(
+            title: "Recent Scan",
+            isComplete: false,
+            points: 25,
+            action: .reviewScan
+        )
+
+        DashboardScoreActionHandler.handle(component, appState: appState)
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(appState.selectedTab, .scan)
+        XCTAssertTrue(runner.scanPaths.isEmpty)
+
+        if !runner.scanPaths.isEmpty {
+            runner.resumeNextScan()
+            try await waitUntil { !appState.isScanning }
+        }
+    }
+
     func testUpdateSignaturesIgnoresSecondCallWhileFirstUpdateIsInProgress() async throws {
         let mockConfig = AppStateMockConfigManager(settings: .default)
         let mockWatcher = MockFileWatcher()

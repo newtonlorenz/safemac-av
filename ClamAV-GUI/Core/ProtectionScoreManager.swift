@@ -9,7 +9,7 @@ struct ScoreComponent: Identifiable, Equatable {
     enum Action: Equatable {
         case configureClamAV
         case updateSignatures
-        case runQuickScan
+        case reviewScan
         case enableMonitoring
         case openFinderSettings
     }
@@ -46,7 +46,7 @@ final class ProtectionScoreManager {
         let components = [
             ScoreComponent(title: "ClamAV Installed", isComplete: isInstalled, points: 25, action: isInstalled ? nil : .configureClamAV),
             ScoreComponent(title: "Signatures Up to Date", isComplete: signaturesFresh, points: 25, action: signaturesFresh ? nil : .updateSignatures),
-            ScoreComponent(title: "Recent Scan", isComplete: recentScan, points: 25, action: recentScan ? nil : .runQuickScan),
+            ScoreComponent(title: "Recent Scan", isComplete: recentScan, points: 25, action: recentScan ? nil : .reviewScan),
             ScoreComponent(title: "Real-time Monitoring", isComplete: monitoringEnabled, points: 15, action: monitoringEnabled ? nil : .enableMonitoring),
             ScoreComponent(title: "Finder Extension", isComplete: finderExtensionEnabled, points: 10, action: finderExtensionEnabled ? nil : .openFinderSettings)
         ]
