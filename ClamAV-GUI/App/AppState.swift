@@ -143,7 +143,7 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
 
         DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
+            forName: ExternalScanRequestStore.scanRequestNotificationName,
             object: nil,
             queue: .main
         ) { [weak self] notification in
@@ -157,6 +157,22 @@ final class AppState: ObservableObject {
                 }
             }
         }
+
+        DistributedNotificationCenter.default().addObserver(
+            forName: ExternalScanRequestStore.scanRequestFailedNotificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                self?.handleFinderHandoffFailure(notification)
+            }
+        }
+    }
+
+    func handleFinderHandoffFailure(_: Notification) {
+        selectedTab = .scan
+        scanError = FinderScanRequestHandoff.genericFailureMessage
+        addLog(.warning, FinderScanRequestHandoff.genericFailureMessage)
     }
 
     func startQuickScan() async {
@@ -202,7 +218,14 @@ final class AppState: ObservableObject {
         currentScanProgress = ScanProgress(status: .preparing, currentFile: nil, filesScanned: 0, infectedCount: 0, startTime: Date())
 
         let request = ScanRequest(source: source, paths: paths, options: options, jobID: jobID)
-        let outcome = await scanCoordinator.run(request, onAdmitted: onAdmitted) { [weak self] progress in
+        let admissionFailureMessage = source == .finder
+            ? FinderScanRequestHandoff.genericFailureMessage
+            : "SafeMac AV couldn’t start this scan. Try again."
+        let outcome = await scanCoordinator.run(
+            request,
+            onAdmitted: onAdmitted,
+            admissionFailureMessage: admissionFailureMessage
+        ) { [weak self] progress in
             Task { @MainActor in
                 self?.currentScanProgress = progress
             }
@@ -562,9 +585,9 @@ final class AppState: ObservableObject {
             let requests: [ExternalScanRequest]
             do {
                 if loadAll {
-                    requests = try externalScanRequestStore.loadRequests()
+                    requests = try externalScanRequestStore.claimRequests()
                 } else {
-                    requests = try requestIDs.flatMap { try externalScanRequestStore.loadRequest(id: $0) }
+                    requests = try requestIDs.flatMap { try externalScanRequestStore.claimRequest(id: $0) }
                         .sorted { $0.createdAt < $1.createdAt }
                 }
             } catch {
@@ -583,11 +606,11 @@ final class AppState: ObservableObject {
                 ) { [weak self] in
                     guard let self else { return }
                     do {
-                        try self.externalScanRequestStore.acknowledgeRequest(id: request.id)
+                        try self.externalScanRequestStore.acknowledgeClaim(id: request.id)
                         didAcknowledge = true
                     } catch {
                         self.addLog(.error, "SafeMac AV could not acknowledge a Finder scan request.")
-                        throw ExternalScanRequestStoreError.invalidRequestFile
+                        throw error
                     }
                 }
 

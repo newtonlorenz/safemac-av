@@ -40,22 +40,34 @@ final class ScanCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.isScanning)
     }
 
-    func testAdmissionFailureDoesNotStartRunner() async {
+    func testRunnerCancellationBecomesCancelledOutcome() async {
         let runner = MockCoordinatorRunner()
+        runner.nextError = ClamAVError.cancelled
         let coordinator = ScanCoordinator(clamAVRunner: runner)
-        let request = ScanRequest(source: .finder, paths: [URL(fileURLWithPath: "/tmp/a")], options: .default)
+        let request = ScanRequest(source: .manual, paths: [URL(fileURLWithPath: "/tmp/a")], options: .default)
 
-        let outcome = await coordinator.run(
-            request,
-            onAdmitted: {
-                throw ExternalScanRequestStoreError.invalidRequestFile
-            },
-            progressHandler: { _ in }
-        )
+        let outcome = await coordinator.run(request) { _ in }
 
-        XCTAssertEqual(outcome.errorMessage, "Finder scan request storage is invalid.")
-        XCTAssertEqual(runner.scanCallCount, 0)
+        XCTAssertEqual(outcome, .cancelled)
         XCTAssertFalse(coordinator.isScanning)
+    }
+
+    func testProcessAndPlaybackControlsDelegateToRunner() {
+        let runner = MockCoordinatorRunner()
+        runner.currentProcessPID = 42
+        let coordinator = ScanCoordinator(clamAVRunner: runner)
+
+        XCTAssertEqual(coordinator.currentProcessPID, 42)
+        XCTAssertFalse(coordinator.scanIsPaused)
+
+        coordinator.pauseScan()
+        XCTAssertTrue(coordinator.scanIsPaused)
+
+        coordinator.resumeScan()
+        XCTAssertFalse(coordinator.scanIsPaused)
+
+        coordinator.cancelCurrentScan()
+        XCTAssertEqual(runner.cancelCallCount, 1)
     }
 
     private static func report(paths: [URL]) -> ScanReport {
@@ -74,6 +86,7 @@ final class ScanCoordinatorTests: XCTestCase {
 
 private final class MockCoordinatorRunner: ClamAVRunnerProtocol {
     var scanCallCount = 0
+    var cancelCallCount = 0
     var nextError: Error?
     var pendingContinuation: CheckedContinuation<ScanReport, Error>?
     var currentProcessPID: Int32?
@@ -91,7 +104,9 @@ private final class MockCoordinatorRunner: ClamAVRunnerProtocol {
         }
     }
 
-    func cancelCurrentScan() {}
+    func cancelCurrentScan() {
+        cancelCallCount += 1
+    }
 
     func pauseScan() {
         scanIsPaused = true
