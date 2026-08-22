@@ -1,0 +1,174 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-signing-test.XXXXXX")"
+FAKE_BIN="$WORK_DIR/bin"
+SIGN_LOG="$WORK_DIR/codesign.log"
+TEST_IDENTITY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+cleanup() {
+    rm -rf "$WORK_DIR"
+    rm -rf "$PROJECT_DIR/build"
+}
+
+trap cleanup EXIT
+
+fail() {
+    printf 'Test failed: %s\n' "$1" >&2
+    exit 1
+}
+
+write_fake_tool() {
+    local name="$1"
+    local body="$2"
+
+    {
+        printf '#!/bin/bash\n'
+        printf 'set -Eeuo pipefail\n'
+        printf '%s\n' "$body"
+    } > "$FAKE_BIN/$name"
+    chmod +x "$FAKE_BIN/$name"
+}
+
+make_fake_tools() {
+    mkdir -p "$FAKE_BIN"
+
+    write_fake_tool security '
+if [[ "${1:-}" == "find-identity" ]]; then
+    printf "  1) %s \"Developer ID Application: SafeMac Test (TESTTEAM01)\"\n" "${TEST_IDENTITY:?}"
+    printf "     1 valid identities found\n"
+fi'
+
+    write_fake_tool xcodebuild '
+archive_path=""
+while (($#)); do
+    if [[ "$1" == "-archivePath" ]]; then
+        archive_path="$2"
+        shift 2
+        continue
+    fi
+    shift
+done
+[[ -n "$archive_path" ]]
+app="$archive_path/Products/Applications/ClamAV-GUI.app"
+sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
+mkdir -p \
+    "$app/Contents/MacOS" \
+    "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS" \
+    "$sparkle/Updater.app/Contents/MacOS" \
+    "$sparkle/XPCServices/Downloader.xpc/Contents/MacOS" \
+    "$sparkle/XPCServices/Installer.xpc/Contents/MacOS"
+printf app > "$app/Contents/MacOS/ClamAV-GUI"
+printf finder > "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
+printf sparkle > "$sparkle/Sparkle"
+printf autoupdate > "$sparkle/Autoupdate"
+printf updater > "$sparkle/Updater.app/Contents/MacOS/Updater"
+printf downloader > "$sparkle/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+printf installer > "$sparkle/XPCServices/Installer.xpc/Contents/MacOS/Installer"
+chmod +x \
+    "$app/Contents/MacOS/ClamAV-GUI" \
+    "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder" \
+    "$sparkle/Sparkle" \
+    "$sparkle/Autoupdate" \
+    "$sparkle/Updater.app/Contents/MacOS/Updater" \
+    "$sparkle/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
+    "$sparkle/XPCServices/Installer.xpc/Contents/MacOS/Installer"'
+
+    write_fake_tool ditto '
+source_path="$1"
+destination_path="$2"
+/bin/cp -R "$source_path" "$destination_path"'
+
+    write_fake_tool codesign '
+if [[ " $* " == *" --sign "* ]]; then
+    printf "%s\t%s\n" "$*" "${!#}" >> "${SIGN_LOG:?}"
+fi
+if [[ " $* " == *" -dv "* ]]; then
+    printf "%s\n" \
+        "Authority=Developer ID Application: SafeMac Test (TESTTEAM01)" \
+        "TeamIdentifier=TESTTEAM01" \
+        "Timestamp=Aug 22, 2026 at 02:00:00" \
+        "CodeDirectory v=20500 flags=0x10000(runtime)" >&2
+fi'
+
+    write_fake_tool hdiutil '
+if [[ "${1:-}" == "create" ]]; then
+    printf dmg > "${!#}"
+fi'
+
+    write_fake_tool lipo 'printf "x86_64 arm64\n"'
+}
+
+line_for_target() {
+    local target="$1"
+    awk -F '\t' -v target="$target" '$2 == target { print NR; exit }' "$SIGN_LOG"
+}
+
+assert_signed_with_distribution_options() {
+    local target="$1"
+    local line
+
+    line="$(awk -F '\t' -v target="$target" '$2 == target { print $1; exit }' "$SIGN_LOG")"
+    [[ -n "$line" ]] || fail "nested code was not signed: $target"
+    [[ " $line " == *" --options runtime "* ]] || fail "hardened runtime missing: $target"
+    [[ " $line " == *" --timestamp "* ]] || fail "secure timestamp missing: $target"
+    [[ " $line " == *" --sign $TEST_IDENTITY "* ]] || fail "resolved Developer ID identity missing: $target"
+}
+
+assert_before() {
+    local first="$1"
+    local second="$2"
+    local first_line
+    local second_line
+
+    first_line="$(line_for_target "$first")"
+    second_line="$(line_for_target "$second")"
+    [[ -n "$first_line" && -n "$second_line" ]] || fail "cannot compare signing order"
+    ((first_line < second_line)) || fail "expected $first to be signed before $second"
+}
+
+run_packaging() {
+    PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+    TEST_IDENTITY="$TEST_IDENTITY" \
+    SIGN_LOG="$SIGN_LOG" \
+    SIGNING_IDENTITY="$TEST_IDENTITY" \
+        "$PROJECT_DIR/scripts/create-dmg.sh" >/dev/null
+}
+
+verify_signing_order() {
+    local app="$PROJECT_DIR/build/export/SafeMac AV.app"
+    local sparkle="$app/Contents/Frameworks/Sparkle.framework"
+    local version="$sparkle/Versions/B"
+    local updater="$version/Updater.app"
+    local downloader="$version/XPCServices/Downloader.xpc"
+    local installer="$version/XPCServices/Installer.xpc"
+    local autoupdate="$version/Autoupdate"
+    local appex="$app/Contents/PlugIns/ClamAV-GUI-Finder.appex"
+
+    assert_signed_with_distribution_options "$updater"
+    assert_signed_with_distribution_options "$downloader"
+    assert_signed_with_distribution_options "$installer"
+    assert_signed_with_distribution_options "$autoupdate"
+    assert_signed_with_distribution_options "$sparkle"
+    assert_signed_with_distribution_options "$appex"
+    assert_signed_with_distribution_options "$app"
+
+    assert_before "$autoupdate" "$sparkle"
+    assert_before "$downloader" "$sparkle"
+    assert_before "$installer" "$sparkle"
+    assert_before "$updater" "$sparkle"
+    assert_before "$sparkle" "$app"
+    assert_before "$appex" "$app"
+}
+
+main() {
+    make_fake_tools
+    run_packaging
+    verify_signing_order
+    printf 'create-dmg signing tests passed\n'
+}
+
+main "$@"

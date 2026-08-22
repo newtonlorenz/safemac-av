@@ -32,8 +32,15 @@ write_fake_tool() {
 make_fixture() {
     local package_dir="$WORK_DIR/package"
     local app_dir="$WORK_DIR/SafeMac AV.app"
+    local sparkle_dir="$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B"
 
-    mkdir -p "$package_dir/appcast" "$app_dir/Contents/MacOS" "$WORK_DIR/bin"
+    mkdir -p \
+        "$package_dir/appcast" \
+        "$app_dir/Contents/MacOS" \
+        "$sparkle_dir/Updater.app/Contents/MacOS" \
+        "$sparkle_dir/XPCServices/Downloader.xpc/Contents/MacOS" \
+        "$sparkle_dir/XPCServices/Installer.xpc/Contents/MacOS" \
+        "$WORK_DIR/bin"
     printf 'fake dmg\n' > "$package_dir/SafeMac-AV.dmg"
     (cd "$package_dir" && shasum -a 256 SafeMac-AV.dmg > SHA256SUMS.txt)
 
@@ -54,6 +61,18 @@ PLIST
     printf '#!/bin/bash\n' > "$app_dir/Contents/MacOS/ClamAV-GUI"
     chmod +x "$app_dir/Contents/MacOS/ClamAV-GUI"
 
+    printf 'sparkle\n' > "$sparkle_dir/Sparkle"
+    printf 'autoupdate\n' > "$sparkle_dir/Autoupdate"
+    printf 'updater\n' > "$sparkle_dir/Updater.app/Contents/MacOS/Updater"
+    printf 'downloader\n' > "$sparkle_dir/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+    printf 'installer\n' > "$sparkle_dir/XPCServices/Installer.xpc/Contents/MacOS/Installer"
+    chmod +x \
+        "$sparkle_dir/Sparkle" \
+        "$sparkle_dir/Autoupdate" \
+        "$sparkle_dir/Updater.app/Contents/MacOS/Updater" \
+        "$sparkle_dir/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
+        "$sparkle_dir/XPCServices/Installer.xpc/Contents/MacOS/Installer"
+
     cat > "$package_dir/appcast/appcast.xml" <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
@@ -67,10 +86,33 @@ XML
 }
 
 make_fake_tools() {
-    write_fake_tool codesign 'exit 0'
+    write_fake_tool codesign '
+target="${!#}"
+if [[ " $* " == *" -dv "* ]]; then
+    if [[ "$target" == "${ADHOC_CODESIGN_PATH:-}" ]]; then
+        printf "%s\n" \
+            "Authority=adhoc" \
+            "TeamIdentifier=not set" \
+            "Timestamp=none" \
+            "CodeDirectory v=20500 flags=0x10002(adhoc,runtime)" >&2
+    else
+        printf "%s\n" \
+            "Authority=Developer ID Application: SafeMac Test (TESTTEAM01)" \
+            "TeamIdentifier=${CODESIGN_TEAM_ID:-TESTTEAM01}" \
+            "Timestamp=Aug 22, 2026 at 02:00:00" \
+            "CodeDirectory v=20500 flags=0x10000(runtime)" >&2
+    fi
+fi
+exit 0'
     write_fake_tool spctl 'exit 0'
     write_fake_tool xcrun '[[ "${1:-}" == "stapler" && "${2:-}" == "validate" ]] || exit 2'
-    write_fake_tool lipo 'printf "%s\n" "${LIPO_ARCHS:-x86_64 arm64}"'
+    write_fake_tool lipo '
+target="${!#}"
+if [[ "$target" == "${NON_UNIVERSAL_PATH:-}" ]]; then
+    printf "arm64\n"
+else
+    printf "%s\n" "${LIPO_ARCHS:-x86_64 arm64}"
+fi'
 }
 
 run_success_case() {
@@ -97,11 +139,46 @@ run_appcast_failure_case() {
     fi
 }
 
+run_nested_adhoc_failure_cases() {
+    local app_dir="$WORK_DIR/SafeMac AV.app"
+    local sparkle_dir="$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B"
+    local component
+    local -a components=(
+        "$sparkle_dir/Updater.app"
+        "$sparkle_dir/XPCServices/Downloader.xpc"
+        "$sparkle_dir/XPCServices/Installer.xpc"
+        "$sparkle_dir/Autoupdate"
+        "$sparkle_dir/Sparkle"
+    )
+
+    for component in "${components[@]}"; do
+        if PATH="$WORK_DIR/bin:$PATH" \
+           ADHOC_CODESIGN_PATH="$component" \
+           SAFEMAC_VERIFY_APP_PATH="$app_dir" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "ad-hoc nested Sparkle component was accepted: $component"
+        fi
+    done
+}
+
+run_nested_arch_failure_case() {
+    local component="$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+
+    if PATH="$WORK_DIR/bin:$PATH" \
+       NON_UNIVERSAL_PATH="$component" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "non-universal nested Sparkle component was accepted"
+    fi
+}
+
 main() {
     make_fixture
     make_fake_tools
     run_success_case
     run_arch_failure_case
+    run_nested_adhoc_failure_cases
+    run_nested_arch_failure_case
     run_appcast_failure_case
     printf 'verify-release-package tests passed\n'
 }
