@@ -155,6 +155,19 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.launchAtLoginStatus, .disabled)
     }
 
+    func testLaunchAtLoginStartupAttemptsHelperMigrationBeforePersistingStatus() {
+        let manager = AppStateMigrationTrackingLoginItemManager(status: .enabled)
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: manager,
+            startsInteractiveBackgroundServices: false
+        )
+
+        XCTAssertEqual(manager.migrationCalls, 1)
+        XCTAssertEqual(appState.launchAtLoginStatus, .enabled)
+    }
+
     func testLaunchAtLoginStartupDoesNotPersistFallbackLoadedDefaults() {
         let mockConfig = AppStateMockConfigManager(settings: .default)
         mockConfig.lastSettingsLoadState = .fallbackDueToError(reason: "The data is not in the correct format.")
@@ -1198,6 +1211,23 @@ private final class AppStateMockLoginItemService: LaunchAtLoginService {
             throw unregisterError
         }
         serviceStatus = .notRegistered
+    }
+}
+
+private final class AppStateMigrationTrackingLoginItemManager: LaunchAtLoginManaging {
+    var status: LaunchAtLoginStatus
+    private(set) var migrationCalls = 0
+
+    init(status: LaunchAtLoginStatus) {
+        self.status = status
+    }
+
+    func setEnabled(_ enabled: Bool) throws {
+        status = enabled ? .enabled : .disabled
+    }
+
+    func migrateLegacyRegistrationIfNeeded() throws {
+        migrationCalls += 1
     }
 }
 
