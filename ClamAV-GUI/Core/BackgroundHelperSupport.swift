@@ -81,6 +81,24 @@ enum BackgroundHelperBundle {
         in mainBundleURL: URL,
         fileManager: FileManager = .default
     ) -> Bool {
+        isEmbeddedHelper(
+            at: url,
+            in: mainBundleURL,
+            fileManager: fileManager,
+            staticCodeValidator: { helperBundleURL in
+                isTrustedStaticCode(at: helperBundleURL)
+            }
+        )
+    }
+
+    /// The injectable code validator keeps bundle-layout checks independently
+    /// testable. Production callers always use the Developer ID requirement.
+    static func isEmbeddedHelper(
+        at url: URL,
+        in mainBundleURL: URL,
+        fileManager: FileManager = .default,
+        staticCodeValidator: (URL) -> Bool
+    ) -> Bool {
         guard fileManager.isExecutableFile(atPath: url.path) else { return false }
         let normalizedMainBundle = mainBundleURL.standardizedFileURL
         let expectedExecutable = executableURL(in: normalizedMainBundle).standardizedFileURL
@@ -93,7 +111,9 @@ enum BackgroundHelperBundle {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        guard let data = try? Data(contentsOf: helperBundleURL.appendingPathComponent("Info.plist")),
+        guard let data = try? Data(contentsOf: helperBundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Info.plist", isDirectory: false)),
               let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             return false
         }
@@ -105,6 +125,10 @@ enum BackgroundHelperBundle {
               (attributes.st_mode & S_IFMT) == S_IFREG else {
             return false
         }
+        return staticCodeValidator(helperBundleURL)
+    }
+
+    private static func isTrustedStaticCode(at helperBundleURL: URL) -> Bool {
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(helperBundleURL as CFURL, [], &code) == errSecSuccess,
               let code else { return false }
