@@ -51,6 +51,40 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         XCTAssertEqual(requestPermissions, 0o600)
     }
 
+    func testEnqueuePublishesOnlyAfterStagingFileHasRestrictivePermissions() throws {
+        var stagedPermissions: Int?
+        var publishedJSONFiles: [URL] = []
+        let store = ExternalScanRequestStore(
+            baseURL: tempDirectory,
+            beforePublishingRequest: { [self] stagingURL in
+                stagedPermissions = try permissions(at: stagingURL)
+                publishedJSONFiles = try queueFiles().filter { $0.pathExtension == "json" }
+            }
+        )
+
+        let request = try store.enqueue(
+            paths: ["/tmp/a"],
+            source: ExternalScanRequestStore.finderSource
+        )
+
+        XCTAssertEqual(stagedPermissions, 0o600)
+        XCTAssertTrue(publishedJSONFiles.isEmpty)
+        XCTAssertEqual(try queueFiles().filter { $0.pathExtension == "json" }.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: requestFileURL(id: request.id).path))
+    }
+
+    func testDefaultStoreUsesExpectedAppGroupContainer() throws {
+        let containerURL = tempDirectory.appendingPathComponent("GroupContainer", isDirectory: true)
+        let store = ExternalScanRequestStore(appGroupContainerResolver: { identifier in
+            XCTAssertEqual(identifier, ExternalScanRequestStore.appGroupIdentifier)
+            return containerURL
+        })
+
+        try store.enqueue(paths: ["/tmp/a"], source: ExternalScanRequestStore.finderSource)
+
+        XCTAssertEqual(try store.loadRequests().first?.paths, ["/tmp/a"])
+    }
+
     func testDrainDropsStaleRequestsWithoutScanning() throws {
         let currentDate = Date()
         let store = ExternalScanRequestStore(baseURL: tempDirectory, now: { currentDate })
@@ -115,6 +149,30 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         XCTAssertThrowsError(try store.enqueue(paths: ["/tmp/overflow"], source: "finder")) { error in
             XCTAssertEqual(error as? ExternalScanRequestStoreError, .queueFull)
         }
+    }
+
+    func testEnqueuePrunesStaleRecordsBeforeCheckingQueueCapacity() throws {
+        let currentDate = Date()
+        let store = ExternalScanRequestStore(baseURL: tempDirectory, now: { currentDate })
+
+        for index in 0..<25 {
+            try writeRequest(
+                ExternalScanRequest(
+                    id: UUID(),
+                    createdAt: currentDate.addingTimeInterval(-10 * 60),
+                    paths: ["/tmp/stale-\(index)"],
+                    source: ExternalScanRequestStore.finderSource
+                )
+            )
+        }
+
+        let request = try store.enqueue(
+            paths: ["/tmp/fresh"],
+            source: ExternalScanRequestStore.finderSource
+        )
+
+        XCTAssertEqual(try store.loadRequests().map(\.id), [request.id])
+        XCTAssertEqual(try queueFiles().count, 1)
     }
 
     func testLoadRequestsCapsWorkToQueueBound() throws {
@@ -250,6 +308,53 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         try store.acknowledgeRequest(id: request.id)
 
         XCTAssertTrue(try store.loadRequest(id: request.id).isEmpty)
+    }
+
+    func testAcknowledgingAnAlreadyRemovedRequestFails() throws {
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+        let request = try store.enqueue(
+            paths: ["/tmp/a"],
+            source: ExternalScanRequestStore.finderSource
+        )
+
+        try store.acknowledgeRequest(id: request.id)
+
+        XCTAssertThrowsError(try store.acknowledgeRequest(id: request.id)) { error in
+            XCTAssertEqual(error as? ExternalScanRequestStoreError, .invalidRequestFile)
+        }
+    }
+
+    func testClaimedRequestIsRecoveredAndAcknowledgedAfterRestart() throws {
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+        let request = try store.enqueue(
+            paths: ["/tmp/a"],
+            source: ExternalScanRequestStore.finderSource
+        )
+
+        XCTAssertEqual(try store.claimRequest(id: request.id).map(\.id), [request.id])
+
+        let restartedStore = ExternalScanRequestStore(baseURL: tempDirectory)
+        XCTAssertEqual(try restartedStore.claimRequests().map(\.id), [request.id])
+        try restartedStore.acknowledgeClaim(id: request.id)
+
+        XCTAssertTrue(try restartedStore.claimRequests().isEmpty)
+    }
+
+    func testClaimedRequestRemainsRecoverableAfterQueuedRequestAgeExpires() throws {
+        let claimedAt = Date()
+        let store = ExternalScanRequestStore(baseURL: tempDirectory, now: { claimedAt })
+        let request = try store.enqueue(
+            paths: ["/tmp/a"],
+            source: ExternalScanRequestStore.finderSource
+        )
+
+        XCTAssertEqual(try store.claimRequest(id: request.id).map(\.id), [request.id])
+
+        let restartedStore = ExternalScanRequestStore(
+            baseURL: tempDirectory,
+            now: { claimedAt.addingTimeInterval(10 * 60) }
+        )
+        XCTAssertEqual(try restartedStore.claimRequests().map(\.id), [request.id])
     }
 
     func testMalformedRecordDoesNotPreventValidRequestFromLoading() throws {
