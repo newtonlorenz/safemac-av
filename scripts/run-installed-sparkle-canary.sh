@@ -14,9 +14,10 @@ INSTALL_UPDATE="${SAFEMAC_CANARY_INSTALL:-0}"
 KEEP_WORKDIR="${SAFEMAC_CANARY_KEEP_WORKDIR:-0}"
 EXPECT_UPDATE="${SAFEMAC_CANARY_EXPECT_UPDATE:-0}"
 ALLOW_MAJOR_UPGRADES="${SAFEMAC_CANARY_ALLOW_MAJOR_UPGRADES:-0}"
-ALLOW_NON_DEVELOPER_ID="${SAFEMAC_CANARY_ALLOW_NON_DEVELOPER_ID:-0}"
-ALLOW_UNTRUSTED_GATEKEEPER="${SAFEMAC_CANARY_ALLOW_UNTRUSTED_GATEKEEPER:-0}"
 EXPECTED_BUNDLE_ID="${SAFEMAC_CANARY_BUNDLE_ID:-com.newtonlorenz.ClamAV-GUI}"
+EXPECTED_TEAM_ID="CQPH8YR62A"
+ALLOW_UNSIGNED_TEST_FIXTURE="${SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE:-0}"
+TEST_ONLY_FIXTURE_ROOT="${SAFEMAC_CANARY_TEST_ONLY_FIXTURE_ROOT:-}"
 USER_AGENT="${SAFEMAC_CANARY_USER_AGENT:-SafeMac AV Sparkle canary}"
 
 WORK_DIR=""
@@ -72,7 +73,36 @@ resolve_feed_url() {
 
     [[ -n "$FEED_URL" ]] || fail "Sparkle feed URL is missing; set SAFEMAC_CANARY_FEED_URL or SUFeedURL"
     [[ "$FEED_URL" != *'$('* ]] || fail "Sparkle feed URL contains an unresolved build setting"
-    [[ "$FEED_URL" == https://* || "$FEED_URL" == file://* ]] || fail "Sparkle feed URL must be https:// or file:// for the canary"
+    if ! /usr/bin/swift - "$FEED_URL" <<'SWIFT'
+import Foundation
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+guard arguments.count == 1 else { exit(1) }
+let value = arguments[0]
+guard value.unicodeScalars.allSatisfy({
+          !$0.properties.isWhitespace && !CharacterSet.controlCharacters.contains($0)
+      }),
+      let components = URLComponents(string: value),
+      components.user == nil,
+      components.password == nil,
+      components.query == nil,
+      components.fragment == nil,
+      !components.percentEncodedPath.isEmpty,
+      let url = components.url,
+      url.absoluteString == value else {
+    exit(1)
+}
+if components.scheme == "https" {
+    guard components.host?.isEmpty == false else { exit(1) }
+} else if components.scheme == "file" {
+    guard url.isFileURL else { exit(1) }
+} else {
+    exit(1)
+}
+SWIFT
+    then
+        fail "Sparkle feed URL must be a strict HTTPS or local file URL"
+    fi
 }
 
 verify_app_policy() {
@@ -86,35 +116,92 @@ verify_app_policy() {
     [[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]] \
         || fail "$label has unexpected bundle identifier: ${bundle_id:-missing}"
 
+    if is_explicit_test_fixture "$app_path"; then
+        info "$label uses the explicit unsigned temporary test-fixture override"
+        return
+    fi
+
     codesign --verify --deep --strict --verbose=2 "$app_path" \
         || fail "$label signature verification failed"
 
     details="$(codesign -dv --verbose=4 "$app_path" 2>&1)" \
         || fail "unable to inspect $label signature"
-    if [[ "$ALLOW_NON_DEVELOPER_ID" != "1" ]]; then
-        grep -Fq 'Authority=Developer ID Application:' <<< "$details" \
-            || fail "$label is not signed with Developer ID Application"
-        grep -Eq '^Timestamp=.+$' <<< "$details" \
-            || fail "$label signature does not include a secure timestamp"
-        if grep -Fq 'Timestamp=none' <<< "$details"; then
-            fail "$label signature does not include a secure timestamp"
-        fi
-        grep -Fq 'runtime' <<< "$details" \
-            || fail "$label signature is missing hardened runtime"
+    grep -Fq 'Authority=Developer ID Application:' <<< "$details" \
+        || fail "$label is not signed with Developer ID Application"
+    grep -Fq "TeamIdentifier=$EXPECTED_TEAM_ID" <<< "$details" \
+        || fail "$label is not signed by the expected Developer ID team"
+    grep -Eq '^Timestamp=.+$' <<< "$details" \
+        || fail "$label signature does not include a secure timestamp"
+    if grep -Fq 'Timestamp=none' <<< "$details"; then
+        fail "$label signature does not include a secure timestamp"
     fi
+    grep -Fq 'runtime' <<< "$details" \
+        || fail "$label signature is missing hardened runtime"
 
-    if ! spctl -a -vv -t execute "$app_path" >/dev/null 2>&1; then
-        [[ "$ALLOW_UNTRUSTED_GATEKEEPER" == "1" ]] \
-            || fail "Gatekeeper does not trust $label"
+    spctl -a -vv -t execute "$app_path" >/dev/null 2>&1 \
+        || fail "Gatekeeper does not trust $label"
+
+    info "$label uses Developer ID Team $EXPECTED_TEAM_ID, hardened runtime, and Gatekeeper trust"
+}
+
+is_explicit_test_fixture() {
+    local app_path="$1"
+    local app_real_path
+    local candidate_root
+    local fixture_root
+    local marker_path
+    local system_temp_root
+
+    [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]] || return 1
+    if [[ -n "$WORK_DIR" && -n "$CANARY_APP_PATH" && "$app_path" == "$CANARY_APP_PATH" ]]; then
+        candidate_root="$WORK_DIR"
+    else
+        [[ -n "$TEST_ONLY_FIXTURE_ROOT" ]] \
+            || fail "unsigned fixture override requires an explicit fixture root"
+        candidate_root="$TEST_ONLY_FIXTURE_ROOT"
     fi
-
-    info "$label signature and Gatekeeper trust are acceptable"
+    [[ -d "$candidate_root" && ! -L "$candidate_root" ]] \
+        || fail "unsigned fixture override requires a physical fixture root"
+    fixture_root="$(cd "$candidate_root" && pwd -P)"
+    system_temp_root="$(cd "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" && pwd -P)"
+    [[ "$fixture_root/" == "$system_temp_root/"* ]] \
+        || fail "unsigned fixture override root is outside the system temporary directory"
+    case "$(basename "$fixture_root")" in
+        safemac-run-sparkle-canary-test.*|safemac-installed-sparkle-canary.*|safemac-sparkle-canary.*) ;;
+        *) fail "unsigned fixture override root has an unexpected name" ;;
+    esac
+    [[ "$(/usr/bin/stat -f '%u' "$fixture_root")" == "$(/usr/bin/id -u)" ]] \
+        || fail "unsigned fixture override root has the wrong owner"
+    [[ "$(/usr/bin/stat -f '%Lp' "$fixture_root")" == "700" ]] \
+        || fail "unsigned fixture override root must use mode 0700"
+    marker_path="$fixture_root/.safemac-canary-unsigned-fixture"
+    [[ -f "$marker_path" && ! -L "$marker_path" ]] \
+        || fail "unsigned fixture override requires a validated fixture root"
+    [[ "$(/usr/bin/stat -f '%u' "$marker_path")" == "$(/usr/bin/id -u)" ]] \
+        || fail "unsigned fixture marker has the wrong owner"
+    [[ "$(/usr/bin/stat -f '%Lp' "$marker_path")" == "600" ]] \
+        || fail "unsigned fixture marker must use mode 0600"
+    [[ "$(< "$marker_path")" == "SafeMac canary unsigned fixture" ]] \
+        || fail "unsigned fixture marker is invalid"
+    [[ -d "$app_path" && ! -L "$app_path" ]] \
+        || fail "unsigned fixture app must be a physical directory"
+    app_real_path="$(cd "$app_path" && pwd -P)"
+    [[ "$app_real_path/" == "$fixture_root/"* ]] \
+        || fail "unsigned fixture override is restricted to the validated fixture root"
 }
 
 copy_canary_app() {
     local parent_dir
+    local temp_root="${TMPDIR:-/tmp}"
 
-    WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-sparkle-canary.XXXXXX")"
+    if [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]]; then
+        temp_root="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)"
+    fi
+    WORK_DIR="$(mktemp -d "$temp_root/safemac-sparkle-canary.XXXXXX")"
+    if [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]]; then
+        printf 'SafeMac canary unsigned fixture\n' > "$WORK_DIR/.safemac-canary-unsigned-fixture"
+        chmod 600 "$WORK_DIR/.safemac-canary-unsigned-fixture"
+    fi
     parent_dir="$WORK_DIR/Applications"
     CANARY_APP_PATH="$parent_dir/$(basename "$APP_PATH")"
     mkdir -p "$parent_dir"

@@ -5,9 +5,12 @@ IFS=$'\n\t'
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-installed-sparkle-canary.XXXXXX")"
+FAKE_BIN="$WORK_DIR/bin"
+OUTSIDE_WORK_DIR="$(mktemp -d /tmp/safemac-installed-sparkle-canary-outside.XXXXXX)"
 
 cleanup() {
     rm -rf "$WORK_DIR"
+    rm -rf "$OUTSIDE_WORK_DIR"
 }
 
 trap cleanup EXIT
@@ -15,6 +18,37 @@ trap cleanup EXIT
 fail() {
     printf 'Test failed: %s\n' "$1" >&2
     exit 1
+}
+
+write_fake_tool() {
+    local name="$1"
+    local body="$2"
+
+    {
+        printf '#!/bin/bash\n'
+        printf 'set -Eeuo pipefail\n'
+        printf '%s\n' "$body"
+    } > "$FAKE_BIN/$name"
+    chmod +x "$FAKE_BIN/$name"
+}
+
+make_fake_tools() {
+    mkdir -p "$FAKE_BIN"
+    write_fake_tool codesign '
+if [[ " $* " == *" --verify "* && "${CANARY_CODESIGN_VERIFY_FAIL:-0}" == "1" ]]; then
+    exit 1
+fi
+if [[ " $* " == *" -dv "* ]]; then
+    team_id="${CANARY_CODESIGN_TEAM_ID:-CQPH8YR62A}"
+    flags="CodeDirectory v=20500 flags=0x10000(runtime)"
+    [[ "${CANARY_CODESIGN_MISSING_RUNTIME:-0}" != "1" ]] || flags="CodeDirectory v=20500 flags=0x0(none)"
+    printf "%s\n" \
+        "Authority=Developer ID Application: SafeMac Test ($team_id)" \
+        "TeamIdentifier=$team_id" \
+        "Timestamp=Aug 22, 2026 at 02:00:00" \
+        "$flags" >&2
+fi'
+    write_fake_tool spctl '[[ "${CANARY_SPCTL_FAIL:-0}" != "1" ]]'
 }
 
 make_fixture() {
@@ -33,6 +67,8 @@ make_fixture() {
     <string>1.1.0</string>
     <key>CFBundleVersion</key>
     <string>2</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.newtonlorenz.ClamAV-GUI</string>
     <key>SUFeedURL</key>
     <string>https://updates.example.com/appcast.xml</string>
     <key>SUPublicEDKey</key>
@@ -87,6 +123,72 @@ try publicKeyBase64.write(to: URL(fileURLWithPath: publicKeyPath), atomically: t
 let plist = try String(contentsOfFile: infoPlistPath, encoding: .utf8)
 try plist.replacingOccurrences(of: "__SPARKLE_PUBLIC_ED_KEY__", with: publicKeyBase64)
     .write(to: URL(fileURLWithPath: infoPlistPath), atomically: true, encoding: .utf8)
+SWIFT
+}
+
+mutate_and_resign_installed_appcast() {
+    local mode="$1"
+
+    swift - "$WORK_DIR/package/appcast/appcast.xml" "$mode" <<'SWIFT'
+import CryptoKit
+import Foundation
+
+let appcastURL = URL(fileURLWithPath: CommandLine.arguments[1])
+let mode = CommandLine.arguments[2]
+let appcastData = try Data(contentsOf: appcastURL)
+let prefix = Data("<!-- sparkle-signatures:\n".utf8)
+guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]),
+      var content = String(data: appcastData[..<prefixRange.lowerBound], encoding: .utf8) else {
+    exit(1)
+}
+switch mode {
+case "url-user":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://user@downloads.example.com/SafeMac-AV.dmg"
+    )
+case "url-password":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://user:password@downloads.example.com/SafeMac-AV.dmg"
+    )
+case "url-query":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://downloads.example.com/SafeMac-AV.dmg?token=secret"
+    )
+case "url-fragment":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://downloads.example.com/SafeMac-AV.dmg#fragment"
+    )
+case "misleading-version":
+    content = content.replacingOccurrences(
+        of: #"sparkle:version="3""#,
+        with: #"data-sparkle:version="3" sparkle:version="1""#
+    )
+case "commented-valid-invalid-real", "cdata-valid-invalid-real":
+    let expression = try NSRegularExpression(pattern: #"<enclosure\b[^>]*>"#)
+    let range = NSRange(content.startIndex..<content.endIndex, in: content)
+    guard let match = expression.firstMatch(in: content, range: range),
+          let swiftRange = Range(match.range, in: content) else { exit(2) }
+    let validEnclosure = String(content[swiftRange])
+    let invalidRealEnclosure = validEnclosure.replacingOccurrences(
+        of: #"sparkle:version="3""#,
+        with: #"sparkle:version="1""#
+    )
+    let hiddenValidEnclosure = mode == "commented-valid-invalid-real"
+        ? "<!-- \(validEnclosure) -->"
+        : "<![CDATA[\(validEnclosure)]]>"
+    content.replaceSubrange(swiftRange, with: "\(hiddenValidEnclosure)\n      \(invalidRealEnclosure)")
+default:
+    exit(2)
+}
+let signedContent = Data(content.utf8)
+let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
+let signature = try key.signature(for: signedContent).base64EncodedString()
+let signedAppcast = "\(content)<!-- sparkle-signatures:\nedSignature: \(signature)\nlength: \(signedContent.count)\n-->\n"
+try signedAppcast.write(to: appcastURL, atomically: true, encoding: .utf8)
 SWIFT
 }
 
@@ -183,14 +285,134 @@ run_invalid_installed_key_failure_case() {
     mv "$WORK_DIR/SafeMac AV.app/Contents/Info.plist.bak" "$WORK_DIR/SafeMac AV.app/Contents/Info.plist"
 }
 
+run_unsafe_feed_url_failure_case() {
+    local feed_url
+    local -a feed_urls=(
+        "https://user@updates.example.com/appcast.xml"
+        "https://user:password@updates.example.com/appcast.xml"
+        "https://updates.example.com/appcast.xml?token=secret"
+        "https://updates.example.com/appcast.xml#fragment"
+    )
+
+    for feed_url in "${feed_urls[@]}"; do
+        cp "$WORK_DIR/SafeMac AV.app/Contents/Info.plist" "$WORK_DIR/SafeMac AV.app/Contents/Info.plist.bak"
+        /usr/libexec/PlistBuddy -c "Set :SUFeedURL $feed_url" \
+            "$WORK_DIR/SafeMac AV.app/Contents/Info.plist"
+        if run_success_case >/dev/null 2>&1; then
+            fail "unsafe feed URL was accepted: $feed_url"
+        fi
+        mv "$WORK_DIR/SafeMac AV.app/Contents/Info.plist.bak" "$WORK_DIR/SafeMac AV.app/Contents/Info.plist"
+    done
+}
+
+run_unsafe_archive_metadata_failure_cases() {
+    local mode
+
+    for mode in url-user url-password url-query url-fragment misleading-version commented-valid-invalid-real cdata-valid-invalid-real; do
+        cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+        mutate_and_resign_installed_appcast "$mode"
+        if "$PROJECT_DIR/scripts/verify-installed-sparkle-canary.sh" \
+            "$WORK_DIR/SafeMac AV.app" \
+            "$WORK_DIR/package/appcast/appcast.xml" \
+            "$WORK_DIR/package/SafeMac-AV.dmg" >/dev/null 2>&1; then
+            fail "unsafe installed appcast metadata was accepted: $mode"
+        fi
+        mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+    done
+}
+
+run_unsigned_trailing_appcast_failure_cases() {
+    local trailing
+
+    for trailing in '<!-- unsigned trailing comment -->' '<extra />' 'unsigned-junk'; do
+        cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+        printf '%s\n' "$trailing" >> "$WORK_DIR/package/appcast/appcast.xml"
+        if run_success_case >/dev/null 2>&1; then
+            fail "unsigned trailing installed appcast content was accepted: $trailing"
+        fi
+        mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+    done
+}
+
+run_signature_policy_failure_cases() {
+    if CANARY_CODESIGN_TEAM_ID="WRONGTEAM01" run_success_case >/dev/null 2>&1; then
+        fail "wrong-team installed app was accepted"
+    fi
+    if CANARY_CODESIGN_VERIFY_FAIL=1 run_success_case >/dev/null 2>&1; then
+        fail "tampered or unsigned installed app was accepted"
+    fi
+    if CANARY_CODESIGN_MISSING_RUNTIME=1 run_success_case >/dev/null 2>&1; then
+        fail "installed app without hardened runtime was accepted"
+    fi
+    if CANARY_SPCTL_FAIL=1 run_success_case >/dev/null 2>&1; then
+        fail "Gatekeeper-rejected installed app was accepted"
+    fi
+}
+
+run_test_fixture_override_case() {
+    printf 'SafeMac canary unsigned fixture\n' > "$WORK_DIR/.safemac-canary-unsigned-fixture"
+    chmod 600 "$WORK_DIR/.safemac-canary-unsigned-fixture"
+    CANARY_CODESIGN_VERIFY_FAIL=1 \
+    CANARY_SPCTL_FAIL=1 \
+    SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+    SAFEMAC_CANARY_TEST_ONLY_FIXTURE_ROOT="$WORK_DIR" \
+        run_success_case >/dev/null \
+        || fail "explicit unsigned test-fixture override was rejected"
+}
+
+run_test_fixture_override_scope_case() {
+    if TMPDIR="/Applications" \
+       CANARY_CODESIGN_VERIFY_FAIL=1 \
+       SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+        run_success_case >/dev/null 2>&1; then
+        fail "caller-controlled TMPDIR enabled the unsigned fixture override"
+    fi
+}
+
+run_test_fixture_override_requires_explicit_root() {
+    if TMPDIR="$WORK_DIR" \
+       CANARY_CODESIGN_VERIFY_FAIL=1 \
+       SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+        run_success_case >/dev/null 2>&1; then
+        fail "unsigned fixture override trusted caller-controlled TMPDIR without a validated fixture root"
+    fi
+}
+
+run_test_fixture_override_symlink_escape_case() {
+    local real_app_path="$OUTSIDE_WORK_DIR/SafeMac AV.app"
+    local symlink_app_path="$WORK_DIR/Symlinked SafeMac AV.app"
+
+    cp -R "$WORK_DIR/SafeMac AV.app" "$real_app_path"
+    ln -s "$real_app_path" "$symlink_app_path"
+    if CANARY_CODESIGN_VERIFY_FAIL=1 \
+       SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+        "$PROJECT_DIR/scripts/verify-installed-sparkle-canary.sh" \
+        "$symlink_app_path" \
+        "$WORK_DIR/package/appcast/appcast.xml" \
+        "$WORK_DIR/package/SafeMac-AV.dmg" >/dev/null 2>&1; then
+        fail "unsigned fixture override accepted a symlinked installed app outside the temporary directory"
+    fi
+    rm -f "$symlink_app_path"
+}
+
 main() {
+    make_fake_tools
+    export PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin"
     make_fixture
     run_success_case
+    run_signature_policy_failure_cases
+    run_test_fixture_override_case
+    run_test_fixture_override_scope_case
+    run_test_fixture_override_requires_explicit_root
+    run_test_fixture_override_symlink_escape_case
     run_same_version_failure_case
     run_feed_signature_failure_case
     run_archive_signature_failure_case
     run_duplicate_newer_enclosure_failure_case
     run_invalid_installed_key_failure_case
+    run_unsafe_feed_url_failure_case
+    run_unsafe_archive_metadata_failure_cases
+    run_unsigned_trailing_appcast_failure_cases
     printf 'installed Sparkle canary tests passed\n'
 }
 

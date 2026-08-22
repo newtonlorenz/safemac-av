@@ -4,10 +4,16 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-release-test.XXXXXX")"
+SYSTEM_TEMP_ROOT="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)"
+SYSTEM_TEMP_ROOT="${SYSTEM_TEMP_ROOT%/}"
+WORK_DIR="$(mktemp -d "$SYSTEM_TEMP_ROOT/safemac-release-test.XXXXXX")"
+OUTSIDE_WORK_DIR="$(mktemp -d "$SYSTEM_TEMP_ROOT/safemac-release-outside.XXXXXX")"
+WORK_DIR="$(cd "$WORK_DIR" && pwd -P)"
+OUTSIDE_WORK_DIR="$(cd "$OUTSIDE_WORK_DIR" && pwd -P)"
 
 cleanup() {
     rm -rf "$WORK_DIR"
+    rm -rf "$OUTSIDE_WORK_DIR"
 }
 
 trap cleanup EXIT
@@ -103,7 +109,7 @@ let content = """
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
     <item>
-      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="\(archiveSignature)" />
+      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(try Data(contentsOf: URL(fileURLWithPath: dmgPath)).count)" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="\(archiveSignature)" />
     </item>
   </channel>
 </rss>
@@ -117,6 +123,14 @@ let plist = try String(contentsOfFile: infoPlistPath, encoding: .utf8)
 try plist.replacingOccurrences(of: "__SPARKLE_PUBLIC_ED_KEY__", with: publicKeyBase64)
     .write(to: URL(fileURLWithPath: infoPlistPath), atomically: true, encoding: .utf8)
 SWIFT
+}
+
+configure_test_app_override() {
+    printf 'SafeMac release verifier app fixture\n' > "$WORK_DIR/.safemac-release-verify-app-fixture"
+    chmod 600 "$WORK_DIR/.safemac-release-verify-app-fixture"
+    export SAFEMAC_VERIFY_TEST_ONLY_ALLOW_APP_OVERRIDE=1
+    export SAFEMAC_VERIFY_TEST_ONLY_FIXTURE_ROOT="$WORK_DIR"
+    export SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app"
 }
 
 make_fake_tools() {
@@ -187,6 +201,52 @@ run_arch_failure_case() {
     fi
 }
 
+run_unscoped_app_override_failure_cases() {
+    if env \
+       -u SAFEMAC_VERIFY_TEST_ONLY_ALLOW_APP_OVERRIDE \
+       -u SAFEMAC_VERIFY_TEST_ONLY_FIXTURE_ROOT \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+       PATH="$WORK_DIR/bin:$PATH" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "unscoped release app override was accepted"
+    fi
+
+    cp -R "$WORK_DIR/SafeMac AV.app" "$OUTSIDE_WORK_DIR/SafeMac AV.app"
+    ln -s "$OUTSIDE_WORK_DIR/SafeMac AV.app" "$WORK_DIR/Symlinked SafeMac AV.app"
+    if SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/Symlinked SafeMac AV.app" \
+       PATH="$WORK_DIR/bin:$PATH" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "symlinked release app override escaped its fixture root"
+    fi
+}
+
+run_embedded_feed_url_failure_cases() {
+    local original_url="https://updates.example.com/appcast.xml"
+    local invalid_url
+    local -a invalid_urls=(
+        "https://user@updates.example.com/appcast.xml"
+        "https://user:password@updates.example.com/appcast.xml"
+        "https://updates.example.com/appcast.xml?token=secret"
+        "https://updates.example.com/appcast.xml#fragment"
+    )
+
+    for invalid_url in "${invalid_urls[@]}"; do
+        cp "$WORK_DIR/SafeMac AV.app/Contents/Info.plist" "$WORK_DIR/Info.plist.bak"
+        INVALID_URL="$invalid_url" perl -0pi -e \
+            's|https://updates\.example\.com/appcast\.xml|$ENV{INVALID_URL}|' \
+            "$WORK_DIR/SafeMac AV.app/Contents/Info.plist"
+        if PATH="$WORK_DIR/bin:$PATH" \
+           EXPECTED_SPARKLE_FEED_URL="$invalid_url" \
+           SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "unsafe embedded Sparkle feed URL was accepted: $invalid_url"
+        fi
+        mv "$WORK_DIR/Info.plist.bak" "$WORK_DIR/SafeMac AV.app/Contents/Info.plist"
+        grep -Fq "$original_url" "$WORK_DIR/SafeMac AV.app/Contents/Info.plist" \
+            || fail "embedded Sparkle feed URL fixture was not restored"
+    done
+}
+
 run_appcast_failure_case() {
     perl -0pi -e 's/sparkle:version="3"/sparkle:version="4"/' "$WORK_DIR/package/appcast/appcast.xml"
     if PATH="$WORK_DIR/bin:$PATH" \
@@ -216,6 +276,185 @@ run_feed_signature_failure_case() {
         fail "tampered signed appcast was accepted"
     fi
     mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+}
+
+run_malformed_feed_signature_failure_cases() {
+    local replacement
+
+    for replacement in 'not-base64!' 'YWJj'; do
+        cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+        REPLACEMENT="$replacement" perl -0pi -e \
+            's/(?m)^edSignature:\s*\S+/edSignature: $ENV{REPLACEMENT}/' \
+            "$WORK_DIR/package/appcast/appcast.xml"
+        if PATH="$WORK_DIR/bin:$PATH" \
+           SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "malformed or wrong-length signed-feed signature was accepted: $replacement"
+        fi
+        mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+    done
+}
+
+write_resigned_archive_signature() {
+    local replacement="$1"
+
+    swift - "$WORK_DIR/package/appcast/appcast.xml" "$replacement" <<'SWIFT'
+import CryptoKit
+import Foundation
+
+let appcastURL = URL(fileURLWithPath: CommandLine.arguments[1])
+let replacement = CommandLine.arguments[2]
+let appcastData = try Data(contentsOf: appcastURL)
+let prefix = Data("<!-- sparkle-signatures:\n".utf8)
+guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]),
+      var content = String(data: appcastData[..<prefixRange.lowerBound], encoding: .utf8) else {
+    exit(1)
+}
+
+let expression = try NSRegularExpression(pattern: #"sparkle:edSignature="[^"]+""#)
+let range = NSRange(content.startIndex..<content.endIndex, in: content)
+content = expression.stringByReplacingMatches(
+    in: content,
+    range: range,
+    withTemplate: "sparkle:edSignature=\"\(replacement)\""
+)
+let signedContent = Data(content.utf8)
+let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
+let feedSignature = try key.signature(for: signedContent).base64EncodedString()
+let signedAppcast = "\(content)<!-- sparkle-signatures:\nedSignature: \(feedSignature)\nlength: \(signedContent.count)\n-->\n"
+try signedAppcast.write(to: appcastURL, atomically: true, encoding: .utf8)
+SWIFT
+}
+
+mutate_and_resign_appcast() {
+    local mode="$1"
+
+    swift - "$WORK_DIR/package/appcast/appcast.xml" "$mode" <<'SWIFT'
+import CryptoKit
+import Foundation
+
+let appcastURL = URL(fileURLWithPath: CommandLine.arguments[1])
+let mode = CommandLine.arguments[2]
+let appcastData = try Data(contentsOf: appcastURL)
+let prefix = Data("<!-- sparkle-signatures:\n".utf8)
+guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]),
+      var content = String(data: appcastData[..<prefixRange.lowerBound], encoding: .utf8) else {
+    exit(1)
+}
+
+switch mode {
+case "misleading-version":
+    content = content.replacingOccurrences(
+        of: #"sparkle:version="3""#,
+        with: #"data-sparkle:version="3" sparkle:version="999""#
+    )
+case "misleading-short-version":
+    content = content.replacingOccurrences(
+        of: #"sparkle:shortVersionString="1.2.0""#,
+        with: #"data-sparkle:shortVersionString="1.2.0" sparkle:shortVersionString="9.9.9""#
+    )
+case "single-quoted-version":
+    content = content.replacingOccurrences(of: #"sparkle:version="3""#, with: "sparkle:version='3'")
+case "wrong-length":
+    content = content.replacingOccurrences(of: #"length="9""#, with: #"length="999""#)
+case "url-user":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://user@downloads.example.com/SafeMac-AV.dmg"
+    )
+case "url-password":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://user:password@downloads.example.com/SafeMac-AV.dmg"
+    )
+case "url-query":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://downloads.example.com/SafeMac-AV.dmg?token=secret"
+    )
+case "url-fragment":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://downloads.example.com/SafeMac-AV.dmg#fragment"
+    )
+case "commented-valid-invalid-real", "cdata-valid-invalid-real":
+    let expression = try NSRegularExpression(pattern: #"<enclosure\b[^>]*>"#)
+    let range = NSRange(content.startIndex..<content.endIndex, in: content)
+    guard let match = expression.firstMatch(in: content, range: range),
+          let swiftRange = Range(match.range, in: content) else { exit(2) }
+    let validEnclosure = String(content[swiftRange])
+    let invalidRealEnclosure = validEnclosure.replacingOccurrences(
+        of: #"sparkle:version="3""#,
+        with: #"sparkle:version="999""#
+    )
+    let hiddenValidEnclosure = mode == "commented-valid-invalid-real"
+        ? "<!-- \(validEnclosure) -->"
+        : "<![CDATA[\(validEnclosure)]]>"
+    content.replaceSubrange(swiftRange, with: "\(hiddenValidEnclosure)\n      \(invalidRealEnclosure)")
+default:
+    exit(2)
+}
+
+let signedContent = Data(content.utf8)
+let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
+let feedSignature = try key.signature(for: signedContent).base64EncodedString()
+let signedAppcast = "\(content)<!-- sparkle-signatures:\nedSignature: \(feedSignature)\nlength: \(signedContent.count)\n-->\n"
+try signedAppcast.write(to: appcastURL, atomically: true, encoding: .utf8)
+SWIFT
+}
+
+run_exact_enclosure_metadata_failure_cases() {
+    local mode
+
+    for mode in \
+        misleading-version \
+        misleading-short-version \
+        single-quoted-version \
+        wrong-length \
+        url-user \
+        url-password \
+        url-query \
+        url-fragment \
+        commented-valid-invalid-real \
+        cdata-valid-invalid-real; do
+        cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+        mutate_and_resign_appcast "$mode"
+        if PATH="$WORK_DIR/bin:$PATH" \
+           SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "invalid exact enclosure metadata was accepted: $mode"
+        fi
+        mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+    done
+}
+
+run_unsigned_trailing_appcast_failure_cases() {
+    local trailing
+
+    for trailing in '<!-- unsigned trailing comment -->' '<extra />' 'unsigned-junk'; do
+        cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+        printf '%s\n' "$trailing" >> "$WORK_DIR/package/appcast/appcast.xml"
+        if PATH="$WORK_DIR/bin:$PATH" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "unsigned trailing appcast content was accepted: $trailing"
+        fi
+        mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+    done
+}
+
+run_malformed_archive_signature_failure_cases() {
+    local replacement
+
+    for replacement in 'not-base64!' 'YWJj'; do
+        cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+        write_resigned_archive_signature "$replacement"
+        if PATH="$WORK_DIR/bin:$PATH" \
+           SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "malformed or wrong-length archive signature was accepted: $replacement"
+        fi
+        mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+    done
 }
 
 run_archive_signature_failure_case() {
@@ -349,7 +588,10 @@ run_finder_entitlement_failure_cases() {
 main() {
     make_fixture
     make_fake_tools
+    configure_test_app_override
     run_success_case
+    run_unscoped_app_override_failure_cases
+    run_embedded_feed_url_failure_cases
     run_arch_failure_case
     run_nested_adhoc_failure_cases
     run_nested_arch_failure_case
@@ -359,7 +601,11 @@ main() {
     run_appcast_failure_case
     run_missing_appcast_failure_case
     run_feed_signature_failure_case
+    run_malformed_feed_signature_failure_cases
     run_archive_signature_failure_case
+    run_malformed_archive_signature_failure_cases
+    run_exact_enclosure_metadata_failure_cases
+    run_unsigned_trailing_appcast_failure_cases
     run_duplicate_matching_enclosure_failure_case
     printf 'verify-release-package tests passed\n'
 }

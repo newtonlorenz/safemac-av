@@ -11,6 +11,10 @@ INSTALLED_APP_PATH="${1:-/Applications/SafeMac AV.app}"
 APPCAST_PATH="${2:-build/appcast/appcast.xml}"
 DMG_PATH="${3:-build/SafeMac-AV.dmg}"
 EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX="${EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX:-}"
+EXPECTED_BUNDLE_ID="com.newtonlorenz.ClamAV-GUI"
+EXPECTED_TEAM_ID="CQPH8YR62A"
+ALLOW_UNSIGNED_TEST_FIXTURE="${SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE:-0}"
+TEST_ONLY_FIXTURE_ROOT="${SAFEMAC_CANARY_TEST_ONLY_FIXTURE_ROOT:-}"
 
 fail() {
     printf 'Error: %s\n' "$1" >&2
@@ -44,11 +48,87 @@ optional_bundle_value() {
     /usr/libexec/PlistBuddy -c "Print :$key" "$info_plist" 2>/dev/null || true
 }
 
+is_explicit_test_fixture() {
+    local app_real_path
+    local fixture_root
+    local marker_path
+    local system_temp_root
+
+    [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]] || return 1
+    [[ -n "$TEST_ONLY_FIXTURE_ROOT" ]] \
+        || fail "unsigned fixture override requires an explicit fixture root"
+    [[ -d "$TEST_ONLY_FIXTURE_ROOT" && ! -L "$TEST_ONLY_FIXTURE_ROOT" ]] \
+        || fail "unsigned fixture override requires a physical fixture root"
+    fixture_root="$(cd "$TEST_ONLY_FIXTURE_ROOT" && pwd -P)"
+    system_temp_root="$(cd "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" && pwd -P)"
+    [[ "$fixture_root/" == "$system_temp_root/"* ]] \
+        || fail "unsigned fixture override root is outside the system temporary directory"
+    case "$(basename "$fixture_root")" in
+        safemac-installed-sparkle-canary.*|safemac-run-sparkle-canary-test.*) ;;
+        *) fail "unsigned fixture override root has an unexpected name" ;;
+    esac
+    [[ "$(/usr/bin/stat -f '%u' "$fixture_root")" == "$(/usr/bin/id -u)" ]] \
+        || fail "unsigned fixture override root has the wrong owner"
+    [[ "$(/usr/bin/stat -f '%Lp' "$fixture_root")" == "700" ]] \
+        || fail "unsigned fixture override root must use mode 0700"
+    marker_path="$fixture_root/.safemac-canary-unsigned-fixture"
+    [[ -f "$marker_path" && ! -L "$marker_path" ]] \
+        || fail "unsigned fixture override requires a validated fixture root"
+    [[ "$(/usr/bin/stat -f '%u' "$marker_path")" == "$(/usr/bin/id -u)" ]] \
+        || fail "unsigned fixture marker has the wrong owner"
+    [[ "$(/usr/bin/stat -f '%Lp' "$marker_path")" == "600" ]] \
+        || fail "unsigned fixture marker must use mode 0600"
+    [[ "$(< "$marker_path")" == "SafeMac canary unsigned fixture" ]] \
+        || fail "unsigned fixture marker is invalid"
+    [[ -d "$INSTALLED_APP_PATH" && ! -L "$INSTALLED_APP_PATH" ]] \
+        || fail "unsigned fixture app must be a physical directory"
+    app_real_path="$(cd "$INSTALLED_APP_PATH" && pwd -P)"
+    [[ "$app_real_path/" == "$fixture_root/"* ]] \
+        || fail "unsigned fixture override is restricted to the validated fixture root"
+}
+
+verify_installed_app_policy() {
+    local bundle_id
+    local details
+
+    bundle_id="$(bundle_value CFBundleIdentifier)"
+    [[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]] \
+        || fail "installed app has an unexpected bundle identifier"
+
+    if is_explicit_test_fixture; then
+        info "unsigned temporary test fixture override is active"
+        return
+    fi
+
+    codesign --verify --deep --strict --verbose=2 "$INSTALLED_APP_PATH" \
+        || fail "installed app signature verification failed"
+    details="$(codesign -dv --verbose=4 "$INSTALLED_APP_PATH" 2>&1)" \
+        || fail "unable to inspect installed app signature"
+    grep -Fq 'Authority=Developer ID Application:' <<< "$details" \
+        || fail "installed app is not signed with Developer ID Application"
+    grep -Fq "TeamIdentifier=$EXPECTED_TEAM_ID" <<< "$details" \
+        || fail "installed app is not signed by the expected Developer ID team"
+    grep -Eq '^Timestamp=.+$' <<< "$details" \
+        || fail "installed app signature does not include a secure timestamp"
+    if grep -Fq 'Timestamp=none' <<< "$details"; then
+        fail "installed app signature does not include a secure timestamp"
+    fi
+    grep -Fq 'runtime' <<< "$details" \
+        || fail "installed app signature is missing hardened runtime"
+    spctl -a -vv -t execute "$INSTALLED_APP_PATH" >/dev/null 2>&1 \
+        || fail "Gatekeeper does not trust the installed app"
+
+    info "installed app uses Developer ID Team $EXPECTED_TEAM_ID, hardened runtime, and Gatekeeper trust"
+}
+
 main() {
+    command_path codesign
+    command_path spctl
     command_path swift
     [[ -d "$INSTALLED_APP_PATH" ]] || fail "installed app not found: $INSTALLED_APP_PATH"
     require_file "$APPCAST_PATH" "Sparkle appcast"
     require_file "$DMG_PATH" "release DMG"
+    verify_installed_app_policy
 
     local installed_version
     local installed_short_version
@@ -77,6 +157,12 @@ guard arguments.count == 2,
       let components = URLComponents(string: arguments[0]),
       components.scheme == "https",
       components.host?.isEmpty == false,
+      components.user == nil,
+      components.password == nil,
+      components.query == nil,
+      components.fragment == nil,
+      let feedURL = components.url,
+      feedURL.absoluteString == arguments[0],
       let publicKey = Data(base64Encoded: arguments[1]),
       publicKey.count == 32 else {
     exit(1)
@@ -106,20 +192,29 @@ func firstMatch(_ pattern: String, in value: String) -> String? {
     return String(value[swiftRange])
 }
 
-func allMatches(_ pattern: String, in value: String) -> [String] {
-    guard let expression = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
-        return []
-    }
-    let range = NSRange(value.startIndex..<value.endIndex, in: value)
-    return expression.matches(in: value, range: range).compactMap { match in
-        guard let swiftRange = Range(match.range, in: value) else { return nil }
-        return String(value[swiftRange])
-    }
-}
+final class EnclosureCollector: NSObject, XMLParserDelegate {
+    var enclosures: [[String: String]] = []
+    var parseError: Error?
 
-func attribute(_ name: String, in tag: String) -> String? {
-    let escapedName = NSRegularExpression.escapedPattern(for: name)
-    return firstMatch(#"\b\#(escapedName)="([^"]+)""#, in: tag)
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String]
+    ) {
+        if elementName == "enclosure" || qName == "enclosure" {
+            enclosures.append(attributeDict)
+        }
+    }
+
+    func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
+        self.parseError = parseError
+    }
+
+    func parser(_ parser: XMLParser, validationErrorOccurred validationError: Error) {
+        self.parseError = validationError
+    }
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
@@ -149,6 +244,11 @@ let contentData = appcastData[..<prefixRange.lowerBound]
 guard let suffixRange = appcastData.range(of: suffix, in: prefixRange.upperBound..<appcastData.endIndex) else {
     fail("signed-feed block terminator missing")
 }
+let trailingData = appcastData[suffixRange.upperBound..<appcastData.endIndex]
+guard let trailing = String(data: trailingData, encoding: .utf8),
+      trailing.unicodeScalars.allSatisfy({ $0.properties.isWhitespace }) else {
+    fail("unsigned trailing appcast content")
+}
 guard let block = String(data: appcastData[prefixRange.upperBound..<suffixRange.lowerBound], encoding: .utf8) else {
     fail("signed-feed block is not UTF-8")
 }
@@ -163,27 +263,38 @@ guard let feedSignature = Data(base64Encoded: feedSignatureBase64),
     fail("signed-feed signature invalid")
 }
 
-guard let content = String(data: contentData, encoding: .utf8) else {
-    fail("appcast content is not UTF-8")
+let collector = EnclosureCollector()
+let parser = XMLParser(data: Data(contentData))
+parser.delegate = collector
+parser.shouldProcessNamespaces = false
+parser.shouldResolveExternalEntities = false
+guard parser.parse(), collector.parseError == nil else {
+    fail("appcast XML is invalid")
 }
-let updateEnclosures = allMatches(#"<enclosure\b[^>]*>"#, in: content).compactMap { tag -> (tag: String, version: Int)? in
-    guard let versionString = attribute("sparkle:version", in: tag),
+let updateEnclosures = collector.enclosures.compactMap { attributes -> (attributes: [String: String], version: Int)? in
+    guard let versionString = attributes["sparkle:version"],
           let version = Int(versionString),
           version > installedVersion else {
         return nil
     }
-    return (tag, version)
+    return (attributes, version)
 }
 guard updateEnclosures.count == 1 else {
     fail("expected exactly one newer appcast enclosure")
 }
-let enclosure = updateEnclosures[0].tag
+let enclosure = updateEnclosures[0].attributes
 
-guard let archiveSignatureBase64 = attribute("sparkle:edSignature", in: enclosure),
-      let archiveURLString = attribute("url", in: enclosure),
-      let archiveURL = URL(string: archiveURLString),
-      archiveURL.scheme == "https",
-      archiveURL.host?.isEmpty == false,
+guard let archiveSignatureBase64 = enclosure["sparkle:edSignature"],
+      let archiveURLString = enclosure["url"],
+      let archiveComponents = URLComponents(string: archiveURLString),
+      archiveComponents.scheme == "https",
+      archiveComponents.host?.isEmpty == false,
+      archiveComponents.user == nil,
+      archiveComponents.password == nil,
+      archiveComponents.query == nil,
+      archiveComponents.fragment == nil,
+      let archiveURL = archiveComponents.url,
+      archiveURL.absoluteString == archiveURLString,
       archiveURL.lastPathComponent == dmgURL.lastPathComponent else {
     fail("archive signature or URL invalid")
 }
@@ -191,7 +302,7 @@ if !expectedDownloadURLPrefix.isEmpty && !archiveURLString.hasPrefix(expectedDow
     fail("archive URL does not use expected download prefix")
 }
 let fileSize = (try FileManager.default.attributesOfItem(atPath: dmgURL.path)[.size] as? NSNumber)?.int64Value
-let declaredLength = attribute("sparkle:length", in: enclosure) ?? attribute("length", in: enclosure)
+let declaredLength = enclosure["sparkle:length"] ?? enclosure["length"]
 guard let declaredLength, Int64(declaredLength) == fileSize else {
     fail("archive length does not match release DMG")
 }

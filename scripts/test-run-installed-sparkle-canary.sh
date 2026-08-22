@@ -8,9 +8,11 @@ WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-run-sparkle-canary-test.XXXXXX")"
 FAKE_BIN="$WORK_DIR/bin"
 APP_PATH="$WORK_DIR/SafeMac AV.app"
 SPARKLE_LOG="$WORK_DIR/sparkle.log"
+OUTSIDE_WORK_DIR="$(mktemp -d /tmp/safemac-run-sparkle-canary-outside.XXXXXX)"
 
 cleanup() {
     rm -rf "$WORK_DIR"
+    rm -rf "$OUTSIDE_WORK_DIR"
 }
 
 trap cleanup EXIT
@@ -65,19 +67,23 @@ make_fake_tools() {
 
     write_fake_tool codesign '
 target="${!#}"
+if [[ " $* " == *" --verify "* && "${CANARY_CODESIGN_VERIFY_FAIL:-0}" == "1" ]]; then
+    exit 1
+fi
 if [[ " $* " == *" -dv "* ]]; then
     flags="CodeDirectory v=20500 flags=0x10000(runtime)"
-    if [[ "${CANARY_COPY_MISSING_RUNTIME:-0}" == "1" && "$target" == *"safemac-sparkle-canary."* ]]; then
+    team_id="${CANARY_CODESIGN_TEAM_ID:-CQPH8YR62A}"
+    if [[ "${CANARY_CODESIGN_MISSING_RUNTIME:-0}" == "1" || ( "${CANARY_COPY_MISSING_RUNTIME:-0}" == "1" && "$target" == *"safemac-sparkle-canary."* ) ]]; then
         flags="CodeDirectory v=20500 flags=0x0(none)"
     fi
     printf "%s\n" \
-        "Authority=Developer ID Application: SafeMac Test (TESTTEAM01)" \
-        "TeamIdentifier=TESTTEAM01" \
+        "Authority=Developer ID Application: SafeMac Test ($team_id)" \
+        "TeamIdentifier=$team_id" \
         "Timestamp=Aug 22, 2026 at 02:00:00" \
         "$flags" >&2
 fi'
 
-    write_fake_tool spctl 'exit 0'
+    write_fake_tool spctl '[[ "${CANARY_SPCTL_FAIL:-0}" != "1" ]]'
 
     write_fake_tool ditto '
 source_path="$1"
@@ -159,12 +165,131 @@ test_install_mode_verifies_updated_temp_copy_policy() {
     fi
 }
 
+test_installed_app_signature_policy_failures() {
+    write_info_plist "$APP_PATH" "https://updates.example.com/appcast.xml" 1
+
+    if CANARY_CODESIGN_TEAM_ID="WRONGTEAM01" run_canary >/dev/null 2>&1; then
+        fail "wrong-team installed app was accepted"
+    fi
+    if CANARY_CODESIGN_VERIFY_FAIL=1 run_canary >/dev/null 2>&1; then
+        fail "tampered or unsigned installed app was accepted"
+    fi
+    if CANARY_CODESIGN_MISSING_RUNTIME=1 run_canary >/dev/null 2>&1; then
+        fail "installed app without hardened runtime was accepted"
+    fi
+    if CANARY_SPCTL_FAIL=1 run_canary >/dev/null 2>&1; then
+        fail "Gatekeeper-rejected installed app was accepted"
+    fi
+}
+
+test_unsigned_fixture_override() {
+    write_info_plist "$APP_PATH" "https://updates.example.com/appcast.xml" 1
+    printf 'SafeMac canary unsigned fixture\n' > "$WORK_DIR/.safemac-canary-unsigned-fixture"
+    chmod 600 "$WORK_DIR/.safemac-canary-unsigned-fixture"
+
+    PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+    SPARKLE_LOG="$SPARKLE_LOG" \
+    SPARKLE_CLI="$FAKE_BIN/sparkle" \
+    CANARY_CODESIGN_VERIFY_FAIL=1 \
+    CANARY_SPCTL_FAIL=1 \
+    SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
+    SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+    SAFEMAC_CANARY_TEST_ONLY_FIXTURE_ROOT="$WORK_DIR" \
+        "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh" >/dev/null \
+        || fail "explicit unsigned test-fixture override was rejected"
+}
+
+test_unsigned_fixture_override_covers_script_created_copy() {
+    write_info_plist "$APP_PATH" "https://updates.example.com/appcast.xml" 1
+    printf 'SafeMac canary unsigned fixture\n' > "$WORK_DIR/.safemac-canary-unsigned-fixture"
+    chmod 600 "$WORK_DIR/.safemac-canary-unsigned-fixture"
+
+    PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+    SPARKLE_LOG="$SPARKLE_LOG" \
+    SPARKLE_CLI="$FAKE_BIN/sparkle" \
+    CANARY_CODESIGN_VERIFY_FAIL=1 \
+    CANARY_SPCTL_FAIL=1 \
+    SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
+    SAFEMAC_CANARY_INSTALL=1 \
+    SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+    SAFEMAC_CANARY_TEST_ONLY_FIXTURE_ROOT="$WORK_DIR" \
+        "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh" >/dev/null \
+        || fail "unsigned fixture override rejected the script-created canary copy"
+}
+
+test_unsigned_fixture_override_is_temp_scoped() {
+    write_info_plist "$APP_PATH" "https://updates.example.com/appcast.xml" 1
+    if TMPDIR="/Applications" \
+       PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+       SPARKLE_LOG="$SPARKLE_LOG" \
+       SPARKLE_CLI="$FAKE_BIN/sparkle" \
+       CANARY_CODESIGN_VERIFY_FAIL=1 \
+       SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
+       SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+        "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh" >/dev/null 2>&1; then
+        fail "caller-controlled TMPDIR enabled the unsigned fixture override"
+    fi
+}
+
+test_unsigned_fixture_override_requires_explicit_root() {
+    write_info_plist "$APP_PATH" "https://updates.example.com/appcast.xml" 1
+    if TMPDIR="$WORK_DIR" \
+       PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+       SPARKLE_LOG="$SPARKLE_LOG" \
+       SPARKLE_CLI="$FAKE_BIN/sparkle" \
+       CANARY_CODESIGN_VERIFY_FAIL=1 \
+       SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
+       SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+        "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh" >/dev/null 2>&1; then
+        fail "unsigned fixture override trusted caller-controlled TMPDIR without a validated fixture root"
+    fi
+}
+
+test_unsigned_fixture_override_rejects_symlink_escape() {
+    local real_app_path="$OUTSIDE_WORK_DIR/SafeMac AV.app"
+
+    write_info_plist "$real_app_path" "https://updates.example.com/appcast.xml" 1
+    rm -rf "$APP_PATH"
+    ln -s "$real_app_path" "$APP_PATH"
+    if PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+       SPARKLE_LOG="$SPARKLE_LOG" \
+       SPARKLE_CLI="$FAKE_BIN/sparkle" \
+       CANARY_CODESIGN_VERIFY_FAIL=1 \
+       SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
+       SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+        "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh" >/dev/null 2>&1; then
+        fail "unsigned fixture override accepted a symlinked app outside the temporary directory"
+    fi
+    rm -f "$APP_PATH"
+}
+
 test_placeholder_feed_is_rejected() {
     write_info_plist "$APP_PATH" '$(SPARKLE_FEED_URL)' 1
 
     if run_canary >/dev/null 2>&1; then
         fail "placeholder Sparkle feed URL was accepted"
     fi
+}
+
+test_unsafe_remote_feed_urls_are_rejected_before_sparkle() {
+    local feed_url
+    local -a feed_urls=(
+        "https://user@updates.example.com/appcast.xml"
+        "https://user:password@updates.example.com/appcast.xml"
+        "https://updates.example.com/appcast.xml?token=secret"
+        "https://updates.example.com/appcast.xml#fragment"
+        "https://updates.example.com/app cast.xml"
+    )
+
+    for feed_url in "${feed_urls[@]}"; do
+        : > "$SPARKLE_LOG"
+        write_info_plist "$APP_PATH" "$feed_url" 1
+        if run_canary >/dev/null 2>&1; then
+            fail "unsafe remote canary feed URL was accepted: $feed_url"
+        fi
+        [[ ! -s "$SPARKLE_LOG" ]] \
+            || fail "unsafe remote canary feed URL reached sparkle-cli: $feed_url"
+    done
 }
 
 test_expected_update_fails_when_probe_reports_no_update() {
@@ -186,7 +311,14 @@ main() {
     test_probe_invokes_sparkle_cli_against_temp_copy
     test_install_mode_updates_temp_copy
     test_install_mode_verifies_updated_temp_copy_policy
+    test_installed_app_signature_policy_failures
+    test_unsigned_fixture_override
+    test_unsigned_fixture_override_covers_script_created_copy
+    test_unsigned_fixture_override_is_temp_scoped
+    test_unsigned_fixture_override_requires_explicit_root
+    test_unsigned_fixture_override_rejects_symlink_escape
     test_placeholder_feed_is_rejected
+    test_unsafe_remote_feed_urls_are_rejected_before_sparkle
     test_expected_update_fails_when_probe_reports_no_update
     printf 'run installed Sparkle canary tests passed\n'
 }

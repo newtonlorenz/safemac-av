@@ -27,6 +27,7 @@ jobs:
 
       - name: Run release packaging script tests
         run: |
+          ./scripts/test-prepare-sparkle-release-key.sh
           ./scripts/test-create-dmg-signing.sh
           ./scripts/test-verify-release-package.sh
           ./scripts/test-installed-sparkle-canary.sh
