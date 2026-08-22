@@ -67,6 +67,13 @@ final class AppState: ObservableObject {
     ) {
         var loadedSettings = configManager.loadSettings()
         let settingsLoadState = configManager.lastSettingsLoadState
+        let loginItemMigrationError: String?
+        do {
+            try launchAtLoginManager.migrateLegacyRegistrationIfNeeded()
+            loginItemMigrationError = nil
+        } catch {
+            loginItemMigrationError = "SafeMac AV could not finish moving your login item to its background helper. Check Login Items in System Settings."
+        }
         let initialLaunchAtLoginStatus = launchAtLoginManager.status
         let shouldPersistLaunchAtLoginStatus = loadedSettings.launchAtLogin != initialLaunchAtLoginStatus.isRequested
         loadedSettings.launchAtLogin = initialLaunchAtLoginStatus.isRequested
@@ -101,6 +108,11 @@ final class AppState: ObservableObject {
         )
         self.notificationPermissionStatus = resolvedNotificationManager.permissionStatus
         self.notificationPermissionError = resolvedNotificationManager.permissionError
+
+        if let loginItemMigrationError {
+            launchAtLoginError = loginItemMigrationError
+            addLog(.warning, loginItemMigrationError)
+        }
 
         loadQuarantinedFiles()
         resolvedNotificationManager.setupNotificationCategories()
