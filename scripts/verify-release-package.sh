@@ -470,6 +470,9 @@ final class AppcastItemCollector: NSObject, XMLParserDelegate {
     var parseError: Error?
     var isMalformed = false
     private var depth = 0
+    private var elementStack: [String] = []
+    private var rssChannelDepth: Int?
+    private var hasSeenRSSChannel = false
     private var itemDepth: Int?
     private var currentItem: MutableItem?
     private var currentField: ItemField?
@@ -486,10 +489,27 @@ final class AppcastItemCollector: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String]
     ) {
-        depth += 1
         let name = qualifiedName(elementName, qName)
+        let parentName = elementStack.last
+        elementStack.append(name)
+        depth += 1
+
+        if name == "channel", parentName == "rss" {
+            guard !hasSeenRSSChannel else {
+                isMalformed = true
+                return
+            }
+            hasSeenRSSChannel = true
+            rssChannelDepth = depth
+            return
+        }
 
         if name == "item" {
+            guard let rssChannelDepth,
+                  parentName == "channel",
+                  depth == rssChannelDepth + 1 else {
+                return
+            }
             guard currentItem == nil else {
                 isMalformed = true
                 return
@@ -546,42 +566,42 @@ final class AppcastItemCollector: NSObject, XMLParserDelegate {
                 : "sparkle:shortVersionString"
             if name == expectedName {
                 let value = currentFieldText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !value.isEmpty else {
+                if value.isEmpty {
                     isMalformed = true
                     self.currentField = nil
                     currentFieldText = ""
-                    depth -= 1
-                    return
+                } else {
+                    switch currentField {
+                    case .version:
+                        currentItem?.versions.append(value)
+                    case .shortVersion:
+                        currentItem?.shortVersions.append(value)
+                    }
+                    self.currentField = nil
+                    currentFieldText = ""
                 }
-                switch currentField {
-                case .version:
-                    currentItem?.versions.append(value)
-                case .shortVersion:
-                    currentItem?.shortVersions.append(value)
-                }
-                self.currentField = nil
-                currentFieldText = ""
             }
         }
 
         if name == "item", depth == itemDepth, let item = currentItem {
-            guard item.versions.count == 1, item.shortVersions.count == 1 else {
-                isMalformed = true
-                currentItem = nil
-                self.itemDepth = nil
-                depth -= 1
-                return
-            }
-            items.append(
-                AppcastItem(
-                    version: item.versions[0],
-                    shortVersion: item.shortVersions[0],
-                    enclosures: item.enclosures
+            if item.versions.count == 1, item.shortVersions.count == 1 {
+                items.append(
+                    AppcastItem(
+                        version: item.versions[0],
+                        shortVersion: item.shortVersions[0],
+                        enclosures: item.enclosures
+                    )
                 )
-            )
+            } else {
+                isMalformed = true
+            }
             currentItem = nil
             self.itemDepth = nil
         }
+        if name == "channel", depth == rssChannelDepth {
+            self.rssChannelDepth = nil
+        }
+        _ = elementStack.popLast()
         depth -= 1
     }
 
@@ -662,13 +682,13 @@ parser.shouldResolveExternalEntities = false
 guard parser.parse(), collector.parseError == nil, !collector.isMalformed else {
     fail("appcast XML is invalid")
 }
-let matchingItems = collector.items.filter { item in
-    item.version == bundleVersion && item.shortVersion == shortVersion
+guard collector.items.count == 1,
+      collector.items[0].version == bundleVersion,
+      collector.items[0].shortVersion == shortVersion,
+      collector.items[0].enclosures.count == 1 else {
+    fail("expected exactly one release appcast item and enclosure")
 }
-guard matchingItems.count == 1, matchingItems[0].enclosures.count == 1 else {
-    fail("expected exactly one matching appcast item and enclosure")
-}
-let enclosure = matchingItems[0].enclosures[0]
+let enclosure = collector.items[0].enclosures[0]
 guard enclosure["sparkle:version"] == nil,
       enclosure["sparkle:shortVersionString"] == nil else {
     fail("version metadata must be direct item-level elements")
