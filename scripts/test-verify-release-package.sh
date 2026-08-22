@@ -237,7 +237,8 @@ assert_mounted_cleanup_events() {
 
     mount_root="$(sed -n 's/^detach://p' "$WORK_DIR/mounted-cleanup-events.log")"
     [[ -n "$mount_root" ]] || fail "temporary DMG mount was not detached"
-    expected="unregister:$mount_root/SafeMac AV.app
+    expected="unregister:$mount_root/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+unregister:$mount_root/SafeMac AV.app
 detach:$mount_root"
     actual="$(cat "$WORK_DIR/mounted-cleanup-events.log")"
     [[ "$actual" == "$expected" ]] \
@@ -310,7 +311,9 @@ run_fixture_root_cleanup_case() {
         "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$WORK_DIR"
     LSREGISTER_BIN="$TEST_LSREGISTER_BIN" \
         "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$OUTSIDE_WORK_DIR"
-    expected="unregister:$WORK_DIR/SafeMac AV.app
+    expected="unregister:$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+unregister:$WORK_DIR/SafeMac AV.app
+unregister:$OUTSIDE_WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
 unregister:$OUTSIDE_WORK_DIR/SafeMac AV.app"
     actual="$(cat "$CLEANUP_EVENT_LOG")"
     [[ "$actual" == "$expected" ]] \
