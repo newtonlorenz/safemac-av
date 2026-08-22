@@ -176,6 +176,45 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         updater.runIfAvailable()
     }
 
+    func testSettingsReloadKeepsLastKnownGoodAfterAtomicCorruption() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let settingsURL = root.appendingPathComponent("settings.json")
+        let store = BackgroundHelperSettingsStore(settingsURL: settingsURL)
+
+        XCTAssertEqual(store.reload(), .safeDefaults)
+        try JSONSerialization.data(withJSONObject: [
+            "autoUpdateSignatures": true,
+            "freshclamPath": "/usr/bin/true"
+        ]).write(to: settingsURL, options: .atomic)
+        XCTAssertEqual(store.reload().freshclamPath, "/usr/bin/true")
+
+        try Data("not-json".utf8).write(to: settingsURL, options: .atomic)
+        XCTAssertEqual(store.reload().freshclamPath, "/usr/bin/true")
+        XCTAssertTrue(store.reload().autoUpdateSignatures)
+    }
+
+    func testSettingsDirectoryWatcherObservesAtomicReplacement() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let settingsURL = root.appendingPathComponent("settings.json")
+        let store = BackgroundHelperSettingsStore(settingsURL: settingsURL)
+        let observed = expectation(description: "atomic replacement observed")
+        observed.assertForOverFulfill = false
+        store.startWatching { settings in
+            if settings.freshclamPath == "/usr/bin/true" { observed.fulfill() }
+        }
+
+        try JSONSerialization.data(withJSONObject: [
+            "autoUpdateSignatures": true,
+            "freshclamPath": "/usr/bin/true"
+        ]).write(to: settingsURL, options: .atomic)
+
+        wait(for: [observed], timeout: 2)
+    }
+
     func testAppAdapterRoutesOnlyThroughFixedMainActions() {
         let app = SafeMacAVBackgroundApp()
         app.openMain()

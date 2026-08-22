@@ -4,6 +4,7 @@ import Foundation
 @main
 final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
     private let lease = BackgroundWorkLease(name: "background-monitoring")
+    private let settingsStore = BackgroundHelperSettingsStore(settingsURL: BackgroundSignatureUpdater.defaultSettingsURL)
     private var statusItem: NSStatusItem?
     private var coordinator: BackgroundHelperCoordinator?
 
@@ -22,6 +23,8 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
 
     @MainActor
     func start(arguments: [String]) {
+        _ = settingsStore.reload()
+        settingsStore.startWatching()
         coordinator = BackgroundHelperCoordinator(
             installStatusItem: { [weak self] in self?.installStatusItem() },
             acquireMonitoringLease: { [weak self] in self?.lease.acquire() ?? false },
@@ -53,9 +56,10 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
     @objc private func quit() { NSApplication.shared.terminate(nil) }
 
     private func runScheduledSignatureUpdate(completion: @escaping () -> Void) {
+        let settingsStore = settingsStore
         DispatchQueue.global(qos: .utility).async {
             defer { DispatchQueue.main.async(execute: completion) }
-            let updater = BackgroundSignatureUpdater()
+            let updater = BackgroundSignatureUpdater(settingsStore: settingsStore)
             updater.runIfAvailable()
         }
     }
@@ -80,17 +84,21 @@ private enum MainAppHandoff {
 }
 
 final class BackgroundSignatureUpdater {
-    private let settingsURL: URL
+    static let defaultSettingsURL: URL = {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        return (support ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support"))
+            .appendingPathComponent("ClamAV-GUI", isDirectory: true)
+            .appendingPathComponent("settings.json", isDirectory: false)
+    }()
+
+    private let settingsStore: BackgroundHelperSettingsStore
 
     init(settingsURL: URL? = nil) {
-        if let settingsURL {
-            self.settingsURL = settingsURL
-        } else {
-            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            self.settingsURL = (support ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support"))
-                .appendingPathComponent("ClamAV-GUI", isDirectory: true)
-                .appendingPathComponent("settings.json", isDirectory: false)
-        }
+        settingsStore = BackgroundHelperSettingsStore(settingsURL: settingsURL ?? Self.defaultSettingsURL)
+    }
+
+    init(settingsStore: BackgroundHelperSettingsStore) {
+        self.settingsStore = settingsStore
     }
 
     func runIfAvailable() {
@@ -98,7 +106,10 @@ final class BackgroundSignatureUpdater {
         guard lease.acquire() else { return }
         defer { lease.release() }
 
-        guard let executablePath = configuredFreshclamPath(), FileManager.default.isExecutableFile(atPath: executablePath) else {
+        let settings = settingsStore.reload()
+        guard settings.autoUpdateSignatures,
+              let executablePath = settings.freshclamPath,
+              FileManager.default.isExecutableFile(atPath: executablePath) else {
             return
         }
         let process = Process()
@@ -113,12 +124,4 @@ final class BackgroundSignatureUpdater {
         }
     }
 
-    private func configuredFreshclamPath() -> String? {
-        guard let data = try? Data(contentsOf: settingsURL),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["autoUpdateSignatures"] as? Bool == true,
-              let path = object["freshclamPath"] as? String,
-              path.hasPrefix("/") else { return nil }
-        return path
-    }
 }
