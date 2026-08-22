@@ -37,7 +37,6 @@ trap cleanup EXIT
 [[ "$CHECK_ONLY" == "0" || "$CHECK_ONLY" == "1" ]] || fail
 if [[ "$CHECK_ONLY" == "1" ]]; then
     [[ $# -eq 0 ]] || fail
-    TEMP_PATH="$(mktemp "$RUNNER_TEMP/sparkle_private_ed_key.preflight.XXXXXX")" || fail
 else
     [[ $# -le 1 ]] || fail
     OUTPUT_PATH="${1:-$RUNNER_TEMP/sparkle_private_ed_key}"
@@ -49,9 +48,11 @@ else
     TEMP_PATH="$(mktemp "$OUTPUT_PATH.tmp.XXXXXX")" || fail
 fi
 [[ -n "$PRIVATE_KEY_SECRET" ]] || fail
-chmod 600 "$TEMP_PATH" || fail
+if [[ "$CHECK_ONLY" == "0" ]]; then
+    chmod 600 "$TEMP_PATH" || fail
+fi
 
-if ! /usr/bin/swift - "$TEMP_PATH" 3<<< "$PRIVATE_KEY_SECRET" <<'SWIFT'
+if ! /usr/bin/swift - "$TEMP_PATH" "$CHECK_ONLY" 3<<< "$PRIVATE_KEY_SECRET" <<'SWIFT'
 import CryptoKit
 import Foundation
 
@@ -87,7 +88,10 @@ func validHTTPSURL(_ value: String, requiresTrailingSlash: Bool) -> Bool {
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-guard arguments.count == 1 else { invalid() }
+guard arguments.count == 2,
+      arguments[1] == "0" || arguments[1] == "1" else { invalid() }
+let outputPath = arguments[0]
+let checkOnly = arguments[1] == "1"
 
 let feedURL = requiredEnvironment("SPARKLE_FEED_URL")
 let downloadURLPrefix = requiredEnvironment("SPARKLE_DOWNLOAD_URL_PREFIX")
@@ -131,8 +135,12 @@ guard let signature = try? privateKey.signature(for: probe),
     invalid()
 }
 
+if checkOnly {
+    exit(0)
+}
+guard !outputPath.isEmpty else { invalid() }
 do {
-    let output = try FileHandle(forWritingTo: URL(fileURLWithPath: arguments[0]))
+    let output = try FileHandle(forWritingTo: URL(fileURLWithPath: outputPath))
     try output.truncate(atOffset: 0)
     try output.write(contentsOf: Data((trimmedKey + "\n").utf8))
     try output.synchronize()
@@ -145,13 +153,11 @@ then
     exit 1
 fi
 
-chmod 600 "$TEMP_PATH" || fail
 if [[ "$CHECK_ONLY" == "1" ]]; then
-    rm -f "$TEMP_PATH"
-    TEMP_PATH=""
     printf 'Verified: Sparkle release configuration and signing key match\n'
     exit 0
 fi
+chmod 600 "$TEMP_PATH" || fail
 mv -f "$TEMP_PATH" "$OUTPUT_PATH" || fail
 TEMP_PATH=""
 CREATED_OUTPUT=1

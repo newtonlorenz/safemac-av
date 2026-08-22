@@ -49,7 +49,7 @@ run_preflight() {
 }
 
 run_preflight_check_only() {
-    RUNNER_TEMP="$WORK_DIR" \
+    RUNNER_TEMP="${CHECK_ONLY_RUNNER_TEMP:-$WORK_DIR}" \
     SAFEMAC_SPARKLE_KEY_CHECK_ONLY=1 \
     SPARKLE_FEED_URL="${SPARKLE_FEED_URL_VALUE:-https://updates.example.com/appcast.xml}" \
     SPARKLE_DOWNLOAD_URL_PREFIX="${SPARKLE_DOWNLOAD_URL_PREFIX_VALUE:-https://downloads.example.com/releases/}" \
@@ -83,6 +83,8 @@ test_valid_configuration() {
 }
 
 test_check_only_configuration() {
+    local read_only_runner_temp="$WORK_DIR/read-only-runner-temp"
+
     rm -f "$KEY_PATH"
     run_preflight_check_only >/dev/null
     [[ ! -e "$KEY_PATH" ]] || fail "check-only preflight created the release key output"
@@ -96,6 +98,13 @@ test_check_only_configuration() {
     [[ "$(cat "$KEY_PATH")" == "existing-key" ]] \
         || fail "check-only preflight changed an existing release key output"
     rm -f "$KEY_PATH"
+
+    mkdir "$read_only_runner_temp"
+    chmod 500 "$read_only_runner_temp"
+    CHECK_ONLY_RUNNER_TEMP="$read_only_runner_temp" run_preflight_check_only >/dev/null \
+        || fail "check-only preflight required a filesystem write"
+    chmod 700 "$read_only_runner_temp"
+    rmdir "$read_only_runner_temp"
 
     if SPARKLE_FEED_URL_VALUE="http://updates.example.com/appcast.xml" \
        run_preflight_check_only >"$WORK_DIR/stdout" 2>"$WORK_DIR/stderr"; then
