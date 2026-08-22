@@ -16,6 +16,7 @@ ARCHIVE_PATH="$BUILD_DIR/$PROJECT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 APP_PATH="$EXPORT_PATH/$PRODUCT_NAME.app"
 DMG_PATH="$BUILD_DIR/$DMG_NAME.dmg"
+APP_ZIP_PATH="$BUILD_DIR/$PRODUCT_NAME.zip"
 TEMP_DMG_DIR="$BUILD_DIR/dmg-contents"
 BUILD_LOG="$BUILD_DIR/archive.log"
 ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME/ClamAV_GUI.entitlements"
@@ -197,19 +198,11 @@ sign_app() {
     fi
 
     for framework_path in "${framework_paths[@]}"; do
-        codesign --force \
-            --sign "$RESOLVED_SIGNING_IDENTITY" \
-            --options runtime \
-            --timestamp \
-            "$framework_path"
+        sign_framework_bundle "$framework_path"
     done
 
     for extension_path in "${extension_paths[@]}"; do
-        codesign --force \
-            --sign "$RESOLVED_SIGNING_IDENTITY" \
-            --options runtime \
-            --timestamp \
-            "$extension_path"
+        sign_runtime_code "$extension_path"
     done
 
     codesign --force \
@@ -220,6 +213,65 @@ sign_app() {
         "$APP_PATH"
 
     codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+}
+
+sign_runtime_code() {
+    codesign --force \
+        --sign "$RESOLVED_SIGNING_IDENTITY" \
+        --options runtime \
+        --timestamp \
+        "$1"
+}
+
+sign_framework_bundle() {
+    local framework_path="$1"
+    local nested_path
+    local -a nested_bundles=()
+    local -a nested_executables=()
+
+    while IFS= read -r -d '' nested_path; do
+        nested_bundles+=("$nested_path")
+    done < <(find "$framework_path" -type d \( -name '*.xpc' -o -name '*.app' \) -print0)
+
+    while IFS= read -r -d '' nested_path; do
+        nested_executables+=("$nested_path")
+    done < <(find "$framework_path" -type f -name Autoupdate -perm -111 -print0)
+
+    for nested_path in "${nested_bundles[@]}"; do
+        sign_runtime_code "$nested_path"
+    done
+
+    for nested_path in "${nested_executables[@]}"; do
+        sign_runtime_code "$nested_path"
+    done
+
+    sign_runtime_code "$framework_path"
+}
+
+notarize_app() {
+    print_step "Submitting the signed app for notarization"
+    remove_file "$APP_ZIP_PATH"
+    (cd "$EXPORT_PATH" && ditto -c -k --keepParent "$PRODUCT_NAME.app" "$APP_ZIP_PATH")
+
+    if [[ -n "$NOTARY_PROFILE" ]]; then
+        xcrun notarytool submit "$APP_ZIP_PATH" \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --wait \
+            --timeout "$NOTARY_TIMEOUT"
+    else
+        xcrun notarytool submit "$APP_ZIP_PATH" \
+            --key "$NOTARY_KEY_PATH" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait \
+            --timeout "$NOTARY_TIMEOUT"
+    fi
+
+    print_step "Stapling and validating the app notarization ticket"
+    xcrun stapler staple "$APP_PATH"
+    xcrun stapler validate "$APP_PATH"
+    codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+    remove_file "$APP_ZIP_PATH"
 }
 
 create_dmg() {
@@ -295,6 +347,10 @@ main() {
 
     if [[ -n "$SIGNING_IDENTITY" ]]; then
         sign_app
+    fi
+
+    if notarization_enabled; then
+        notarize_app
     fi
 
     create_dmg
