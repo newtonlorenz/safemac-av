@@ -14,6 +14,7 @@ final class SoftwareUpdateManager: ObservableObject {
     private var updaterController: SPUStandardUpdaterController?
     private var canCheckObservation: NSKeyValueObservation?
 #endif
+    private var routeObserver: NSObjectProtocol?
 
     init(
         bundle: Bundle = .main,
@@ -21,6 +22,13 @@ final class SoftwareUpdateManager: ObservableObject {
         isAutomatedTest: Bool = SoftwareUpdateManager.defaultIsAutomatedTest()
     ) {
         isConfigured = Self.hasRequiredSparkleConfiguration(bundle: bundle)
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: .checkForAppUpdates,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.checkForUpdates() }
+        }
 
 #if canImport(Sparkle)
         guard isConfigured, startsUpdater, !isAutomatedTest else { return }
@@ -43,6 +51,12 @@ final class SoftwareUpdateManager: ObservableObject {
 #if canImport(Sparkle)
         updaterController?.checkForUpdates(nil)
 #endif
+    }
+
+    deinit {
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+        }
     }
 
     nonisolated static func hasRequiredSparkleConfiguration(bundle: Bundle) -> Bool {
@@ -88,4 +102,8 @@ final class SoftwareUpdateManager: ObservableObject {
     nonisolated private static func defaultIsAutomatedTest() -> Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
+}
+
+extension Notification.Name {
+    static let checkForAppUpdates = Notification.Name("com.newtonlorenz.ClamAV-GUI.checkForAppUpdates")
 }

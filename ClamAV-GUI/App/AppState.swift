@@ -179,6 +179,29 @@ final class AppState: ObservableObject {
                 self?.handleFinderHandoffFailure(notification)
             }
         }
+
+        for route in BackgroundRoute.allCases {
+            DistributedNotificationCenter.default().addObserver(
+                forName: route.distributedNotificationName,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleBackgroundRoute(route)
+                }
+            }
+        }
+    }
+
+    private func handleBackgroundRoute(_ route: BackgroundRoute) {
+        switch route {
+        case .open:
+            MainWindowControllerRegistry.shared.showMainWindow(selecting: .dashboard)
+        case .settings:
+            MainWindowControllerRegistry.shared.showMainWindow(selecting: .settings)
+        case .checkForUpdates:
+            NotificationCenter.default.post(name: .checkForAppUpdates, object: nil)
+        }
     }
 
     func handleFinderHandoffFailure(_: Notification) {
