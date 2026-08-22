@@ -236,9 +236,9 @@ See [SECURITY.md](SECURITY.md) for the supported reporting process.
 - This is a user-facing ClamAV client, not a replacement for endpoint security or macOS platform protections.
 - Folder monitoring is application-level FSEvents monitoring. It only runs while SafeMac AV is running and is not a kernel or system on-access scanner.
 - Scheduled scans are per-user `launchd` jobs. The app must remain at the path captured by the job, and the user must be logged in.
-- Automatic signature updates are a separate per-user `launchd` job that runs the configured local `freshclam`. They do not update the SafeMac AV app or the externally managed Homebrew ClamAV engine. Opening an installed build reconciles the job to that app's current executable path.
+- Automatic signature updates are a separate per-user `launchd` job that launches SafeMac AV's embedded background helper, which runs the configured local `freshclam`. They do not update the SafeMac AV app or the externally managed Homebrew ClamAV engine. Opening an installed build reconciles the job to that app's embedded helper path.
 - The Finder extension must be signed with the app, use the same unprovisioned Team-ID app group (`CQPH8YR62A.com.newtonlorenz.ClamAV-GUI` upstream), and be enabled manually in System Settings. Opening or reopening the app drains the shared queue; the distributed notification is only a best-effort accelerator because macOS can suppress it from a sandboxed extension. The handoff fails closed if that shared container is unavailable. Forks must replace the Team ID and namespaced identifiers together.
-- Launch at login uses the macOS 13+ Login Items service. macOS may require the user to approve SafeMac AV in System Settings before it can open automatically.
+- Launch at login uses the macOS 13+ Login Items service and the embedded `SafeMacAVBackground.app` helper. macOS may require the user to approve SafeMac AV in System Settings before it can open automatically. The helper has its own notification identity, so it never requests notification permission on login; notification preferences and prompts remain in the foreground app.
 - Source builds are unsigned unless you configure an Apple Developer identity. A successful local build is not the same as a signed and notarized distribution.
 
 ## Project layout
@@ -246,6 +246,7 @@ See [SECURITY.md](SECURITY.md) for the supported reporting process.
 ```text
 ClamAV-GUI/          SwiftUI app, models, and local service layer
 ClamAV-GUI-Finder/   Finder Sync extension
+ClamAV-BackgroundHelper/ Embedded login-item and menu-bar helper
 ClamAV-GUITests/     Unit and integration tests
 ClamAV-GUIUITests/   Interactive macOS UI smoke tests
 docs/                Architecture and maintainer notes

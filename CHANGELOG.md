@@ -4,6 +4,15 @@ All notable project changes will be documented in this file. The format follows 
 
 ## [Unreleased]
 
+### Added
+
+- An embedded, hardened macOS 13+ background login-item helper for launch at login, the persistent menu bar, and automatic signature-update launches.
+- Transactional migration from the legacy main-app login item, shared symlink-resistant background-work leases, and release verification for the embedded helper.
+
+### Changed
+
+- New automatic signature schedules invoke only the embedded helper with a fixed flag; the foreground app keeps the legacy scheduled-update handler for one compatibility release.
+
 ## [1.2.0] - 2026-08-22
 
 ### Added
