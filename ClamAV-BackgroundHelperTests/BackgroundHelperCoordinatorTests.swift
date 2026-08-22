@@ -1,4 +1,5 @@
 import AppKit
+import Security
 import XCTest
 @testable import SafeMacAVBackground
 
@@ -561,14 +562,14 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
     func testTrustedCodeRequirementsAnchorAppleGenericAndConstrainIdentifierAndTeam() {
         XCTAssertEqual(
             BackgroundHelperBundle.staticCodeRequirement,
-            "anchor apple generic and identifier com.newtonlorenz.ClamAV-GUI.Background and certificate leaf[subject.OU] = \"CQPH8YR62A\""
+            "anchor apple generic and identifier \"com.newtonlorenz.ClamAV-GUI.Background\" and certificate leaf[subject.OU] = \"CQPH8YR62A\""
         )
         XCTAssertEqual(
             TrustedCodeRequirement.developerIDApplication(
                 identifier: "com.newtonlorenz.ClamAV-GUI",
                 teamIdentifier: "CQPH8YR62A"
             ),
-            "anchor apple generic and identifier com.newtonlorenz.ClamAV-GUI and certificate leaf[subject.OU] = \"CQPH8YR62A\""
+            "anchor apple generic and identifier \"com.newtonlorenz.ClamAV-GUI\" and certificate leaf[subject.OU] = \"CQPH8YR62A\""
         )
 
         let sourceURL = URL(fileURLWithPath: #filePath)
@@ -577,6 +578,37 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             .appendingPathComponent("ClamAV-BackgroundHelper/SafeMacAVBackgroundApp.swift")
         let source = try? String(contentsOf: sourceURL)
         XCTAssertTrue(source?.contains("SecRequirementCreateWithString(staticCodeRequirement") == true)
+    }
+
+    func testGeneratedHelperAndMainCodeRequirementsParseWithSecurityFramework() {
+        for requirementText in [
+            BackgroundHelperBundle.staticCodeRequirement,
+            MainAppHandoff.staticCodeRequirement
+        ] {
+            var requirement: SecRequirement?
+            XCTAssertEqual(
+                SecRequirementCreateWithString(requirementText as CFString, [], &requirement),
+                errSecSuccess,
+                "Generated requirement must be accepted by Security.framework: \(requirementText)"
+            )
+            XCTAssertNotNil(requirement)
+        }
+    }
+
+    func testCodeRequirementRejectsUnsafeDynamicAtomsBeforeSecurityParsing() {
+        let requirementText = TrustedCodeRequirement.developerIDApplication(
+            identifier: "com.example.\\\"helper",
+            teamIdentifier: "TEAM\\\" or identifier \\\"unexpected"
+        )
+        var requirement: SecRequirement?
+
+        XCTAssertEqual(
+            SecRequirementCreateWithString(requirementText as CFString, [], &requirement),
+            errSecSuccess
+        )
+        XCTAssertNotNil(requirement)
+        XCTAssertFalse(requirementText.contains("or identifier"))
+        XCTAssertTrue(requirementText.contains("\"__invalid_trusted_code_atom__\""))
     }
 
     func testCanonicalMainValidationIsReadOnlyBeforeAnyRouteDispatch() {

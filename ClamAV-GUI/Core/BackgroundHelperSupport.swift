@@ -35,7 +35,20 @@ enum BackgroundHelperLaunchModeParser {
 
 enum TrustedCodeRequirement {
     static func developerIDApplication(identifier: String, teamIdentifier: String) -> String {
-        "anchor apple generic and identifier \(identifier) and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
+        "anchor apple generic and identifier \(requirementStringLiteral(identifier)) and certificate leaf[subject.OU] = \(requirementStringLiteral(teamIdentifier))"
+    }
+
+    /// `SecRequirementCreateWithString` does not accept a dotted identifier
+    /// containing `-` as an unquoted token. Quote trusted code atoms, and fail
+    /// closed to a harmless literal if an unexpected value could affect the
+    /// requirement grammar.
+    private static func requirementStringLiteral(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
+        guard !value.isEmpty,
+              value.unicodeScalars.allSatisfy(allowed.contains) else {
+            return "\"__invalid_trusted_code_atom__\""
+        }
+        return "\"\(value)\""
     }
 }
 
