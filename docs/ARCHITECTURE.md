@@ -81,6 +81,8 @@ Schedules run in the logged-in user's context. Moving or deleting the built app 
 
 `LaunchAtLoginManager` maps `SMAppService.loginItem(identifier:)` into app-level disabled, enabled, approval-required, and unavailable states. On the canonical install only, it transactionally migrates an enabled legacy main-app login item: register the helper, retain the legacy item while approval is pending, remove the legacy item only after helper enablement, and roll back the helper if legacy removal fails. The service is injected behind a protocol so registration, approval, failure, and rollback behavior can be tested without changing the current user's Login Items.
 
+This migration intentionally supports one release of forward compatibility, not an automatic downgrade. A pre-helper binary cannot recreate the removed helper registration safely. Before installing an older binary, disable launch at login in the current release; after installing the older binary, enable it again there. Failed registration, approval-pending migration, and disabled-state rollback retain or restore the legacy registration where possible, and the UI never reports launch-at-login disabled while either service remains active.
+
 `AppState` treats the macOS service status as authoritative. It reconciles the saved `launchAtLogin` preference at startup and whenever the app becomes active. A toggle first updates the system login item and then atomically saves the matching preference. If persistence fails, the login-item change is rolled back; service and persistence errors remain visible in Settings.
 
 ### Finder request

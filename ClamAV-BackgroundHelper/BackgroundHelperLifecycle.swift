@@ -73,6 +73,7 @@ final class BackgroundHelperCoordinator {
     }
 
     private func startBackgroundSession() {
+        BackgroundMenuBarOwnershipCoordinator.notifyHelperWillAcquireOwnership()
         guard acquireMonitoringLease() else {
             terminate()
             return

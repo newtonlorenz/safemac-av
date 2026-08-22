@@ -91,6 +91,7 @@ struct ClamAVApp: App {
     @StateObject private var appState: AppState
     @StateObject private var menuBarManager: MenuBarManager
     @StateObject private var softwareUpdateManager: SoftwareUpdateManager
+    @StateObject private var menuBarOwnership: BackgroundMenuBarOwnershipCoordinator
     @State private var presentsMenuBarExtra: Bool
 
     init() {
@@ -99,15 +100,16 @@ struct ClamAVApp: App {
         let appState = AppState(
             startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices
         )
-        _presentsMenuBarExtra = State(initialValue: BackgroundMenuBarOwnership.mainShouldPresentMenuBar(
-            helperIsEnabled: appState.launchAtLoginStatus == .enabled
-        ))
+        let menuBarOwnership = BackgroundMenuBarOwnershipCoordinator()
+        menuBarOwnership.reconcile(helperEnabled: appState.launchAtLoginStatus == .enabled)
+        _presentsMenuBarExtra = State(initialValue: menuBarOwnership.mainShouldPresentMenuBar)
         let menuBarManager = MenuBarManager()
         _appState = StateObject(wrappedValue: appState)
         _menuBarManager = StateObject(wrappedValue: menuBarManager)
         _softwareUpdateManager = StateObject(
             wrappedValue: SoftwareUpdateManager(startsUpdater: launchMode.startsSoftwareUpdateSubsystem)
         )
+        _menuBarOwnership = StateObject(wrappedValue: menuBarOwnership)
         let isAutomatedTestLaunch = arguments.contains("--ui-testing")
             || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         let bundleURL = Bundle.main.bundleURL
@@ -171,9 +173,13 @@ struct ClamAVApp: App {
                 .environmentObject(softwareUpdateManager)
                 .preferredColorScheme(Self.uiTestColorScheme(arguments: CommandLine.arguments))
                 .onReceive(appState.$launchAtLoginStatus) { status in
-                    presentsMenuBarExtra = BackgroundMenuBarOwnership.mainShouldPresentMenuBar(
-                        helperIsEnabled: status == .enabled
-                    )
+                    menuBarOwnership.reconcile(helperEnabled: status == .enabled)
+                }
+                .onReceive(menuBarOwnership.$mainShouldPresentMenuBar) { shouldPresent in
+                    presentsMenuBarExtra = shouldPresent
+                }
+                .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+                    menuBarOwnership.recoverIfHelperIsAbsent()
                 }
         } label: {
             Image(systemName: menuBarIcon)

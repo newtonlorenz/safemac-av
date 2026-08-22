@@ -1,4 +1,5 @@
 import Darwin
+import Combine
 import Foundation
 
 /// The helper has a deliberately tiny command surface. It must never accept a
@@ -297,5 +298,83 @@ enum BackgroundMenuBarOwnership {
         guard lease.acquire() else { return false }
         lease.release()
         return true
+    }
+}
+
+@MainActor
+final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
+    static let helperWillAcquireNotification = Notification.Name("com.newtonlorenz.ClamAV-GUI.background-helper-will-acquire")
+
+    @Published private(set) var mainShouldPresentMenuBar = false
+    private let makeLease: () -> BackgroundWorkLease
+    private let now: () -> Date
+    private let startupGrace: TimeInterval
+    private var lease: BackgroundWorkLease?
+    private var helperEnabled = false
+    private var nextRecoveryAttempt = Date.distantFuture
+    private var ownershipHintObserver: NSObjectProtocol?
+
+    init(
+        makeLease: @escaping () -> BackgroundWorkLease = { BackgroundWorkLease(name: "background-monitoring") },
+        now: @escaping () -> Date = Date.init,
+        startupGrace: TimeInterval = 5
+    ) {
+        self.makeLease = makeLease
+        self.now = now
+        self.startupGrace = startupGrace
+        ownershipHintObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Self.helperWillAcquireNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.prepareForHelperOwnership() }
+        }
+    }
+
+    deinit {
+        if let ownershipHintObserver {
+            DistributedNotificationCenter.default().removeObserver(ownershipHintObserver)
+        }
+    }
+
+    func reconcile(helperEnabled: Bool) {
+        self.helperEnabled = helperEnabled
+        if helperEnabled {
+            prepareForHelperOwnership()
+        } else {
+            claimFallbackOwnership()
+        }
+    }
+
+    /// Called by the app lifecycle timer. It deliberately waits through a
+    /// startup grace period so a late login helper can claim ownership first.
+    func recoverIfHelperIsAbsent() {
+        guard helperEnabled, now() >= nextRecoveryAttempt, lease == nil else { return }
+        claimFallbackOwnership()
+    }
+
+    func prepareForHelperOwnership() {
+        lease?.release()
+        lease = nil
+        mainShouldPresentMenuBar = false
+        nextRecoveryAttempt = now().addingTimeInterval(startupGrace)
+    }
+
+    private func claimFallbackOwnership() {
+        let candidate = makeLease()
+        guard candidate.acquire() else {
+            mainShouldPresentMenuBar = false
+            return
+        }
+        lease = candidate
+        mainShouldPresentMenuBar = true
+    }
+
+    static func notifyHelperWillAcquireOwnership() {
+        DistributedNotificationCenter.default().post(
+            name: helperWillAcquireNotification,
+            object: nil,
+            userInfo: nil
+        )
     }
 }

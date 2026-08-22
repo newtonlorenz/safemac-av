@@ -366,6 +366,38 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         XCTAssertNotNil(app)
     }
 
+    func testMenuOwnershipKeepsLifetimeLeaseAcrossBothLaunchOrders() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var currentTime = Date()
+        let coordinator = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) },
+            now: { currentTime },
+            startupGrace: 5
+        )
+
+        // Main first, helper disabled: the main owns the lease for as long as
+        // its fallback menu is visible.
+        coordinator.reconcile(helperEnabled: false)
+        XCTAssertTrue(coordinator.mainShouldPresentMenuBar)
+        XCTAssertFalse(BackgroundWorkLease(name: "background-monitoring", baseURL: root).acquire())
+
+        // A later helper startup makes main release before it claims the lease.
+        coordinator.prepareForHelperOwnership()
+        let helperLease = BackgroundWorkLease(name: "background-monitoring", baseURL: root)
+        XCTAssertTrue(helperLease.acquire())
+        XCTAssertFalse(coordinator.mainShouldPresentMenuBar)
+        helperLease.release()
+
+        // Helper first: main waits through grace, then recovers its fallback
+        // only after it can own the lease itself.
+        coordinator.reconcile(helperEnabled: true)
+        currentTime = currentTime.addingTimeInterval(6)
+        coordinator.recoverIfHelperIsAbsent()
+        XCTAssertTrue(coordinator.mainShouldPresentMenuBar)
+    }
+
     private func writeSecureSettings(_ data: Data, to url: URL) throws {
         try data.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
