@@ -99,11 +99,16 @@ struct ClamAVApp: App {
         let launchMode = LaunchModeParser.parse(arguments: arguments)
         let isAutomatedTestLaunch = arguments.contains("--ui-testing")
             || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+#if DEBUG
+        let startsMenuOwnershipRecovery = false
+#else
+        let startsMenuOwnershipRecovery = !isAutomatedTestLaunch
+#endif
         let appState = AppState(
             startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices
         )
         let menuBarOwnership = BackgroundMenuBarOwnershipCoordinator(
-            startsRecoveryTimer: !isAutomatedTestLaunch
+            startsRecoveryTimer: startsMenuOwnershipRecovery
         )
         menuBarOwnership.reconcile(helperEnabled: appState.launchAtLoginStatus == .enabled)
         _presentsMenuBarExtra = State(initialValue: menuBarOwnership.mainShouldPresentMenuBar)
