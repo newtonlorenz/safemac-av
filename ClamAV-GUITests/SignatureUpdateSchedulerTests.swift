@@ -12,7 +12,7 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testDailyScheduleBootstrapsPrivacySafeLaunchAgentAtomically() throws {
+    func testDailyScheduleBootstrapsEmbeddedHelperWithOnlyFixedSignatureFlag() throws {
         let fixture = try makeFixture()
         var operations: [SignatureUpdateLaunchctlOperation] = []
         var writeOptions: [Data.WritingOptions] = []
@@ -31,7 +31,7 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         let plist = try readPlist(at: fixture.plistURL)
         XCTAssertEqual(plist["Label"] as? String, SignatureUpdateScheduler.label)
         XCTAssertEqual(plist["ProgramArguments"] as? [String], [
-            "/Applications/SafeMac AV.app/Contents/MacOS/ClamAV-GUI",
+            "/Applications/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app/Contents/MacOS/SafeMacAVBackground",
             "--scheduled-signature-update"
         ])
         XCTAssertEqual(plist["StartCalendarInterval"] as? [String: Int], ["Hour": 6, "Minute": 45])
@@ -40,6 +40,25 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         XCTAssertEqual(operations, [.bootstrap(domain: domain, plistURL: fixture.plistURL)])
         XCTAssertEqual(writeOptions.count, 1)
         XCTAssertTrue(writeOptions.allSatisfy { $0.contains(.atomic) })
+    }
+
+    func testMissingEmbeddedHelperFailsBeforeReplacingExistingLoadedJob() throws {
+        let fixture = try makeFixture()
+        let oldData = Data("previous job".utf8)
+        try oldData.write(to: fixture.plistURL)
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            isLoaded: true,
+            helperIsValid: false,
+            launchctlRunner: { operations.append($0) }
+        )
+
+        XCTAssertThrowsError(try scheduler.reconcile(enabled: true, schedule: .daily9am)) { error in
+            XCTAssertEqual(error as? SignatureUpdateSchedulerError, .backgroundHelperUnavailable)
+        }
+        XCTAssertEqual(try Data(contentsOf: fixture.plistURL), oldData)
+        XCTAssertTrue(operations.isEmpty)
     }
 
     func testNewLaunchAgentPermissionsAreNormalizedBeforeBootstrap() throws {
@@ -441,6 +460,7 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
     private func makeScheduler(
         fixture: SignatureSchedulerFixture,
         isLoaded: Bool = false,
+        helperIsValid: Bool = true,
         dataWriter: @escaping SignatureUpdateScheduler.DataWriter = { data, url, options in
             try data.write(to: url, options: options)
         },
@@ -450,6 +470,7 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
             launchAgentsDirectory: fixture.launchAgentsDirectory,
             applicationBundlePath: "/Applications/SafeMac AV.app",
             userID: userID,
+            backgroundHelperValidator: { _ in helperIsValid },
             dataWriter: dataWriter,
             loadedStatusProvider: { isLoaded },
             launchctlRunner: launchctlRunner
