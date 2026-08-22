@@ -7,6 +7,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-signing-test.XXXXXX")"
 FAKE_BIN="$WORK_DIR/bin"
 SIGN_LOG="$WORK_DIR/codesign.log"
+LSREGISTER_LOG="$WORK_DIR/lsregister.log"
 TEST_IDENTITY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 cleanup() {
@@ -126,6 +127,10 @@ if [[ "${1:-}" == "create" ]]; then
 fi'
 
     write_fake_tool lipo 'printf "x86_64 arm64\n"'
+
+    write_fake_tool lsregister '
+[[ "$#" -eq 2 && "$1" == "-u" ]] || exit 93
+printf "%s\n" "$2" >> "${LSREGISTER_LOG:?}"'
 }
 
 line_for_target() {
@@ -168,8 +173,23 @@ run_packaging() {
     PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
     TEST_IDENTITY="$TEST_IDENTITY" \
     SIGN_LOG="$SIGN_LOG" \
+    LSREGISTER_LOG="$LSREGISTER_LOG" \
+    LSREGISTER_BIN="$FAKE_BIN/lsregister" \
     SIGNING_IDENTITY="$TEST_IDENTITY" \
         "$PROJECT_DIR/scripts/create-dmg.sh" >/dev/null
+}
+
+verify_build_products_unregistered() {
+    local expected="$WORK_DIR/expected-unregister-targets.txt"
+    local actual="$WORK_DIR/actual-unregister-targets.txt"
+
+    printf '%s\n' \
+        "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app" \
+        "$PROJECT_DIR/build/export/SafeMac AV.app" \
+        | sort > "$expected"
+    sort "$LSREGISTER_LOG" > "$actual"
+    cmp -s "$expected" "$actual" \
+        || fail "packaging did not unregister exactly the archived and exported app bundles"
 }
 
 verify_signing_order() {
@@ -200,8 +220,10 @@ verify_signing_order() {
 
 main() {
     make_fake_tools
+    : > "$LSREGISTER_LOG"
     run_packaging
     verify_signing_order
+    verify_build_products_unregistered
     printf 'create-dmg signing tests passed\n'
 }
 
