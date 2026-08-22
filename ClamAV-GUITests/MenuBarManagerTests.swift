@@ -288,6 +288,11 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertTrue(source.contains("MenuBarExtra"))
         XCTAssertFalse(source.contains("@StateObject private var initialLaunchHandler"))
         XCTAssertFalse(source.contains("applicationDelegate.configure"))
+        XCTAssertTrue(
+            source.contains(
+                "SoftwareUpdateManager(startsUpdater: launchMode.startsSoftwareUpdateSubsystem)"
+            )
+        )
         let installConfiguration = try XCTUnwrap(
             source.range(of: "ApplicationLaunchConfigurationRegistry.shared.install")
         )
@@ -747,13 +752,15 @@ final class MenuBarManagerTests: XCTestCase {
     func testScheduledScanDelegatePresentsWindowThenRunsAppLifetimeScan() async {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
+        var settings = AppSettings.default
+        settings.hideFromDock = true
         let controller = MainWindowControllerMock()
         controller.onShow = { application.events.append(.showMainWindow) }
         let launchRan = expectation(description: "scheduled scan launch ran")
         var receivedMode: LaunchMode?
         let delegate = MenuBarApplicationDelegate(
             manager: manager,
-            settingsProvider: { .default },
+            settingsProvider: { settings },
             argumentsProvider: { ["--scheduled-scan", "--path", "/tmp/scheduled"] },
             nextMainRunLoopTurn: { application.events.append(.nextMainRunLoopTurn) },
             mainWindowControllerFactory: { controller },
@@ -769,6 +776,7 @@ final class MenuBarManagerTests: XCTestCase {
         await fulfillment(of: [launchRan], timeout: 1)
 
         XCTAssertEqual(receivedMode, .scheduledScan(jobID: nil, paths: [URL(fileURLWithPath: "/tmp/scheduled")]))
+        XCTAssertEqual(application.requestedPolicies, [.regular])
         XCTAssertEqual(
             application.events,
             [.showMainWindow, .nextMainRunLoopTurn, .runInitialMaintenance]
@@ -858,12 +866,12 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertTrue(LaunchMode.scheduledSignatureUpdate.hidesDock(settings: settings, isUITesting: false))
     }
 
-    func testInteractiveAndScheduledScanModesRespectDockPreferenceAndUITesting() {
+    func testInteractiveModeRespectsDockPreferenceWhileScheduledScanStaysVisible() {
         var settings = AppSettings.default
         settings.hideFromDock = true
 
         XCTAssertTrue(LaunchMode.interactive.hidesDock(settings: settings, isUITesting: false))
-        XCTAssertTrue(LaunchMode.scheduledScan(jobID: nil, paths: []).hidesDock(settings: settings, isUITesting: false))
+        XCTAssertFalse(LaunchMode.scheduledScan(jobID: nil, paths: []).hidesDock(settings: settings, isUITesting: false))
         XCTAssertFalse(LaunchMode.interactive.hidesDock(settings: settings, isUITesting: true))
         XCTAssertFalse(LaunchMode.scheduledScan(jobID: nil, paths: []).hidesDock(settings: settings, isUITesting: true))
     }
