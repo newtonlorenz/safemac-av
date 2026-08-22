@@ -43,6 +43,7 @@ final class BackgroundHelperCoordinator {
     private let installStatusItem: () -> Void
     private let acquireMonitoringLease: () -> Bool
     private let runScheduledSignatureUpdate: (@escaping @MainActor @Sendable () -> Void) -> Void
+    private let requestNotificationAuthorization: (@escaping @MainActor @Sendable () -> Void) -> Void
     private let terminate: () -> Void
     private var scheduledUpdateHasStarted = false
     private var scheduledUpdateHasFinished = false
@@ -53,11 +54,15 @@ final class BackgroundHelperCoordinator {
         installStatusItem: @escaping () -> Void,
         acquireMonitoringLease: @escaping () -> Bool,
         runScheduledSignatureUpdate: @escaping (@escaping @MainActor @Sendable () -> Void) -> Void,
+        requestNotificationAuthorization: @escaping (@escaping @MainActor @Sendable () -> Void) -> Void = { completion in
+            Task { @MainActor in completion() }
+        },
         terminate: @escaping () -> Void
     ) {
         self.installStatusItem = installStatusItem
         self.acquireMonitoringLease = acquireMonitoringLease
         self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
+        self.requestNotificationAuthorization = requestNotificationAuthorization
         self.terminate = terminate
     }
 
@@ -67,6 +72,10 @@ final class BackgroundHelperCoordinator {
             startBackgroundSession()
         case .scheduledSignatureUpdate:
             startScheduledSignatureUpdate()
+        case .requestNotificationAuthorization:
+            requestNotificationAuthorization { [weak self] in
+                self?.terminate()
+            }
         case .invalid:
             terminate()
         }

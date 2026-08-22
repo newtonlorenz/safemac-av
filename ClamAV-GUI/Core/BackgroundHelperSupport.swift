@@ -8,6 +8,7 @@ import Security
 enum BackgroundHelperLaunchMode: Equatable {
     case backgroundSession
     case scheduledSignatureUpdate
+    case requestNotificationAuthorization
     case invalid
 
     var presentsUserInterface: Bool { false }
@@ -21,7 +22,20 @@ enum BackgroundHelperLaunchModeParser {
     static func parse(arguments: [String]) -> BackgroundHelperLaunchMode {
         let flags = Array(arguments.dropFirst())
         guard !flags.isEmpty else { return .backgroundSession }
-        return flags == [scheduledSignatureFlag] ? .scheduledSignatureUpdate : .invalid
+        switch flags {
+        case [scheduledSignatureFlag]:
+            return .scheduledSignatureUpdate
+        case ["--request-notification-authorization"]:
+            return .requestNotificationAuthorization
+        default:
+            return .invalid
+        }
+    }
+}
+
+enum TrustedCodeRequirement {
+    static func developerIDApplication(identifier: String, teamIdentifier: String) -> String {
+        "anchor apple generic and identifier \(identifier) and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
     }
 }
 
@@ -29,6 +43,10 @@ enum BackgroundHelperBundle {
     static let bundleIdentifier = "com.newtonlorenz.ClamAV-GUI.Background"
     static let executableName = "SafeMacAVBackground"
     static let teamIdentifier = "CQPH8YR62A"
+    static let staticCodeRequirement = TrustedCodeRequirement.developerIDApplication(
+        identifier: bundleIdentifier,
+        teamIdentifier: teamIdentifier
+    )
 
     static func executableURL(in mainBundleURL: URL) -> URL {
         mainBundleURL
@@ -36,6 +54,13 @@ enum BackgroundHelperBundle {
             .appendingPathComponent("SafeMacAVBackground.app", isDirectory: true)
             .appendingPathComponent("Contents/MacOS", isDirectory: true)
             .appendingPathComponent(executableName, isDirectory: false)
+    }
+
+    static func bundleURL(in mainBundleURL: URL) -> URL {
+        executableURL(in: mainBundleURL)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 
     static func isEmbeddedHelper(
@@ -70,9 +95,8 @@ enum BackgroundHelperBundle {
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(helperBundleURL as CFURL, [], &code) == errSecSuccess,
               let code else { return false }
-        let requirementString = "identifier \(bundleIdentifier) and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
         var requirement: SecRequirement?
-        guard SecRequirementCreateWithString(requirementString as CFString, [], &requirement) == errSecSuccess,
+        guard SecRequirementCreateWithString(staticCodeRequirement as CFString, [], &requirement) == errSecSuccess,
               let requirement else { return false }
         return SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
@@ -196,7 +220,10 @@ enum FreshclamUpdateOutcome: Equatable {
             didUpdate = didUpdate || lowercased.contains("updated") || lowercased.contains("downloaded")
             if errorMessage == nil, lowercased.contains("error") || lowercased.contains("failed") { errorMessage = trimmed }
         }
-        if exitCode != 0 && !isUpToDate && !didUpdate {
+        // freshclam has no documented benign nonzero outcome. Treat all
+        // nonzero exits as failures even if stdout contains stale success
+        // lines before a later transport or verification failure.
+        if exitCode != 0 {
             return .failed(message: errorMessage ?? "Update failed with exit code \(exitCode)")
         }
         if isUpToDate && !didUpdate { return .upToDate }
@@ -466,6 +493,7 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
     private var nextRecoveryAttempt = Date.distantFuture
     private var ownershipHintObserver: NSObjectProtocol?
     private var recoveryTimer: DispatchSourceTimer?
+    private var launchAtLoginStatusObservation: AnyCancellable?
 
     init(
         makeLease: @escaping () -> BackgroundWorkLease = { BackgroundWorkLease(name: "background-monitoring") },
@@ -508,6 +536,18 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
         } else {
             claimFallbackOwnership()
         }
+    }
+
+    /// This subscription belongs to the app-lifetime ownership coordinator,
+    /// rather than MenuBarExtra content that disappears with the fallback
+    /// item. It keeps helper exit/recovery observable while no menu is shown.
+    func observe(helperEnabled: AnyPublisher<Bool, Never>) {
+        launchAtLoginStatusObservation?.cancel()
+        launchAtLoginStatusObservation = helperEnabled
+            .removeDuplicates()
+            .sink { [weak self] isEnabled in
+                self?.reconcile(helperEnabled: isEnabled)
+            }
     }
 
     /// Called by the app lifecycle timer. It deliberately waits through a

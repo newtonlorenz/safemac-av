@@ -92,7 +92,6 @@ struct ClamAVApp: App {
     @StateObject private var menuBarManager: MenuBarManager
     @StateObject private var softwareUpdateManager: SoftwareUpdateManager
     @StateObject private var menuBarOwnership: BackgroundMenuBarOwnershipCoordinator
-    @State private var presentsMenuBarExtra: Bool
 
     init() {
         let arguments = CommandLine.arguments
@@ -111,7 +110,11 @@ struct ClamAVApp: App {
             startsRecoveryTimer: startsMenuOwnershipRecovery
         )
         menuBarOwnership.reconcile(helperEnabled: appState.launchAtLoginStatus == .enabled)
-        _presentsMenuBarExtra = State(initialValue: menuBarOwnership.mainShouldPresentMenuBar)
+        menuBarOwnership.observe(
+            helperEnabled: appState.$launchAtLoginStatus
+                .map { $0 == .enabled }
+                .eraseToAnyPublisher()
+        )
         let menuBarManager = MenuBarManager()
         _appState = StateObject(wrappedValue: appState)
         _menuBarManager = StateObject(wrappedValue: menuBarManager)
@@ -174,17 +177,14 @@ struct ClamAVApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra(isInserted: $presentsMenuBarExtra) {
+        MenuBarExtra(isInserted: Binding(
+            get: { menuBarOwnership.mainShouldPresentMenuBar },
+            set: { _ in }
+        )) {
             MenuBarPopoverView()
                 .environmentObject(appState)
                 .environmentObject(softwareUpdateManager)
                 .preferredColorScheme(Self.uiTestColorScheme(arguments: CommandLine.arguments))
-                .onReceive(appState.$launchAtLoginStatus) { status in
-                    menuBarOwnership.reconcile(helperEnabled: status == .enabled)
-                }
-                .onReceive(menuBarOwnership.$mainShouldPresentMenuBar) { shouldPresent in
-                    presentsMenuBarExtra = shouldPresent
-                }
         } label: {
             Image(systemName: menuBarIcon)
                 .accessibilityLabel("SafeMac AV")

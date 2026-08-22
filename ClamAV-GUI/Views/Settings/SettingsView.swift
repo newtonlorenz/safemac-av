@@ -481,6 +481,25 @@ struct NotificationsSection: View {
                         .foregroundColor(.secondary)
                 }
 
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Background update notifications")
+                    Text("SafeMac AV Background is a separate login-item app. It has its own notification permission and never prompts at login or during scheduled updates.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Button("Allow Background Update Notifications") {
+                        Task { await appState.requestBackgroundHelperNotificationPermission() }
+                    }
+                    .accessibilityIdentifier("allow-background-update-notifications")
+                    if let error = appState.backgroundHelperNotificationPermissionError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .accessibilityIdentifier("background-notification-permission-error")
+                    }
+                }
+
                 if let error = appState.notificationPermissionError {
                     Text(error)
                         .font(.caption)

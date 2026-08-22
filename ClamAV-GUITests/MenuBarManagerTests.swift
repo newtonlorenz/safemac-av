@@ -13,6 +13,27 @@ final class MenuBarManagerTests: XCTestCase {
         )
     }
 
+    func testAppLifetimeOwnershipObservationRecoversFallbackMenuAfterHelperExit() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var now = Date()
+        let ownership = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) },
+            now: { now },
+            startupGrace: 1,
+            startsRecoveryTimer: false
+        )
+        let helperEnabled = CurrentValueSubject<Bool, Never>(true)
+        ownership.observe(helperEnabled: helperEnabled.eraseToAnyPublisher())
+
+        XCTAssertFalse(ownership.mainShouldPresentMenuBar)
+        now = now.addingTimeInterval(2)
+        ownership.recoverIfHelperIsAbsent()
+
+        XCTAssertTrue(ownership.mainShouldPresentMenuBar)
+    }
+
     func testMainWindowRegistryFactoryIsLazyAndResettable() {
         let registry = MainWindowControllerRegistry()
         let first = MainWindowControllerMock()
