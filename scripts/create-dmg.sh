@@ -346,6 +346,14 @@ verify_signed_app_components() {
     background_helper_executable="$background_helper/Contents/MacOS/SafeMacAVBackground"
     [[ -d "$background_helper" ]] || fail "Signed background helper not found: $background_helper"
     verify_distribution_code "$background_helper" "$background_helper_executable" "$expected_team_id"
+    helper_entitlements="$(codesign -d --entitlements :- "$background_helper" 2>/dev/null)" \
+        || fail "Could not inspect background helper entitlements."
+    grep -Fq '<key>com.apple.security.app-sandbox</key>' <<< "$helper_entitlements" \
+        || fail "Background helper sandbox entitlement is missing."
+    grep -Fq '<false/>' <<< "$helper_entitlements" \
+        || fail "Background helper sandbox entitlement must remain disabled."
+    ! grep -Fq 'com.apple.security.application-groups' <<< "$helper_entitlements" \
+        || fail "Background helper must not claim an unused app-group entitlement."
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$background_helper/Contents/Info.plist")" == "true" ]] \
         || fail "Background helper must be an LSUIElement agent."
     [[ ! -e "$background_helper/Contents/Frameworks/Sparkle.framework" ]] \

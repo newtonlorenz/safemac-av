@@ -4,9 +4,5 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
-	<key>com.apple.security.application-groups</key>
-	<array>
-		<string>CQPH8YR62A.com.newtonlorenz.ClamAV-GUI</string>
-	</array>
 </dict>
 </plist>

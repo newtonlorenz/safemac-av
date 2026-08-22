@@ -96,14 +96,12 @@ struct ClamAVApp: App {
     init() {
         let arguments = CommandLine.arguments
         let launchMode = LaunchModeParser.parse(arguments: arguments)
-        // The embedded helper owns the persistent menu-bar session. Keeping the
-        // foreground app's scene uninserted avoids a duplicate status item when
-        // a user opens SafeMac AV from that helper.
-        _presentsMenuBarExtra = State(initialValue: false)
-
         let appState = AppState(
             startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices
         )
+        _presentsMenuBarExtra = State(initialValue: BackgroundMenuBarOwnership.mainShouldPresentMenuBar(
+            helperIsEnabled: appState.launchAtLoginStatus == .enabled
+        ))
         let menuBarManager = MenuBarManager()
         _appState = StateObject(wrappedValue: appState)
         _menuBarManager = StateObject(wrappedValue: menuBarManager)
@@ -146,6 +144,7 @@ struct ClamAVApp: App {
                     guard mode.isInteractive else { return }
                     appState.refreshProtectionScore()
                     appState.refreshLaunchAtLoginStatus()
+                    appState.drainBackgroundRouteRequests()
                     await appState.drainExternalScanRequests()
                 },
                 runScheduledSignatureUpdate: {
@@ -168,6 +167,11 @@ struct ClamAVApp: App {
                 .environmentObject(appState)
                 .environmentObject(softwareUpdateManager)
                 .preferredColorScheme(Self.uiTestColorScheme(arguments: CommandLine.arguments))
+                .onReceive(appState.$launchAtLoginStatus) { status in
+                    presentsMenuBarExtra = BackgroundMenuBarOwnership.mainShouldPresentMenuBar(
+                        helperIsEnabled: status == .enabled
+                    )
+                }
         } label: {
             Image(systemName: menuBarIcon)
                 .accessibilityLabel("SafeMac AV")

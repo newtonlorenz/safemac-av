@@ -5,6 +5,7 @@ import Foundation
 final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
     private let lease = BackgroundWorkLease(name: "background-monitoring")
     private var statusItem: NSStatusItem?
+    private var coordinator: BackgroundHelperCoordinator?
 
     static func main() {
         let application = NSApplication.shared
@@ -15,15 +16,19 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        switch BackgroundHelperLaunchModeParser.parse(arguments: CommandLine.arguments) {
-        case .backgroundSession:
-            installStatusItem()
-            _ = lease.acquire()
-        case .scheduledSignatureUpdate:
-            runScheduledSignatureUpdateAndTerminate()
-        case .invalid:
-            NSApplication.shared.terminate(nil)
-        }
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        start(arguments: CommandLine.arguments)
+    }
+
+    @MainActor
+    func start(arguments: [String]) {
+        coordinator = BackgroundHelperCoordinator(
+            installStatusItem: { [weak self] in self?.installStatusItem() },
+            acquireMonitoringLease: { [weak self] in self?.lease.acquire() ?? false },
+            runScheduledSignatureUpdate: { [weak self] completion in self?.runScheduledSignatureUpdate(completion: completion) },
+            terminate: { NSApplication.shared.terminate(nil) }
+        )
+        coordinator?.start(arguments: arguments)
     }
 
     private func installStatusItem() {
@@ -40,14 +45,16 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
         item.menu = menu
     }
 
-    @objc private func openMain() { MainAppHandoff.send(.open) }
-    @objc private func openSettings() { MainAppHandoff.send(.settings) }
-    @objc private func checkForUpdates() { MainAppHandoff.send(.checkForUpdates) }
+    var hasStatusItem: Bool { statusItem != nil }
+
+    @objc func openMain() { MainAppHandoff.send(.open) }
+    @objc func openSettings() { MainAppHandoff.send(.settings) }
+    @objc func checkForUpdates() { MainAppHandoff.send(.checkForUpdates) }
     @objc private func quit() { NSApplication.shared.terminate(nil) }
 
-    private func runScheduledSignatureUpdateAndTerminate() {
+    private func runScheduledSignatureUpdate(completion: @escaping () -> Void) {
         DispatchQueue.global(qos: .utility).async {
-            defer { DispatchQueue.main.async { NSApplication.shared.terminate(nil) } }
+            defer { DispatchQueue.main.async(execute: completion) }
             let updater = BackgroundSignatureUpdater()
             updater.runIfAvailable()
         }
@@ -59,17 +66,33 @@ private enum MainAppHandoff {
     private static let mainBundleIdentifier = "com.newtonlorenz.ClamAV-GUI"
 
     static func send(_ route: BackgroundRoute) {
-        guard let bundle = Bundle(url: bundleURL), bundle.bundleIdentifier == mainBundleIdentifier else { return }
-        NSWorkspace.shared.openApplication(at: bundleURL, configuration: .init()) { _, _ in }
-        DistributedNotificationCenter.default().post(
-            name: route.distributedNotificationName,
-            object: nil,
-            userInfo: nil
-        )
+        guard BackgroundRouteRequestStore().enqueue(route),
+              let bundle = Bundle(url: bundleURL), bundle.bundleIdentifier == mainBundleIdentifier else { return }
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: .init()) { _, error in
+            guard error == nil else { return }
+            DistributedNotificationCenter.default().post(
+                name: route.distributedNotificationName,
+                object: nil,
+                userInfo: nil
+            )
+        }
     }
 }
 
-private final class BackgroundSignatureUpdater {
+final class BackgroundSignatureUpdater {
+    private let settingsURL: URL
+
+    init(settingsURL: URL? = nil) {
+        if let settingsURL {
+            self.settingsURL = settingsURL
+        } else {
+            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            self.settingsURL = (support ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support"))
+                .appendingPathComponent("ClamAV-GUI", isDirectory: true)
+                .appendingPathComponent("settings.json", isDirectory: false)
+        }
+    }
+
     func runIfAvailable() {
         let lease = BackgroundWorkLease(name: "signature-update")
         guard lease.acquire() else { return }
@@ -91,12 +114,9 @@ private final class BackgroundSignatureUpdater {
     }
 
     private func configuredFreshclamPath() -> String? {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        let settingsURL = support?
-            .appendingPathComponent("ClamAV-GUI", isDirectory: true)
-            .appendingPathComponent("settings.json", isDirectory: false)
-        guard let settingsURL, let data = try? Data(contentsOf: settingsURL),
+        guard let data = try? Data(contentsOf: settingsURL),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["autoUpdateSignatures"] as? Bool == true,
               let path = object["freshclamPath"] as? String,
               path.hasPrefix("/") else { return nil }
         return path

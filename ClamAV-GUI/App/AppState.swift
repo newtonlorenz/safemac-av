@@ -37,6 +37,7 @@ final class AppState: ObservableObject {
     let fileWatcher: FileWatcherProtocol
     let scanCoordinator: ScanCoordinator
     let externalScanRequestStore: ExternalScanRequestStore
+    let backgroundRouteRequestStore: BackgroundRouteRequestStore
     let scanHistoryManager: ScanHistoryManager
     let protectionScoreManager: ProtectionScoreManager
     private let launchAtLoginManager: any LaunchAtLoginManaging
@@ -60,6 +61,7 @@ final class AppState: ObservableObject {
         freshclamRunner: FreshclamRunnerProtocol? = nil,
         notificationManager: NotificationManaging? = nil,
         externalScanRequestStore: ExternalScanRequestStore = ExternalScanRequestStore(),
+        backgroundRouteRequestStore: BackgroundRouteRequestStore = BackgroundRouteRequestStore(),
         scanHistoryManager: ScanHistoryManager = ScanHistoryManager(),
         launchAtLoginManager: any LaunchAtLoginManaging = LaunchAtLoginManager(),
         signatureUpdateScheduler: any SignatureUpdateScheduling = SignatureUpdateScheduler(),
@@ -93,6 +95,7 @@ final class AppState: ObservableObject {
         )
         self.scanCoordinator = scanCoordinator ?? ScanCoordinator(clamAVRunner: runner)
         self.externalScanRequestStore = externalScanRequestStore
+        self.backgroundRouteRequestStore = backgroundRouteRequestStore
         self.scanHistoryManager = scanHistoryManager
         self.launchAtLoginManager = launchAtLoginManager
         self.signatureUpdateScheduler = signatureUpdateScheduler
@@ -118,6 +121,7 @@ final class AppState: ObservableObject {
         resolvedNotificationManager.setupNotificationCategories()
         if startsInteractiveBackgroundServices {
             setupNotifications()
+            drainBackgroundRouteRequests()
             setupFileWatcherAutoScan()
             configureMonitoring()
         }
@@ -187,7 +191,7 @@ final class AppState: ObservableObject {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor in
-                    self?.handleBackgroundRoute(route)
+                    self?.drainBackgroundRouteRequests()
                 }
             }
         }
@@ -202,6 +206,16 @@ final class AppState: ObservableObject {
         case .checkForUpdates:
             NotificationCenter.default.post(name: .checkForAppUpdates, object: nil)
         }
+    }
+
+    @discardableResult
+    func drainBackgroundRouteRequests() -> Int {
+        var count = 0
+        while let route = backgroundRouteRequestStore.consume() {
+            handleBackgroundRoute(route)
+            count += 1
+        }
+        return count
     }
 
     func handleFinderHandoffFailure(_: Notification) {

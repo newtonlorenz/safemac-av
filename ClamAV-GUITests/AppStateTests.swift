@@ -100,7 +100,7 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(helper.registerCalls, 0)
         XCTAssertEqual(legacy.unregisterCalls, 0)
-        XCTAssertEqual(manager.status, .disabled)
+        XCTAssertEqual(manager.status, .enabled)
     }
 
     func testLegacyMigrationKeepsLegacyRegistrationWhileHelperAwaitsApproval() throws {
@@ -135,7 +135,70 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(helper.registerCalls, 1)
         XCTAssertEqual(helper.unregisterCalls, 1)
         XCTAssertEqual(legacy.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .enabled)
+    }
+
+    func testLegacyRegistrationKeepsCombinedStatusEnabledWhenHelperMigrationFails() {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        helper.registerError = AppStateTestError.loginItemFailure
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        XCTAssertThrowsError(try manager.migrateLegacyRegistrationIfNeeded())
+        XCTAssertEqual(manager.status, .enabled)
+    }
+
+    func testDisablingMigrationPendingApprovalUnregistersBothLoginItemServices() throws {
+        let helper = AppStateMockLoginItemService(status: .requiresApproval)
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        try manager.setEnabled(false)
+
+        XCTAssertEqual(helper.unregisterCalls, 1)
+        XCTAssertEqual(legacy.unregisterCalls, 1)
         XCTAssertEqual(manager.status, .disabled)
+    }
+
+    func testDisablingLegacyOnlyMigrationStateUnregistersLegacyService() throws {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        let legacy = AppStateMockLoginItemService(status: .requiresApproval)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        try manager.setEnabled(false)
+
+        XCTAssertEqual(helper.unregisterCalls, 0)
+        XCTAssertEqual(legacy.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .disabled)
+    }
+
+    func testDisablingBothServicesRollsHelperBackWhenLegacyUnregistrationFails() {
+        let helper = AppStateMockLoginItemService(status: .enabled)
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        legacy.unregisterError = AppStateTestError.loginItemFailure
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        XCTAssertThrowsError(try manager.setEnabled(false))
+        XCTAssertEqual(helper.unregisterCalls, 1)
+        XCTAssertEqual(helper.registerCalls, 1)
+        XCTAssertEqual(legacy.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .enabled)
     }
 
     func testLaunchAtLoginStartupReconcilesSavedPreferenceWithSystemStatus() {
