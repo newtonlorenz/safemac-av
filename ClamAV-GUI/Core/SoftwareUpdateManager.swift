@@ -15,11 +15,15 @@ final class SoftwareUpdateManager: ObservableObject {
     private var canCheckObservation: NSKeyValueObservation?
 #endif
 
-    init(bundle: Bundle = .main, isAutomatedTest: Bool = SoftwareUpdateManager.defaultIsAutomatedTest()) {
+    init(
+        bundle: Bundle = .main,
+        startsUpdater: Bool = true,
+        isAutomatedTest: Bool = SoftwareUpdateManager.defaultIsAutomatedTest()
+    ) {
         isConfigured = Self.hasRequiredSparkleConfiguration(bundle: bundle)
 
 #if canImport(Sparkle)
-        guard isConfigured, !isAutomatedTest else { return }
+        guard isConfigured, startsUpdater, !isAutomatedTest else { return }
 
         let controller = SPUStandardUpdaterController(
             startingUpdater: true,

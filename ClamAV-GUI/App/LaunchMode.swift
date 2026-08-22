@@ -22,10 +22,16 @@ enum LaunchMode: Equatable {
         self != .scheduledSignatureUpdate
     }
 
+    var startsSoftwareUpdateSubsystem: Bool {
+        self != .scheduledSignatureUpdate
+    }
+
     func hidesDock(settings: AppSettings, isUITesting: Bool) -> Bool {
         switch self {
-        case .interactive, .scheduledScan:
+        case .interactive:
             settings.hideFromDock && !isUITesting
+        case .scheduledScan:
+            false
         case .scheduledSignatureUpdate:
             true
         }

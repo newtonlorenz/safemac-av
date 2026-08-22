@@ -93,7 +93,9 @@ struct ClamAVApp: App {
         let menuBarManager = MenuBarManager()
         _appState = StateObject(wrappedValue: appState)
         _menuBarManager = StateObject(wrappedValue: menuBarManager)
-        _softwareUpdateManager = StateObject(wrappedValue: SoftwareUpdateManager())
+        _softwareUpdateManager = StateObject(
+            wrappedValue: SoftwareUpdateManager(startsUpdater: launchMode.startsSoftwareUpdateSubsystem)
+        )
         let isAutomatedTestLaunch = arguments.contains("--ui-testing")
             || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         let bundleURL = Bundle.main.bundleURL
