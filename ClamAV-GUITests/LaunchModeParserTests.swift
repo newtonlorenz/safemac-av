@@ -146,7 +146,8 @@ final class LaunchModeParserTests: XCTestCase {
         let store = BackgroundRouteRequestStore(baseURL: root)
 
         XCTAssertTrue(store.enqueue(.settings))
-        XCTAssertEqual(store.consume(), .settings)
+        XCTAssertEqual(store.peek(), .settings)
+        XCTAssertTrue(store.acknowledge(.settings))
         XCTAssertNil(store.consume())
 
         try "--finder-request".data(using: .utf8)?.write(to: root.appendingPathComponent("background-route.request"))

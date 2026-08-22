@@ -183,6 +183,7 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
         let settingsURL = root.appendingPathComponent("settings.json")
         let updater = BackgroundSignatureUpdater(settingsURL: settingsURL)
 
@@ -190,29 +191,73 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             "autoUpdateSignatures": false,
             "freshclamPath": "/usr/bin/true"
         ])
-        try disabled.write(to: settingsURL)
+        try writeSecureSettings(disabled, to: settingsURL)
         updater.runIfAvailable()
 
         let enabled = try JSONSerialization.data(withJSONObject: [
             "autoUpdateSignatures": true,
             "freshclamPath": "/usr/bin/true"
         ])
-        try enabled.write(to: settingsURL)
+        try writeSecureSettings(enabled, to: settingsURL)
         updater.runIfAvailable()
+    }
+
+    func testScheduledUpdaterUsesSharedFreshclamInvocationAndBoundedExecution() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        let configDirectory = root.appendingPathComponent("config", isDirectory: true)
+        let signatureDirectory = root.appendingPathComponent("signatures", isDirectory: true)
+        try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        try Data().write(to: configDirectory.appendingPathComponent("freshclam.conf"))
+        let settingsURL = root.appendingPathComponent("settings.json")
+        try writeSecureSettings(JSONSerialization.data(withJSONObject: [
+            "autoUpdateSignatures": true,
+            "freshclamPath": "/usr/bin/true",
+            "configDirectory": configDirectory.path,
+            "signatureDirectory": signatureDirectory.path
+        ]), to: settingsURL)
+        var captured: (FreshclamInvocation, TimeInterval)?
+        let updater = BackgroundSignatureUpdater(settingsURL: settingsURL) { invocation, timeout in
+            captured = (invocation, timeout)
+        }
+
+        updater.runIfAvailable()
+
+        XCTAssertEqual(captured?.0.arguments, [
+            "--config-file=\(configDirectory.appendingPathComponent("freshclam.conf").path)",
+            "--stdout",
+            "--datadir=\(signatureDirectory.path)",
+            "--verbose"
+        ])
+        XCTAssertEqual(captured?.1, 300)
+    }
+
+    func testFreshclamInvocationRejectsGroupWritableExecutable() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("freshclam")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: executable.path)
+
+        XCTAssertFalse(FreshclamInvocation.isTrustedExecutable(at: executable.path))
     }
 
     func testSettingsReloadKeepsLastKnownGoodAfterAtomicCorruption() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
         let settingsURL = root.appendingPathComponent("settings.json")
         let store = BackgroundHelperSettingsStore(settingsURL: settingsURL)
 
         XCTAssertEqual(store.reload(), .safeDefaults)
-        try JSONSerialization.data(withJSONObject: [
+        try writeSecureSettings(JSONSerialization.data(withJSONObject: [
             "autoUpdateSignatures": true,
             "freshclamPath": "/usr/bin/true"
-        ]).write(to: settingsURL, options: .atomic)
+        ]), to: settingsURL)
         XCTAssertEqual(store.reload().freshclamPath, "/usr/bin/true")
 
         try Data("not-json".utf8).write(to: settingsURL, options: .atomic)
@@ -224,19 +269,58 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
         let settingsURL = root.appendingPathComponent("settings.json")
 
-        try JSONSerialization.data(withJSONObject: [
+        try writeSecureSettings(JSONSerialization.data(withJSONObject: [
             "autoUpdateSignatures": true,
             "freshclamPath": "/usr/bin/true"
-        ]).write(to: settingsURL, options: .atomic)
+        ]), to: settingsURL)
         XCTAssertEqual(BackgroundHelperSettingsStore(settingsURL: settingsURL).reload().freshclamPath, "/usr/bin/true")
 
         try Data("not-json".utf8).write(to: settingsURL, options: .atomic)
         XCTAssertEqual(BackgroundHelperSettingsStore(settingsURL: settingsURL).reload(), BackgroundHelperSettings(
             autoUpdateSignatures: true,
-            freshclamPath: "/usr/bin/true"
+            freshclamPath: "/usr/bin/true",
+            configDirectory: nil,
+            signatureDirectory: nil
         ))
+    }
+
+    func testSettingsStoreRejectsUnsafePrimaryFileAndSymlink() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        let settingsURL = root.appendingPathComponent("settings.json")
+        let valid = try JSONSerialization.data(withJSONObject: [
+            "autoUpdateSignatures": true,
+            "freshclamPath": "/usr/bin/true"
+        ])
+        try valid.write(to: settingsURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: settingsURL.path)
+        XCTAssertEqual(BackgroundHelperSettingsStore(settingsURL: settingsURL).reload(), .safeDefaults)
+
+        try FileManager.default.removeItem(at: settingsURL)
+        let target = root.appendingPathComponent("settings-target.json")
+        try valid.write(to: target, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+        try FileManager.default.createSymbolicLink(at: settingsURL, withDestinationURL: target)
+        XCTAssertEqual(BackgroundHelperSettingsStore(settingsURL: settingsURL).reload(), .safeDefaults)
+    }
+
+    func testSettingsStoreRejectsUnsafeContainingDirectory() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let settingsURL = root.appendingPathComponent("settings.json")
+        try writeSecureSettings(JSONSerialization.data(withJSONObject: [
+            "autoUpdateSignatures": true,
+            "freshclamPath": "/usr/bin/true"
+        ]), to: settingsURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settingsURL.path)
+
+        XCTAssertEqual(BackgroundHelperSettingsStore(settingsURL: settingsURL).reload(), .safeDefaults)
     }
 
     func testRouteHandoffRemovesDurableRequestWhenOpeningMainFails() throws {
@@ -260,6 +344,7 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
         let settingsURL = root.appendingPathComponent("settings.json")
         let store = BackgroundHelperSettingsStore(settingsURL: settingsURL)
         let observed = expectation(description: "atomic replacement observed")
@@ -268,10 +353,10 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             if settings.freshclamPath == "/usr/bin/true" { observed.fulfill() }
         }
 
-        try JSONSerialization.data(withJSONObject: [
+        try writeSecureSettings(JSONSerialization.data(withJSONObject: [
             "autoUpdateSignatures": true,
             "freshclamPath": "/usr/bin/true"
-        ]).write(to: settingsURL, options: .atomic)
+        ]), to: settingsURL)
 
         wait(for: [observed], timeout: 2)
     }
@@ -279,5 +364,10 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
     func testAppAdapterExposesOnlyTheFixedMainActions() {
         let app = SafeMacAVBackgroundApp()
         XCTAssertNotNil(app)
+    }
+
+    private func writeSecureSettings(_ data: Data, to url: URL) throws {
+        try data.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 }

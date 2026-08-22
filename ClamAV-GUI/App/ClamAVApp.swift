@@ -159,6 +159,9 @@ struct ClamAVApp: App {
                 preferredColorScheme: preferredColorScheme
             )
         }
+        MainWindowControllerRegistry.shared.whenRouterAvailable {
+            appState.drainBackgroundRouteRequests()
+        }
     }
 
     var body: some Scene {

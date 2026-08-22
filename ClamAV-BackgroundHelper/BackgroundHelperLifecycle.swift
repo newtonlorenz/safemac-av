@@ -25,7 +25,7 @@ final class BackgroundRouteHandoff {
         guard validateMainApplication(), requestStore.enqueue(route) else { return }
         openMainApplication { [requestStore, postWakeHint] succeeded in
             guard succeeded else {
-                requestStore.discard()
+                requestStore.discard(route)
                 return
             }
             postWakeHint(route)
