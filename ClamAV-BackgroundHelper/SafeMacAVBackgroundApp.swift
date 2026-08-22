@@ -59,13 +59,13 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
     @objc func checkForUpdates() { MainAppHandoff.send(.checkForUpdates) }
     @objc private func quit() { NSApplication.shared.terminate(nil) }
 
-    private func runScheduledSignatureUpdate(completion: @escaping @Sendable () -> Void) {
+    private func runScheduledSignatureUpdate(completion: @escaping @MainActor @Sendable () -> Void) {
         let settingsStore = settingsStore
         let notificationCoordinator = notificationCoordinator
         DispatchQueue.global(qos: .utility).async {
             let updater = BackgroundSignatureUpdater(settingsStore: settingsStore)
             guard let outcome = updater.runIfAvailable() else {
-                OperationQueue.main.addOperation(completion)
+                Task { @MainActor in completion() }
                 return
             }
             let notificationsEnabled = settingsStore.reload().showNotifications
@@ -77,7 +77,7 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
                 // The coordinator terminates this one-shot helper from its
                 // completion callback. Wait until the authorization lookup
                 // and any authorized notification submission have completed.
-                OperationQueue.main.addOperation(completion)
+                await MainActor.run { completion() }
             }
         }
     }

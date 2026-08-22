@@ -42,7 +42,7 @@ final class BackgroundHelperCoordinator {
 
     private let installStatusItem: () -> Void
     private let acquireMonitoringLease: () -> Bool
-    private let runScheduledSignatureUpdate: (@escaping () -> Void) -> Void
+    private let runScheduledSignatureUpdate: (@escaping @MainActor @Sendable () -> Void) -> Void
     private let terminate: () -> Void
     private var scheduledUpdateHasStarted = false
     private var scheduledUpdateHasFinished = false
@@ -52,7 +52,7 @@ final class BackgroundHelperCoordinator {
     init(
         installStatusItem: @escaping () -> Void,
         acquireMonitoringLease: @escaping () -> Bool,
-        runScheduledSignatureUpdate: @escaping (@escaping () -> Void) -> Void,
+        runScheduledSignatureUpdate: @escaping (@escaping @MainActor @Sendable () -> Void) -> Void,
         terminate: @escaping () -> Void
     ) {
         self.installStatusItem = installStatusItem
