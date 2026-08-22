@@ -92,12 +92,35 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
           NOTARY_TIMEOUT: 45m
+          SPARKLE_FEED_URL: ${{ vars.SPARKLE_FEED_URL }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
         run: |
           set -Eeuo pipefail
 
           : "${NOTARY_KEY_ID:?NOTARY_KEY_ID is required}"
           : "${NOTARY_ISSUER_ID:?NOTARY_ISSUER_ID is required}"
           ./scripts/create-dmg.sh
+
+      - name: Generate Sparkle appcast
+        env:
+          SPARKLE_PRIVATE_ED_KEY_BASE64: ${{ secrets.SPARKLE_PRIVATE_ED_KEY_BASE64 }}
+          SPARKLE_DOWNLOAD_URL_PREFIX: ${{ vars.SPARKLE_DOWNLOAD_URL_PREFIX }}
+        run: |
+          set -Eeuo pipefail
+
+          if [[ -z "$SPARKLE_PRIVATE_ED_KEY_BASE64" ]]; then
+            echo "SPARKLE_PRIVATE_ED_KEY_BASE64 not set; skipping appcast generation."
+            exit 0
+          fi
+
+          SPARKLE_PRIVATE_ED_KEY="$RUNNER_TEMP/sparkle_private_ed_key"
+          printf '%s' "$SPARKLE_PRIVATE_ED_KEY_BASE64" | base64 --decode > "$SPARKLE_PRIVATE_ED_KEY"
+          chmod 600 "$SPARKLE_PRIVATE_ED_KEY"
+          mkdir -p build/appcast
+          cp build/SafeMac-AV.dmg build/appcast/
+          SPARKLE_PRIVATE_ED_KEY="$SPARKLE_PRIVATE_ED_KEY" \
+          SPARKLE_DOWNLOAD_URL_PREFIX="$SPARKLE_DOWNLOAD_URL_PREFIX" \
+            ./scripts/generate-appcast.sh build/appcast
 
       - name: Verify distribution artifacts
         run: |
@@ -117,6 +140,7 @@ jobs:
           path: |
             build/SafeMac-AV.dmg
             build/SHA256SUMS.txt
+            build/appcast/appcast.xml
           if-no-files-found: error
 
       - name: Delete temporary signing keychain

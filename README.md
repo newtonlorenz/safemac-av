@@ -183,6 +183,15 @@ Maintainers can also run the manual **Release package** GitHub Actions workflow 
 - `NOTARY_KEY_BASE64`: base64-encoded App Store Connect API `.p8`
 - `NOTARY_KEY_ID`: App Store Connect API key ID
 - `NOTARY_ISSUER_ID`: App Store Connect issuer ID
+- optional `SPARKLE_PRIVATE_ED_KEY_BASE64`: base64-encoded Sparkle private EdDSA key for appcast generation
+
+Set repository variables `SPARKLE_FEED_URL` and `SPARKLE_PUBLIC_ED_KEY` to embed app-update configuration in release builds. Set optional `SPARKLE_DOWNLOAD_URL_PREFIX` to the published URL prefix for DMG downloads in generated appcasts. If the feed URL or public key is missing, SafeMac AV disables its app-update UI instead of checking a placeholder feed. Generate a local appcast from a directory containing release archives with:
+
+```bash
+SPARKLE_PRIVATE_ED_KEY='/path/to/sparkle_private_ed_key' \
+SPARKLE_DOWNLOAD_URL_PREFIX='https://example.com/downloads/' \
+  ./scripts/generate-appcast.sh build/appcast
+```
 
 Release publication remains a separate, explicit step after downloading and verifying the workflow artifacts.
 
