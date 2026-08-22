@@ -202,6 +202,8 @@ Before replacing the currently installed app, verify that the signed appcast adv
 After publishing the appcast and DMG, run the installed-app Sparkle canary against a temporary copy of the installed app. The canary requires Sparkle 2's `sparkle-cli`; it does not mutate the source app bundle:
 
 ```bash
+SAFEMAC_CANARY_EXPECT_UPDATE=1 \
+SAFEMAC_CANARY_INSTALL=1 \
 SPARKLE_CLI='/path/to/sparkle.app/Contents/MacOS/sparkle' \
   ./scripts/run-installed-sparkle-canary.sh
 ```

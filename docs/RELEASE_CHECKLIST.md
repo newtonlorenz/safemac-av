@@ -79,6 +79,8 @@ After final publication approval:
 - [ ] Run the installed-app Sparkle canary against the published feed:
 
 ```bash
+SAFEMAC_CANARY_EXPECT_UPDATE=1 \
+SAFEMAC_CANARY_INSTALL=1 \
 SPARKLE_CLI='/path/to/sparkle.app/Contents/MacOS/sparkle' \
   ./scripts/run-installed-sparkle-canary.sh
 ```

@@ -75,38 +75,40 @@ resolve_feed_url() {
     [[ "$FEED_URL" == https://* || "$FEED_URL" == file://* ]] || fail "Sparkle feed URL must be https:// or file:// for the canary"
 }
 
-verify_installed_app() {
+verify_app_policy() {
+    local app_path="$1"
+    local label="$2"
     local bundle_id
     local details
 
-    require_app_bundle "$APP_PATH"
-    bundle_id="$(plist_value "$APP_PATH" CFBundleIdentifier)"
+    require_app_bundle "$app_path"
+    bundle_id="$(plist_value "$app_path" CFBundleIdentifier)"
     [[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]] \
-        || fail "unexpected bundle identifier: ${bundle_id:-missing}"
+        || fail "$label has unexpected bundle identifier: ${bundle_id:-missing}"
 
-    codesign --verify --deep --strict --verbose=2 "$APP_PATH" \
-        || fail "installed app signature verification failed"
+    codesign --verify --deep --strict --verbose=2 "$app_path" \
+        || fail "$label signature verification failed"
 
-    details="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)" \
-        || fail "unable to inspect installed app signature"
+    details="$(codesign -dv --verbose=4 "$app_path" 2>&1)" \
+        || fail "unable to inspect $label signature"
     if [[ "$ALLOW_NON_DEVELOPER_ID" != "1" ]]; then
         grep -Fq 'Authority=Developer ID Application:' <<< "$details" \
-            || fail "installed app is not signed with Developer ID Application"
+            || fail "$label is not signed with Developer ID Application"
         grep -Eq '^Timestamp=.+$' <<< "$details" \
-            || fail "installed app signature does not include a secure timestamp"
+            || fail "$label signature does not include a secure timestamp"
         if grep -Fq 'Timestamp=none' <<< "$details"; then
-            fail "installed app signature does not include a secure timestamp"
+            fail "$label signature does not include a secure timestamp"
         fi
         grep -Fq 'runtime' <<< "$details" \
-            || fail "installed app signature is missing hardened runtime"
+            || fail "$label signature is missing hardened runtime"
     fi
 
-    if ! spctl -a -vv -t execute "$APP_PATH" >/dev/null 2>&1; then
+    if ! spctl -a -vv -t execute "$app_path" >/dev/null 2>&1; then
         [[ "$ALLOW_UNTRUSTED_GATEKEEPER" == "1" ]] \
-            || fail "Gatekeeper does not trust the installed app"
+            || fail "Gatekeeper does not trust $label"
     fi
 
-    info "installed app signature and Gatekeeper trust are acceptable"
+    info "$label signature and Gatekeeper trust are acceptable"
 }
 
 copy_canary_app() {
@@ -198,9 +200,7 @@ run_install() {
     append_install_sparkle_arguments
     "$SPARKLE_CLI" "${arguments[@]}"
     wait_for_installed_version_change "$before_version"
-
-    codesign --verify --deep --strict --verbose=2 "$CANARY_APP_PATH" \
-        || fail "updated temporary canary app signature verification failed"
+    verify_app_policy "$CANARY_APP_PATH" "updated temporary canary app"
 }
 
 main() {
@@ -209,7 +209,7 @@ main() {
     command_path spctl
     resolve_sparkle_cli
     resolve_feed_url
-    verify_installed_app
+    verify_app_policy "$APP_PATH" "installed app"
     copy_canary_app
 
     if [[ "$INSTALL_UPDATE" == "1" ]]; then
