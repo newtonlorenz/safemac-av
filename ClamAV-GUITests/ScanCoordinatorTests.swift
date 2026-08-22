@@ -40,6 +40,24 @@ final class ScanCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.isScanning)
     }
 
+    func testAdmissionFailureDoesNotStartRunner() async {
+        let runner = MockCoordinatorRunner()
+        let coordinator = ScanCoordinator(clamAVRunner: runner)
+        let request = ScanRequest(source: .finder, paths: [URL(fileURLWithPath: "/tmp/a")], options: .default)
+
+        let outcome = await coordinator.run(
+            request,
+            onAdmitted: {
+                throw ExternalScanRequestStoreError.invalidRequestFile
+            },
+            progressHandler: { _ in }
+        )
+
+        XCTAssertEqual(outcome.errorMessage, "Finder scan request storage is invalid.")
+        XCTAssertEqual(runner.scanCallCount, 0)
+        XCTAssertFalse(coordinator.isScanning)
+    }
+
     private static func report(paths: [URL]) -> ScanReport {
         ScanReport(
             startTime: Date(),

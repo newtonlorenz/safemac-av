@@ -22,7 +22,7 @@ final class ScanCoordinator {
 
     func run(
         _ request: ScanRequest,
-        onAdmitted: (() async -> Void)? = nil,
+        onAdmitted: (() async throws -> Void)? = nil,
         progressHandler: @escaping (ScanProgress) -> Void
     ) async -> ScanOutcome {
         guard !isScanning else {
@@ -41,9 +41,8 @@ final class ScanCoordinator {
             }
         }
 
-        await onAdmitted?()
-
         do {
+            try await onAdmitted?()
             let report = try await clamAVRunner.scan(
                 paths: request.paths,
                 options: request.options,

@@ -20,6 +20,8 @@ APP_ZIP_PATH="$BUILD_DIR/$PRODUCT_NAME.zip"
 TEMP_DMG_DIR="$BUILD_DIR/dmg-contents"
 BUILD_LOG="$BUILD_DIR/archive.log"
 ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME/ClamAV_GUI.entitlements"
+FINDER_ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME-Finder/ClamAV_GUI_Finder.entitlements"
+APP_GROUP_IDENTIFIER="CQPH8YR62A.com.newtonlorenz.ClamAV-GUI"
 
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
@@ -133,7 +135,9 @@ check_requirements() {
         require_command codesign "Install the Xcode command-line tools."
         require_command lipo "Install the Xcode command-line tools."
         require_command security "This script must run on macOS."
+        [[ -x /usr/libexec/PlistBuddy ]] || fail "PlistBuddy not found. Install the Xcode command-line tools."
         [[ -f "$ENTITLEMENTS_PATH" ]] || fail "Entitlements file not found: $ENTITLEMENTS_PATH"
+        [[ -f "$FINDER_ENTITLEMENTS_PATH" ]] || fail "Finder entitlements file not found: $FINDER_ENTITLEMENTS_PATH"
 
         resolve_signing_identity
     fi
@@ -318,6 +322,7 @@ verify_signed_app_components() {
     done
 
     codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+    verify_signed_entitlements
 }
 
 notarization_enabled() {
@@ -387,7 +392,16 @@ sign_app() {
     done
 
     for extension_path in "${extension_paths[@]}"; do
-        sign_distribution_code "$extension_path"
+        local extension_entitlements=()
+        if [[ "$(basename "$extension_path")" == "$PROJECT_NAME-Finder.appex" ]]; then
+            extension_entitlements=(--entitlements "$FINDER_ENTITLEMENTS_PATH")
+        fi
+        codesign --force \
+            --sign "$RESOLVED_SIGNING_IDENTITY" \
+            --options runtime \
+            --timestamp \
+            "${extension_entitlements[@]}" \
+            "$extension_path"
     done
 
     codesign --force \
@@ -423,7 +437,28 @@ notarize_app() {
     xcrun stapler staple "$APP_PATH"
     xcrun stapler validate "$APP_PATH"
     codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+    verify_signed_entitlements
     remove_file "$APP_ZIP_PATH"
+}
+
+verify_signed_entitlements() {
+    local finder_extension="$APP_PATH/Contents/PlugIns/$PROJECT_NAME-Finder.appex"
+    local app_entitlements="$BUILD_DIR/app-entitlements.plist"
+    local finder_entitlements="$BUILD_DIR/finder-entitlements.plist"
+
+    [[ -d "$finder_extension" ]] || fail "Signed Finder extension not found: $finder_extension"
+    remove_file "$app_entitlements"
+    remove_file "$finder_entitlements"
+
+    codesign -d --entitlements - --xml "$APP_PATH" >"$app_entitlements"
+    codesign -d --entitlements - --xml "$finder_extension" >"$finder_entitlements"
+
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$app_entitlements")" == "$APP_GROUP_IDENTIFIER" ]] \
+        || fail "Signed app is missing the expected Finder app group."
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$finder_entitlements")" == "$APP_GROUP_IDENTIFIER" ]] \
+        || fail "Signed Finder extension is missing the expected app group."
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$finder_entitlements")" == "true" ]] \
+        || fail "Signed Finder extension is missing its sandbox entitlement."
 }
 
 create_dmg() {

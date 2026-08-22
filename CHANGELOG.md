@@ -17,6 +17,10 @@ All notable project changes will be documented in this file. The format follows 
 - The local DMG helper can notarize with either a notarytool Keychain profile or App Store Connect API key credentials and always writes `SHA256SUMS.txt`.
 - The release-package workflow can embed Sparkle app-update settings and generate a signed appcast artifact when the Sparkle private key secret is configured.
 
+### Security
+
+- Hardened Finder scan handoff so file paths move only through the signed app-group queue with freshness, size, symlink, permission, and absolute-path validation.
+
 ## [1.1.0] - 2026-08-21
 
 ### Added

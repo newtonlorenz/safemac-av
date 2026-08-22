@@ -88,16 +88,20 @@ if [[ " $* " == *" --sign "* ]]; then
     has_timestamp=false
     has_identity=false
     preserves_metadata=false
+    entitlement_path=""
     previous=""
     for argument in "$@"; do
         [[ "$previous" != "--options" || "$argument" != "runtime" ]] || has_runtime=true
         [[ "$argument" != "--timestamp" ]] || has_timestamp=true
         [[ "$previous" != "--sign" || "$argument" != "${TEST_IDENTITY:?}" ]] || has_identity=true
         [[ "$argument" != "--preserve-metadata=identifier,entitlements,requirements" ]] || preserves_metadata=true
+        if [[ "$previous" == "--entitlements" ]]; then
+            entitlement_path="$argument"
+        fi
         previous="$argument"
     done
-    printf "%s\truntime=%s timestamp=%s identity=%s preserves_metadata=%s\n" \
-        "${!#}" "$has_runtime" "$has_timestamp" "$has_identity" "$preserves_metadata" >> "${SIGN_LOG:?}"
+    printf "%s\truntime=%s timestamp=%s identity=%s preserves_metadata=%s entitlements=%s\n" \
+        "${!#}" "$has_runtime" "$has_timestamp" "$has_identity" "$preserves_metadata" "$entitlement_path" >> "${SIGN_LOG:?}"
 fi
 if [[ " $* " == *" -dv "* ]]; then
     printf "%s\n" \
@@ -105,8 +109,15 @@ if [[ " $* " == *" -dv "* ]]; then
         "TeamIdentifier=TESTTEAM01" \
         "Timestamp=Aug 22, 2026 at 02:00:00" \
         "CodeDirectory v=20500 flags=0x10000(runtime)" >&2
-elif [[ " $* " == *" --entitlements :- "* ]]; then
-    printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
+elif [[ " $* " == *" --entitlements "* ]]; then
+    target="${!#}"
+    if [[ "$target" == *"/Sparkle.framework/Versions/B/Autoupdate" ]]; then
+        printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
+    elif [[ "$target" == *"/SafeMac AV.app" ]]; then
+        printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>CQPH8YR62A.com.newtonlorenz.ClamAV-GUI</string></array></dict></plist>"
+    elif [[ "$target" == *"/ClamAV-GUI-Finder.appex" ]]; then
+        printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><true/><key>com.apple.security.application-groups</key><array><string>CQPH8YR62A.com.newtonlorenz.ClamAV-GUI</string></array></dict></plist>"
+    fi
 fi'
 
     write_fake_tool hdiutil '
@@ -125,6 +136,7 @@ line_for_target() {
 assert_signed_with_distribution_options() {
     local target="$1"
     local must_preserve_metadata="${2:-true}"
+    local expected_entitlements="${3:-}"
     local line
 
     line="$(awk -F '\t' -v target="$target" '$1 == target { print $2; exit }' "$SIGN_LOG")"
@@ -134,6 +146,9 @@ assert_signed_with_distribution_options() {
     [[ "$line" == *"identity=true"* ]] || fail "resolved Developer ID identity missing: $target"
     if [[ "$must_preserve_metadata" == "true" ]]; then
         [[ "$line" == *"preserves_metadata=true"* ]] || fail "signature metadata was not preserved: $target"
+    fi
+    if [[ -n "$expected_entitlements" ]]; then
+        [[ "$line" == *"entitlements=$expected_entitlements"* ]] || fail "expected entitlements were not used: $target"
     fi
 }
 
@@ -172,7 +187,7 @@ verify_signing_order() {
     assert_signed_with_distribution_options "$installer"
     assert_signed_with_distribution_options "$autoupdate"
     assert_signed_with_distribution_options "$sparkle"
-    assert_signed_with_distribution_options "$appex"
+    assert_signed_with_distribution_options "$appex" false "$PROJECT_DIR/ClamAV-GUI-Finder/ClamAV_GUI_Finder.entitlements"
     assert_signed_with_distribution_options "$app" false
 
     assert_before "$autoupdate" "$sparkle"

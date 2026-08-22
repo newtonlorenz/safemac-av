@@ -33,21 +33,32 @@ class FinderSync: FIFinderSync {
 
         // Persist the request first; distributed notifications are only a wake signal.
         let paths = items.map { $0.path }
-        do {
-            let request = try ExternalScanRequestStore().enqueue(paths: paths, source: ExternalScanRequestStore.finderSource)
-            DistributedNotificationCenter.default().postNotificationName(
-                NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
-                object: nil,
-                userInfo: ["requestID": request.id.uuidString],
-                deliverImmediately: true
-            )
-        } catch {
-            NSLog("SafeMac AV Finder request could not be persisted: \(error.localizedDescription)")
-        }
+        let store = ExternalScanRequestStore()
+        let handoff = FinderScanRequestHandoff(
+            enqueue: { try store.enqueue(paths: $0, source: $1) },
+            postWake: { requestID in
+                DistributedNotificationCenter.default().postNotificationName(
+                    NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
+                    object: nil,
+                    userInfo: ["requestID": requestID.uuidString],
+                    deliverImmediately: true
+                )
+            },
+            presentFailure: { Self.presentHandoffFailure(message: $0) }
+        )
+        handoff.submit(paths: paths)
 
         // Open main app
         if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.newtonlorenz.ClamAV-GUI") {
             NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
         }
+    }
+
+    private static func presentHandoffFailure(message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }

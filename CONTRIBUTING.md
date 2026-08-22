@@ -102,7 +102,7 @@ Published tags and assets are immutable. Publish a new semantic version for corr
 The upstream identifiers intentionally use the Newton Lorenz namespace. You can modify the code under MIT, but a distributable fork should have its own identity:
 
 1. Change the app, Finder extension, and test bundle identifiers in `ClamAV-GUI.xcodeproj/project.pbxproj`.
-2. Change `group.com.newtonlorenz.ClamAV-GUI` to an app-group identifier owned by your Apple Developer account and add the matching entitlement to both participating targets.
+2. Change `CQPH8YR62A.com.newtonlorenz.ClamAV-GUI` to an unprovisioned macOS app-group identifier prefixed by your signing Team ID, and add the matching entitlement to both participating targets.
 3. Change the distributed-notification name, Finder app lookup identifier, LaunchAgent labels, and any other `com.newtonlorenz.*` strings together.
 4. Choose your own signing team, Developer ID certificate, and notarization profile.
 5. Rename the product if your distribution could be mistaken for the upstream build.
