@@ -258,6 +258,22 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         BackgroundSignatureUpdater.executeProcess(invocation, timeout: 1)
     }
 
+    func testScheduledUpdaterTerminatesProcessThatExceedsBound() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("slow-freshclam")
+        try Data("#!/bin/sh\nsleep 2\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let invocation = try FreshclamInvocation.make(
+            executablePath: executable.path,
+            configDirectory: root.path,
+            signatureDirectory: root.appendingPathComponent("signatures").path
+        )
+
+        BackgroundSignatureUpdater.executeProcess(invocation, timeout: 0)
+    }
+
     func testSettingsReloadKeepsLastKnownGoodAfterAtomicCorruption() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -372,6 +388,17 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         ]), to: settingsURL)
 
         wait(for: [observed], timeout: 2)
+    }
+
+    func testSettingsWatcherCreatesOwnerOnlyMissingDirectory() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BackgroundHelperSettingsStore(settingsURL: root.appendingPathComponent("settings.json"))
+
+        store.startWatching()
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: root.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
     }
 
     func testAppAdapterExposesOnlyTheFixedMainActions() {
