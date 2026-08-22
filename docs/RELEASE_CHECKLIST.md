@@ -52,6 +52,7 @@ shasum -a 256 -c SHA256SUMS.txt
 ```
 
 - [ ] Confirm the verifier reports the embedded `SafeMacAVBackground.app` helper. It must be Developer-ID signed by Team `CQPH8YR62A`, hardened, timestamped, universal, `LSUIElement=true`, and free of Sparkle.
+- [ ] Exercise launch-at-login migration on an installed build: legacy main-app item enabled, helper registration/approval, helper enablement, legacy removal, and disable rollback. If a downgrade is needed during this one-release bridge, disable launch at login before installing the pre-helper build and re-enable it from that build; do not assume an old build can recreate the helper migration automatically.
 
 - [ ] Before replacing the currently installed app, verify the signed appcast advertises exactly one newer update to that installed build. The verifier requires a deep, strict Developer ID Application signature from Team `CQPH8YR62A`, hardened runtime, secure timestamp, and Gatekeeper trust:
 

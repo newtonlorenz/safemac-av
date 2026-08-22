@@ -8,6 +8,7 @@ All notable project changes will be documented in this file. The format follows 
 
 - An embedded, hardened macOS 13+ background login-item helper for launch at login, the persistent menu bar, and automatic signature-update launches.
 - Transactional migration from the legacy main-app login item, shared symlink-resistant background-work leases, and release verification for the embedded helper.
+- Documented one-release launch-at-login downgrade recovery: disable the helper login item before installing a pre-helper build, then re-enable the legacy login item from that build.
 
 ### Changed
 
