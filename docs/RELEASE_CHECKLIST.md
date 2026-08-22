@@ -13,6 +13,7 @@ Use this checklist for a signed and notarized release. Publication is a separate
   - `NOTARY_KEY_BASE64`
   - `NOTARY_KEY_ID`
   - `NOTARY_ISSUER_ID`
+- [ ] Confirm the protected GitHub environment `release` exists, contains the release secrets, and requires designated maintainer reviewers.
 - [ ] Confirm repository variables and appcast secret for signed Sparkle updates:
   - `SPARKLE_FEED_URL`: credential-free HTTPS URL without a query or fragment
   - `SPARKLE_PUBLIC_ED_KEY`: canonical base64 for exactly 32 bytes
@@ -43,7 +44,7 @@ xcodebuild build \
 Do not package final release assets from a moving branch ref. After release publication is approved:
 
 - [ ] Create tag `vX.Y.Z` on the verified commit.
-- [ ] Run the manual **Release package** workflow with `release_ref` set to `vX.Y.Z`.
+- [ ] Dispatch the manual **Release package** workflow from `main` with `release_ref` set to the full annotated tag ref `refs/tags/vX.Y.Z`. The workflow rejects tags whose resolved commit is not on `origin/main` before any release secret is exposed.
 - [ ] Download the workflow artifact.
 
 - [ ] Verify checksums from the artifact directory:

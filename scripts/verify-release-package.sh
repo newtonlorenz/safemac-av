@@ -350,15 +350,6 @@ verify_appcast() {
     bundle_version="$(bundle_value CFBundleVersion)"
     short_version="$(bundle_value CFBundleShortVersionString)"
 
-    grep -Fq "$DMG_NAME" "$APPCAST_PATH" \
-        || fail "appcast does not reference $DMG_NAME"
-    grep -Eq 'sparkle:edSignature="[^"]+"' "$APPCAST_PATH" \
-        || fail "appcast is missing sparkle:edSignature"
-    grep -Fq "sparkle:version=\"$bundle_version\"" "$APPCAST_PATH" \
-        || fail "appcast sparkle:version does not match CFBundleVersion $bundle_version"
-    grep -Fq "sparkle:shortVersionString=\"$short_version\"" "$APPCAST_PATH" \
-        || fail "appcast short version does not match CFBundleShortVersionString $short_version"
-
     if ! swift - "$APPCAST_PATH" "$DMG_PATH" "$sparkle_public_ed_key" "$DMG_NAME" "$bundle_version" "$short_version" "$EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX" <<'SWIFT'
 import CryptoKit
 import Foundation
@@ -388,6 +379,11 @@ func allMatches(_ pattern: String, in value: String) -> [String] {
         guard let swiftRange = Range(match.range, in: value) else { return nil }
         return String(value[swiftRange])
     }
+}
+
+func attribute(_ name: String, in tag: String) -> String? {
+    let escapedName = NSRegularExpression.escapedPattern(for: name)
+    return firstMatch(#"(?:^|\s)\#(escapedName)="([^"]+)""#, in: tag)
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
@@ -434,24 +430,38 @@ guard let feedSignature = Data(base64Encoded: feedSignatureBase64),
 guard let content = String(data: contentData, encoding: .utf8) else {
     fail("appcast content is not UTF-8")
 }
-let matchingEnclosures = allMatches(#"<enclosure\b[^>]*>"#, in: content).filter {
-    $0.contains("sparkle:version=\"\(bundleVersion)\"") &&
-    $0.contains("sparkle:shortVersionString=\"\(shortVersion)\"")
+let matchingEnclosures = allMatches(#"<enclosure\b[^>]*>"#, in: content).filter { tag in
+    attribute("sparkle:version", in: tag) == bundleVersion &&
+    attribute("sparkle:shortVersionString", in: tag) == shortVersion
 }
 guard matchingEnclosures.count == 1 else {
     fail("expected exactly one matching appcast enclosure")
 }
 let enclosure = matchingEnclosures[0]
-guard let archiveSignatureBase64 = firstMatch(#"\bsparkle:edSignature="([^"]+)""#, in: enclosure),
-      let archiveURLString = firstMatch(#"\burl="([^"]+)""#, in: enclosure),
-      let archiveURL = URL(string: archiveURLString),
-      archiveURL.scheme == "https",
-      archiveURL.host?.isEmpty == false,
+guard let archiveSignatureBase64 = attribute("sparkle:edSignature", in: enclosure),
+      let archiveURLString = attribute("url", in: enclosure),
+      let archiveComponents = URLComponents(string: archiveURLString),
+      archiveComponents.scheme == "https",
+      archiveComponents.host?.isEmpty == false,
+      archiveComponents.user == nil,
+      archiveComponents.password == nil,
+      archiveComponents.query == nil,
+      archiveComponents.fragment == nil,
+      let archiveURL = archiveComponents.url,
+      archiveURL.absoluteString == archiveURLString,
       archiveURL.lastPathComponent == dmgName else {
     fail("archive signature or URL invalid")
 }
 if !expectedDownloadURLPrefix.isEmpty && !archiveURLString.hasPrefix(expectedDownloadURLPrefix) {
     fail("archive URL does not use expected download prefix")
+}
+let fileSize = (try FileManager.default.attributesOfItem(atPath: dmgURL.path)[.size] as? NSNumber)?.int64Value
+let declaredLength = attribute("sparkle:length", in: enclosure) ?? attribute("length", in: enclosure)
+guard let declaredLength,
+      let declaredLengthValue = Int64(declaredLength),
+      let fileSize,
+      declaredLengthValue == fileSize else {
+    fail("archive length does not match release DMG")
 }
 guard let archiveSignature = Data(base64Encoded: archiveSignatureBase64),
       archiveSignature.count == 64,

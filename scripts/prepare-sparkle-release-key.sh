@@ -9,6 +9,7 @@ IFS=$'\n\t'
 OUTPUT_PATH="${1:-${RUNNER_TEMP:-/tmp}/sparkle_private_ed_key}"
 OUTPUT_DIRECTORY="$(dirname "$OUTPUT_PATH")"
 TEMP_PATH=""
+CREATED_OUTPUT=0
 PRIVATE_KEY_SECRET="${SPARKLE_PRIVATE_ED_KEY_BASE64:-}"
 unset SPARKLE_PRIVATE_ED_KEY_BASE64
 
@@ -23,7 +24,7 @@ cleanup() {
     if [[ -n "$TEMP_PATH" ]]; then
         rm -f "$TEMP_PATH"
     fi
-    if [[ $status -ne 0 ]]; then
+    if [[ $status -ne 0 && "$CREATED_OUTPUT" == "1" ]]; then
         rm -f "$OUTPUT_PATH"
     fi
     exit "$status"
@@ -31,7 +32,11 @@ cleanup() {
 
 trap cleanup EXIT
 
-[[ -d "$OUTPUT_DIRECTORY" ]] || fail
+[[ -n "${RUNNER_TEMP:-}" && -d "$RUNNER_TEMP" && ! -L "$RUNNER_TEMP" ]] || fail
+[[ -d "$OUTPUT_DIRECTORY" && ! -L "$OUTPUT_DIRECTORY" ]] || fail
+[[ "$(cd "$OUTPUT_DIRECTORY" && pwd -P)" == "$(cd "$RUNNER_TEMP" && pwd -P)" ]] || fail
+[[ "$(basename "$OUTPUT_PATH")" == "sparkle_private_ed_key" ]] || fail
+[[ ! -e "$OUTPUT_PATH" && ! -L "$OUTPUT_PATH" ]] || fail
 [[ -n "$PRIVATE_KEY_SECRET" ]] || fail
 TEMP_PATH="$(mktemp "$OUTPUT_PATH.tmp.XXXXXX")" || fail
 chmod 600 "$TEMP_PATH" || fail
@@ -133,5 +138,6 @@ fi
 chmod 600 "$TEMP_PATH" || fail
 mv -f "$TEMP_PATH" "$OUTPUT_PATH" || fail
 TEMP_PATH=""
+CREATED_OUTPUT=1
 chmod 600 "$OUTPUT_PATH" || fail
 printf 'Verified: Sparkle release configuration and signing key match\n'

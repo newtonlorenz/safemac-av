@@ -103,7 +103,7 @@ let content = """
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
     <item>
-      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="\(archiveSignature)" />
+      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(try Data(contentsOf: URL(fileURLWithPath: dmgPath)).count)" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="\(archiveSignature)" />
     </item>
   </channel>
 </rss>
@@ -250,6 +250,7 @@ guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]),
       var content = String(data: appcastData[..<prefixRange.lowerBound], encoding: .utf8) else {
     exit(1)
 }
+
 let expression = try NSRegularExpression(pattern: #"sparkle:edSignature="[^"]+""#)
 let range = NSRange(content.startIndex..<content.endIndex, in: content)
 content = expression.stringByReplacingMatches(
@@ -263,6 +264,92 @@ let feedSignature = try key.signature(for: signedContent).base64EncodedString()
 let signedAppcast = "\(content)<!-- sparkle-signatures:\nedSignature: \(feedSignature)\nlength: \(signedContent.count)\n-->\n"
 try signedAppcast.write(to: appcastURL, atomically: true, encoding: .utf8)
 SWIFT
+}
+
+mutate_and_resign_appcast() {
+    local mode="$1"
+
+    swift - "$WORK_DIR/package/appcast/appcast.xml" "$mode" <<'SWIFT'
+import CryptoKit
+import Foundation
+
+let appcastURL = URL(fileURLWithPath: CommandLine.arguments[1])
+let mode = CommandLine.arguments[2]
+let appcastData = try Data(contentsOf: appcastURL)
+let prefix = Data("<!-- sparkle-signatures:\n".utf8)
+guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]),
+      var content = String(data: appcastData[..<prefixRange.lowerBound], encoding: .utf8) else {
+    exit(1)
+}
+
+switch mode {
+case "misleading-version":
+    content = content.replacingOccurrences(
+        of: #"sparkle:version="3""#,
+        with: #"data-sparkle:version="3" sparkle:version="999""#
+    )
+case "misleading-short-version":
+    content = content.replacingOccurrences(
+        of: #"sparkle:shortVersionString="1.2.0""#,
+        with: #"data-sparkle:shortVersionString="1.2.0" sparkle:shortVersionString="9.9.9""#
+    )
+case "single-quoted-version":
+    content = content.replacingOccurrences(of: #"sparkle:version="3""#, with: "sparkle:version='3'")
+case "wrong-length":
+    content = content.replacingOccurrences(of: #"length="9""#, with: #"length="999""#)
+case "url-user":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://user@downloads.example.com/SafeMac-AV.dmg"
+    )
+case "url-password":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://user:password@downloads.example.com/SafeMac-AV.dmg"
+    )
+case "url-query":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://downloads.example.com/SafeMac-AV.dmg?token=secret"
+    )
+case "url-fragment":
+    content = content.replacingOccurrences(
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://downloads.example.com/SafeMac-AV.dmg#fragment"
+    )
+default:
+    exit(2)
+}
+
+let signedContent = Data(content.utf8)
+let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
+let feedSignature = try key.signature(for: signedContent).base64EncodedString()
+let signedAppcast = "\(content)<!-- sparkle-signatures:\nedSignature: \(feedSignature)\nlength: \(signedContent.count)\n-->\n"
+try signedAppcast.write(to: appcastURL, atomically: true, encoding: .utf8)
+SWIFT
+}
+
+run_exact_enclosure_metadata_failure_cases() {
+    local mode
+
+    for mode in \
+        misleading-version \
+        misleading-short-version \
+        single-quoted-version \
+        wrong-length \
+        url-user \
+        url-password \
+        url-query \
+        url-fragment; do
+        cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+        mutate_and_resign_appcast "$mode"
+        if PATH="$WORK_DIR/bin:$PATH" \
+           SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "invalid exact enclosure metadata was accepted: $mode"
+        fi
+        mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+    done
 }
 
 run_malformed_archive_signature_failure_cases() {
@@ -424,6 +511,7 @@ main() {
     run_malformed_feed_signature_failure_cases
     run_archive_signature_failure_case
     run_malformed_archive_signature_failure_cases
+    run_exact_enclosure_metadata_failure_cases
     run_duplicate_matching_enclosure_failure_case
     printf 'verify-release-package tests passed\n'
 }

@@ -40,6 +40,7 @@ SWIFT
 }
 
 run_preflight() {
+    RUNNER_TEMP="$WORK_DIR" \
     SPARKLE_FEED_URL="${SPARKLE_FEED_URL_VALUE:-https://updates.example.com/appcast.xml}" \
     SPARKLE_DOWNLOAD_URL_PREFIX="${SPARKLE_DOWNLOAD_URL_PREFIX_VALUE:-https://downloads.example.com/releases/}" \
     SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY_VALUE:-$(cat "$WORK_DIR/public-key.txt")}" \
@@ -103,16 +104,61 @@ test_public_private_mismatch() {
         expect_failure "public/private key mismatch" run_preflight
 }
 
+test_existing_output_survives_failure() {
+    printf 'existing-key\n' > "$KEY_PATH"
+    chmod 600 "$KEY_PATH"
+    if SPARKLE_FEED_URL_VALUE="http://updates.example.com/appcast.xml" \
+        run_preflight >"$WORK_DIR/stdout" 2>"$WORK_DIR/stderr"; then
+        fail "invalid configuration with existing output was accepted"
+    fi
+    [[ "$(cat "$WORK_DIR/stderr")" == "Error: Sparkle release configuration is invalid" ]] \
+        || fail "invalid configuration with existing output did not use the generic redacted error"
+    if grep -Fq "$(cat "$WORK_DIR/private-secret.txt")" "$WORK_DIR/stdout" "$WORK_DIR/stderr"; then
+        fail "invalid configuration with existing output leaked private key material"
+    fi
+    [[ "$(cat "$KEY_PATH")" == "existing-key" ]] \
+        || fail "preflight failure changed an existing output key"
+}
+
+test_symlink_output_is_rejected() {
+    local outside_key="$WORK_DIR/outside-key"
+
+    rm -f "$KEY_PATH"
+    printf 'outside-key\n' > "$outside_key"
+    ln -s "$outside_key" "$KEY_PATH"
+    if run_preflight >"$WORK_DIR/stdout" 2>"$WORK_DIR/stderr"; then
+        fail "symlinked private-key output was accepted"
+    fi
+    [[ -L "$KEY_PATH" ]] || fail "preflight replaced the symlinked output"
+    [[ "$(cat "$outside_key")" == "outside-key" ]] \
+        || fail "preflight changed the symlink target"
+    rm -f "$KEY_PATH"
+}
+
 test_workflow_runs_preflight_before_signing() {
     local workflow="$PROJECT_DIR/.github/workflows/release-package.yml"
+    local validation_line
     local preflight_line
     local certificate_line
 
+    validation_line="$(grep -n 'name: Validate immutable release tag' "$workflow" | cut -d: -f1)"
     preflight_line="$(grep -n 'name: Preflight Sparkle release trust' "$workflow" | cut -d: -f1)"
     certificate_line="$(grep -n 'name: Import Developer ID certificate' "$workflow" | cut -d: -f1)"
-    [[ -n "$preflight_line" && -n "$certificate_line" && "$preflight_line" -lt "$certificate_line" ]] \
-        || fail "workflow does not run Sparkle preflight before certificate import"
-    grep -Fq 'rm -f "$RUNNER_TEMP/sparkle_private_ed_key"' "$workflow" \
+    [[ -n "$validation_line" && -n "$preflight_line" && -n "$certificate_line" ]] \
+        || fail "workflow trust steps are missing"
+    [[ "$validation_line" -lt "$preflight_line" && "$preflight_line" -lt "$certificate_line" ]] \
+        || fail "workflow does not validate the release tag before secret-bearing steps"
+    grep -Fq "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" "$workflow" \
+        || fail "release job is not restricted to workflow dispatch from main"
+    grep -Fq 'environment: release' "$workflow" \
+        || fail "release job does not use the protected release environment"
+    grep -Fq 'ref: ${{ github.sha }}' "$workflow" \
+        || fail "workflow does not check out trusted main before validation"
+    grep -Fq 'ref: ${{ steps.validate_release.outputs.release_commit }}' "$workflow" \
+        || fail "workflow does not check out the immutable validated commit"
+    grep -Fq 'git merge-base --is-ancestor "$release_commit" refs/remotes/origin/main' "$workflow" \
+        || fail "workflow does not require the tag commit to be on main"
+    grep -Fq '"$RUNNER_TEMP/sparkle_private_ed_key"' "$workflow" \
         || fail "workflow does not clean up the Sparkle private key"
 }
 
@@ -123,6 +169,8 @@ main() {
     test_invalid_public_keys
     test_invalid_private_keys
     test_public_private_mismatch
+    test_existing_output_survives_failure
+    test_symlink_output_is_rejected
     test_workflow_runs_preflight_before_signing
     printf 'Sparkle release preflight tests passed\n'
 }

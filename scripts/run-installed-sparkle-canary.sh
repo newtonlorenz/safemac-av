@@ -17,6 +17,7 @@ ALLOW_MAJOR_UPGRADES="${SAFEMAC_CANARY_ALLOW_MAJOR_UPGRADES:-0}"
 EXPECTED_BUNDLE_ID="${SAFEMAC_CANARY_BUNDLE_ID:-com.newtonlorenz.ClamAV-GUI}"
 EXPECTED_TEAM_ID="CQPH8YR62A"
 ALLOW_UNSIGNED_TEST_FIXTURE="${SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE:-0}"
+TEST_ONLY_FIXTURE_ROOT="${SAFEMAC_CANARY_TEST_ONLY_FIXTURE_ROOT:-}"
 USER_AGENT="${SAFEMAC_CANARY_USER_AGENT:-SafeMac AV Sparkle canary}"
 
 WORK_DIR=""
@@ -116,20 +117,62 @@ verify_app_policy() {
 
 is_explicit_test_fixture() {
     local app_path="$1"
-    local app_parent
-    local temp_root
+    local app_real_path
+    local candidate_root
+    local fixture_root
+    local marker_path
+    local system_temp_root
 
     [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]] || return 1
-    app_parent="$(cd "$(dirname "$app_path")" && pwd -P)"
-    temp_root="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-    [[ "$app_parent/" == "$temp_root/"* ]] \
-        || fail "unsigned fixture override is restricted to the temporary test directory"
+    if [[ -n "$WORK_DIR" && -n "$CANARY_APP_PATH" && "$app_path" == "$CANARY_APP_PATH" ]]; then
+        candidate_root="$WORK_DIR"
+    else
+        [[ -n "$TEST_ONLY_FIXTURE_ROOT" ]] \
+            || fail "unsigned fixture override requires an explicit fixture root"
+        candidate_root="$TEST_ONLY_FIXTURE_ROOT"
+    fi
+    [[ -d "$candidate_root" && ! -L "$candidate_root" ]] \
+        || fail "unsigned fixture override requires a physical fixture root"
+    fixture_root="$(cd "$candidate_root" && pwd -P)"
+    system_temp_root="$(cd "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" && pwd -P)"
+    [[ "$fixture_root/" == "$system_temp_root/"* ]] \
+        || fail "unsigned fixture override root is outside the system temporary directory"
+    case "$(basename "$fixture_root")" in
+        safemac-run-sparkle-canary-test.*|safemac-installed-sparkle-canary.*|safemac-sparkle-canary.*) ;;
+        *) fail "unsigned fixture override root has an unexpected name" ;;
+    esac
+    [[ "$(/usr/bin/stat -f '%u' "$fixture_root")" == "$(/usr/bin/id -u)" ]] \
+        || fail "unsigned fixture override root has the wrong owner"
+    [[ "$(/usr/bin/stat -f '%Lp' "$fixture_root")" == "700" ]] \
+        || fail "unsigned fixture override root must use mode 0700"
+    marker_path="$fixture_root/.safemac-canary-unsigned-fixture"
+    [[ -f "$marker_path" && ! -L "$marker_path" ]] \
+        || fail "unsigned fixture override requires a validated fixture root"
+    [[ "$(/usr/bin/stat -f '%u' "$marker_path")" == "$(/usr/bin/id -u)" ]] \
+        || fail "unsigned fixture marker has the wrong owner"
+    [[ "$(/usr/bin/stat -f '%Lp' "$marker_path")" == "600" ]] \
+        || fail "unsigned fixture marker must use mode 0600"
+    [[ "$(< "$marker_path")" == "SafeMac canary unsigned fixture" ]] \
+        || fail "unsigned fixture marker is invalid"
+    [[ -d "$app_path" && ! -L "$app_path" ]] \
+        || fail "unsigned fixture app must be a physical directory"
+    app_real_path="$(cd "$app_path" && pwd -P)"
+    [[ "$app_real_path/" == "$fixture_root/"* ]] \
+        || fail "unsigned fixture override is restricted to the validated fixture root"
 }
 
 copy_canary_app() {
     local parent_dir
+    local temp_root="${TMPDIR:-/tmp}"
 
-    WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-sparkle-canary.XXXXXX")"
+    if [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]]; then
+        temp_root="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)"
+    fi
+    WORK_DIR="$(mktemp -d "$temp_root/safemac-sparkle-canary.XXXXXX")"
+    if [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]]; then
+        printf 'SafeMac canary unsigned fixture\n' > "$WORK_DIR/.safemac-canary-unsigned-fixture"
+        chmod 600 "$WORK_DIR/.safemac-canary-unsigned-fixture"
+    fi
     parent_dir="$WORK_DIR/Applications"
     CANARY_APP_PATH="$parent_dir/$(basename "$APP_PATH")"
     mkdir -p "$parent_dir"
