@@ -193,6 +193,21 @@ SPARKLE_DOWNLOAD_URL_PREFIX='https://example.com/downloads/' \
   ./scripts/generate-appcast.sh build/appcast
 ```
 
+Before replacing the currently installed app, verify that the signed appcast advertises exactly one newer update to that installed build:
+
+```bash
+./scripts/verify-installed-sparkle-canary.sh "/Applications/SafeMac AV.app" build/appcast/appcast.xml build/SafeMac-AV.dmg
+```
+
+After publishing the appcast and DMG, run the installed-app Sparkle canary against a temporary copy of the installed app. The canary requires Sparkle 2's `sparkle-cli`; it does not mutate the source app bundle:
+
+```bash
+SAFEMAC_CANARY_EXPECT_UPDATE=1 \
+SAFEMAC_CANARY_INSTALL=1 \
+SPARKLE_CLI='/path/to/sparkle.app/Contents/MacOS/sparkle' \
+  ./scripts/run-installed-sparkle-canary.sh
+```
+
 Release publication remains a separate, explicit step after downloading and verifying the workflow artifacts.
 See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) for the full release gate.
 
