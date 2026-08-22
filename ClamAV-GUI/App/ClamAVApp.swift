@@ -79,6 +79,7 @@ struct ClamAVApp: App {
     @NSApplicationDelegateAdaptor(MenuBarApplicationDelegate.self) private var applicationDelegate
     @StateObject private var appState: AppState
     @StateObject private var menuBarManager: MenuBarManager
+    @StateObject private var softwareUpdateManager: SoftwareUpdateManager
     @State private var presentsMenuBarExtra: Bool
 
     init() {
@@ -92,6 +93,7 @@ struct ClamAVApp: App {
         let menuBarManager = MenuBarManager()
         _appState = StateObject(wrappedValue: appState)
         _menuBarManager = StateObject(wrappedValue: menuBarManager)
+        _softwareUpdateManager = StateObject(wrappedValue: SoftwareUpdateManager())
         let isAutomatedTestLaunch = arguments.contains("--ui-testing")
             || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         let bundleURL = Bundle.main.bundleURL
@@ -148,6 +150,7 @@ struct ClamAVApp: App {
         MenuBarExtra(isInserted: $presentsMenuBarExtra) {
             MenuBarPopoverView()
                 .environmentObject(appState)
+                .environmentObject(softwareUpdateManager)
                 .preferredColorScheme(Self.uiTestColorScheme(arguments: CommandLine.arguments))
         } label: {
             Image(systemName: menuBarIcon)
@@ -156,6 +159,7 @@ struct ClamAVApp: App {
         }
         .menuBarExtraStyle(.window)
         .commands {
+            AppUpdateCommands(updater: softwareUpdateManager)
             ScanCommands()
         }
     }
@@ -200,6 +204,23 @@ struct ScanCommands: Commands {
                 NotificationCenter.default.post(name: .updateSignatures, object: nil)
             }
             .keyboardShortcut("U", modifiers: [.command, .shift])
+        }
+    }
+}
+
+struct AppUpdateCommands: Commands {
+    @ObservedObject var updater: SoftwareUpdateManager
+
+    var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates...") {
+                updater.checkForUpdates()
+            }
+            .disabled(!updater.canCheckForUpdates)
+
+            if !updater.isConfigured {
+                Text("App update feed not configured")
+            }
         }
     }
 }

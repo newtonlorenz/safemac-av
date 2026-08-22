@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 struct MenuBarPopoverView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var softwareUpdateManager: SoftwareUpdateManager
 
     private let showMainWindowAction: @MainActor (NavigationTab?) -> Void
     private let quitAction: @MainActor () -> Void
@@ -65,6 +66,16 @@ struct MenuBarPopoverView: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("menu-bar-open-settings")
+
+            Button {
+                softwareUpdateManager.checkForUpdates()
+            } label: {
+                Label("Check for App Updates", systemImage: "sparkles")
+            }
+            .buttonStyle(.plain)
+            .disabled(!softwareUpdateManager.canCheckForUpdates)
+            .accessibilityIdentifier("menu-bar-check-for-app-updates")
+            .accessibilityLabel(updateAccessibilityLabel)
 
             Divider()
 
@@ -177,6 +188,12 @@ struct MenuBarPopoverView: View {
         if appState.protectionScore.score >= 80 { return .green }
         if appState.protectionScore.score >= 50 { return .orange }
         return .red
+    }
+
+    private var updateAccessibilityLabel: String {
+        softwareUpdateManager.isConfigured
+            ? "Check for SafeMac AV app updates"
+            : "App updates are not configured"
     }
 
     private func showMainWindow(tab: NavigationTab?) {
