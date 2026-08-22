@@ -199,7 +199,9 @@ verify_build_products_unregistered() {
     local actual="$WORK_DIR/actual-unregister-targets.txt"
 
     printf '%s\n' \
+        "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
         "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app" \
+        "$PROJECT_DIR/build/export/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
         "$PROJECT_DIR/build/export/SafeMac AV.app" \
         | sort > "$expected"
     sort "$LSREGISTER_LOG" > "$actual"
