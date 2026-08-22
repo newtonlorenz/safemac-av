@@ -98,6 +98,7 @@ verify_app_bundle() {
     local executable_path
     local executable_name
     local archs
+    local app_team_id
 
     resolve_app_path
     executable_name="$(bundle_value CFBundleExecutable)"
@@ -113,8 +114,51 @@ verify_app_bundle() {
     contains_arch "$archs" x86_64 || fail "app executable is missing x86_64 slice: $archs"
 
     codesign --verify --strict --verbose=2 "$mounted_app_path"
+    xcrun stapler validate "$mounted_app_path"
     spctl --assess --type execute --verbose "$mounted_app_path"
-    info "mounted app signature, Gatekeeper assessment, and universal architectures: $archs"
+    app_team_id="$(code_signature_field "$mounted_app_path" TeamIdentifier)"
+    [[ -n "$app_team_id" ]] || fail "mounted app is missing a TeamIdentifier"
+    verify_nested_code_signatures "$app_team_id"
+    info "mounted app signature, stapled ticket, Gatekeeper assessment, and universal architectures: $archs"
+}
+
+code_signature_field() {
+    local path="$1"
+    local key="$2"
+
+    codesign -dv --verbose=4 "$path" 2>&1 \
+        | awk -F= -v key="$key" '$1 == key { print $2; exit }'
+}
+
+verify_one_nested_code_signature() {
+    local path="$1"
+    local expected_team_id="$2"
+    local signature
+    local team_id
+
+    codesign --verify --strict --verbose=2 "$path"
+    signature="$(code_signature_field "$path" Signature)"
+    team_id="$(code_signature_field "$path" TeamIdentifier)"
+
+    [[ "$signature" != "adhoc" ]] || fail "nested code is ad-hoc signed: $path"
+    [[ -n "$team_id" ]] || fail "nested code is missing a TeamIdentifier: $path"
+    [[ "$team_id" == "$expected_team_id" ]] \
+        || fail "nested code TeamIdentifier $team_id does not match app TeamIdentifier $expected_team_id: $path"
+}
+
+verify_nested_code_signatures() {
+    local expected_team_id="$1"
+    local nested_path
+
+    if [[ ! -d "$mounted_app_path/Contents/Frameworks" && ! -d "$mounted_app_path/Contents/PlugIns" ]]; then
+        return
+    fi
+
+    while IFS= read -r -d '' nested_path; do
+        verify_one_nested_code_signature "$nested_path" "$expected_team_id"
+    done < <(find "$mounted_app_path/Contents/Frameworks" "$mounted_app_path/Contents/PlugIns" \
+        \( -type d \( -name '*.framework' -o -name '*.app' -o -name '*.appex' -o -name '*.xpc' \) \
+        -o -type f \( -name Autoupdate -perm -111 \) \) -print0 2>/dev/null)
 }
 
 verify_appcast() {
