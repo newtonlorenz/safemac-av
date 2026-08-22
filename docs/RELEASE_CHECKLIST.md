@@ -54,15 +54,7 @@ shasum -a 256 -c SHA256SUMS.txt
 - [ ] Verify notarization on a Mac:
 
 ```bash
-codesign --verify --strict --verbose=2 SafeMac-AV.dmg
-xcrun stapler validate SafeMac-AV.dmg
-spctl --assess --type open --verbose SafeMac-AV.dmg
-```
-
-- [ ] Mount the DMG and verify the app executable contains both `arm64` and `x86_64` slices:
-
-```bash
-lipo -archs "/Volumes/SafeMac AV/SafeMac AV.app/Contents/MacOS/SafeMac AV"
+./scripts/verify-release-package.sh build
 ```
 
 - [ ] Copy `SafeMac AV.app` to `/Applications`, launch it, and confirm the main window and menu-bar item open.

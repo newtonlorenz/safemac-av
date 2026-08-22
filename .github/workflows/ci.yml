@@ -25,6 +25,9 @@ jobs:
       - name: Show toolchain
         run: xcodebuild -version
 
+      - name: Run release verifier script tests
+        run: ./scripts/test-verify-release-package.sh
+
       - name: Run unit and integration tests
         run: |
           set -o pipefail
