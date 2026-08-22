@@ -44,6 +44,7 @@
 		BA9000010000000000000003 /* BackgroundHelperSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA9000020000000000000001 /* BackgroundHelperSupport.swift */; };
 		BA9000010000000000000004 /* SafeMacAVBackground.app in Embed Login Items */ = {isa = PBXBuildFile; fileRef = BA9000020000000000000005 /* SafeMacAVBackground.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		BA9000010000000000000005 /* BackgroundHelperLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA9000020000000000000006 /* BackgroundHelperLifecycle.swift */; };
+		BA9000010000000000000006 /* BackgroundHelperSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA9000020000000000000007 /* BackgroundHelperSettings.swift */; };
 		BAA010010000000000000001 /* BackgroundHelperCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAA020020000000000000001 /* BackgroundHelperCoordinatorTests.swift */; };
 		A1000001200000000000009 /* FileWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000009 /* FileWatcher.swift */; };
 		A1000001200000000000010 /* ScanModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000010 /* ScanModels.swift */; };
@@ -161,6 +162,7 @@
 		BA9000020000000000000004 /* SafeMacAVBackground.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SafeMacAVBackground.entitlements; sourceTree = "<group>"; };
 		BA9000020000000000000005 /* SafeMacAVBackground.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SafeMacAVBackground.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA9000020000000000000006 /* BackgroundHelperLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundHelperLifecycle.swift; sourceTree = "<group>"; };
+		BA9000020000000000000007 /* BackgroundHelperSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundHelperSettings.swift; sourceTree = "<group>"; };
 		BAA020020000000000000001 /* BackgroundHelperCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundHelperCoordinatorTests.swift; sourceTree = "<group>"; };
 		BAA020030000000000000001 /* SafeMacAVBackgroundTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SafeMacAVBackgroundTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C0DE00022000000000000079 /* SoftwareUpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareUpdateManager.swift; sourceTree = "<group>"; };
@@ -515,6 +517,7 @@
 			children = (
 				BA9000020000000000000002 /* SafeMacAVBackgroundApp.swift */,
 				BA9000020000000000000006 /* BackgroundHelperLifecycle.swift */,
+				BA9000020000000000000007 /* BackgroundHelperSettings.swift */,
 				BA9000020000000000000003 /* Info.plist */,
 				BA9000020000000000000004 /* SafeMacAVBackground.entitlements */,
 			);
@@ -848,6 +851,7 @@
 				BA9000010000000000000002 /* SafeMacAVBackgroundApp.swift in Sources */,
 				BA9000010000000000000003 /* BackgroundHelperSupport.swift in Sources */,
 				BA9000010000000000000005 /* BackgroundHelperLifecycle.swift in Sources */,
+				BA9000010000000000000006 /* BackgroundHelperSettings.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
