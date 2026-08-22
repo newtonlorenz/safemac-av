@@ -182,7 +182,15 @@ if [[ " $* " == *" -dv "* ]]; then
     fi
 fi
 if [[ " $* " == *" --entitlements :- "* && "$target" != "${MISSING_AUTOUPDATE_ENTITLEMENT_PATH:-}" ]]; then
-    printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
+    if [[ "$target" == */SafeMacAVBackground.app ]]; then
+        if [[ "${BACKGROUND_HELPER_ENTITLEMENT_MODE:-valid}" == "valid" ]]; then
+            printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><false/></dict></plist>"
+        else
+            printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>unexpected</string></array></dict></plist>"
+        fi
+    else
+        printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
+    fi
 fi
 if [[ " $* " == *" --entitlements - --xml "* ]]; then
     if [[ "$target" == */SafeMac\ AV.app ]]; then
@@ -672,6 +680,13 @@ run_background_helper_presence_and_policy_failure_cases() {
         fail "release verifier accepted a foreground-capable background helper"
     fi
     /usr/libexec/PlistBuddy -c 'Set :LSUIElement true' "$helper/Contents/Info.plist"
+
+    if PATH="$WORK_DIR/bin:$PATH" \
+       BACKGROUND_HELPER_ENTITLEMENT_MODE=invalid \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted invalid background helper entitlements"
+    fi
 }
 
 run_nested_signature_policy_failure_cases() {
