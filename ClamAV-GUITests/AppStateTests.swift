@@ -650,6 +650,35 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(try store.drainRequests().isEmpty)
     }
 
+    func testFinderAcknowledgementFailurePreventsReplayAfterAdmission() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let fileManager = AppStateFailingRemoveFileManager()
+        let store = ExternalScanRequestStore(baseURL: tempDirectory, fileManager: fileManager)
+        let request = try store.enqueue(
+            paths: ["/tmp/finder-replay"],
+            source: ExternalScanRequestStore.finderSource
+        )
+        fileManager.failsRemoveItem = true
+        let runner = AppStateControlledRunner()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            externalScanRequestStore: store,
+            startsInteractiveBackgroundServices: false
+        )
+
+        let admittedCount = await appState.drainExternalScanRequest(id: request.id)
+
+        XCTAssertEqual(admittedCount, 0)
+        XCTAssertTrue(runner.scanPaths.isEmpty)
+        XCTAssertEqual(appState.scanError, "Finder scan request storage is invalid.")
+        XCTAssertEqual(try store.loadRequest(id: request.id).map(\.id), [request.id])
+    }
+
     func testRequestNotificationPermissionPublishesManagerState() async {
         let notifications = AppStateMockNotificationManager()
         notifications.permissionStatus = .notDetermined
@@ -910,6 +939,17 @@ private enum AppStateTestError: LocalizedError {
         case .settingsFailure:
             return "The settings file could not be written."
         }
+    }
+}
+
+private final class AppStateFailingRemoveFileManager: FileManager {
+    var failsRemoveItem = false
+
+    override func removeItem(at URL: URL) throws {
+        if failsRemoveItem {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        try super.removeItem(at: URL)
     }
 }
 

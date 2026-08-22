@@ -117,6 +117,23 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         }
     }
 
+    func testLoadRequestsCapsWorkToQueueBound() throws {
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+
+        for index in 0..<30 {
+            try writeRequest(
+                ExternalScanRequest(
+                    id: UUID(),
+                    createdAt: Date().addingTimeInterval(TimeInterval(index)),
+                    paths: ["/tmp/\(index)"],
+                    source: ExternalScanRequestStore.finderSource
+                )
+            )
+        }
+
+        XCTAssertLessThanOrEqual(try store.loadRequests().count, 25)
+    }
+
     func testDrainRejectsTamperedRequestWithRelativePath() throws {
         let store = ExternalScanRequestStore(baseURL: tempDirectory)
         try writeRequest(

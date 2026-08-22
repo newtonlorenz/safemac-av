@@ -93,7 +93,7 @@ final class ExternalScanRequestStore {
         guard fileManager.fileExists(atPath: queueURL.path) else { return [] }
         try validateQueueDirectory(at: queueURL)
 
-        let files = try queuedRequestFiles(at: queueURL)
+        let files = Array(try queuedRequestFiles(at: queueURL).prefix(Self.maxQueuedRequests))
         return try load(files: files)
     }
 

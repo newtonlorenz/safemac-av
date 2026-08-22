@@ -174,7 +174,7 @@ final class AppState: ObservableObject {
         scanType: ScanType = .custom,
         source: ScanSource = .custom,
         jobID: UUID? = nil,
-        onAdmitted: (() async -> Void)? = nil
+        onAdmitted: (() async throws -> Void)? = nil
     ) async -> ScanOutcome {
         guard !paths.isEmpty else {
             scanError = "No scan paths selected."
@@ -587,6 +587,7 @@ final class AppState: ObservableObject {
                         didAcknowledge = true
                     } catch {
                         self.addLog(.error, "SafeMac AV could not acknowledge a Finder scan request.")
+                        throw ExternalScanRequestStoreError.invalidRequestFile
                     }
                 }
 
