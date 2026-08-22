@@ -123,15 +123,7 @@ jobs:
             ./scripts/generate-appcast.sh build/appcast
 
       - name: Verify distribution artifacts
-        run: |
-          set -Eeuo pipefail
-
-          test -f build/SafeMac-AV.dmg
-          test -f build/SHA256SUMS.txt
-          (cd build && shasum -a 256 -c SHA256SUMS.txt)
-          codesign --verify --strict --verbose=2 build/SafeMac-AV.dmg
-          xcrun stapler validate build/SafeMac-AV.dmg
-          spctl --assess --type open --verbose build/SafeMac-AV.dmg
+        run: ./scripts/verify-release-package.sh build
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
