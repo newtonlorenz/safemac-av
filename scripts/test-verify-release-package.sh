@@ -109,6 +109,9 @@ if [[ " $* " == *" -dv "* ]]; then
             "$flags" >&2
     fi
 fi
+if [[ " $* " == *" --entitlements :- "* && "$target" != "${MISSING_AUTOUPDATE_ENTITLEMENT_PATH:-}" ]]; then
+    printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
+fi
 exit 0'
     write_fake_tool spctl 'exit 0'
     write_fake_tool xcrun '[[ "${1:-}" == "stapler" && "${2:-}" == "validate" ]] || exit 2'
@@ -198,6 +201,17 @@ run_nested_signature_policy_failure_cases() {
     done
 }
 
+run_missing_autoupdate_entitlement_case() {
+    local component="$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+
+    if PATH="$WORK_DIR/bin:$PATH" \
+       MISSING_AUTOUPDATE_ENTITLEMENT_PATH="$component" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "missing Sparkle Autoupdate entitlement was accepted"
+    fi
+}
+
 main() {
     make_fixture
     make_fake_tools
@@ -206,6 +220,7 @@ main() {
     run_nested_adhoc_failure_cases
     run_nested_arch_failure_case
     run_nested_signature_policy_failure_cases
+    run_missing_autoupdate_entitlement_case
     run_appcast_failure_case
     printf 'verify-release-package tests passed\n'
 }

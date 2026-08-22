@@ -242,6 +242,18 @@ verify_distribution_code() {
         || fail "Executable is missing x86_64 slice: $executable_path ($archs)"
 }
 
+verify_sparkle_autoupdate_entitlement() {
+    local autoupdate_path="$1"
+    local entitlements
+
+    entitlements="$(codesign -d --entitlements :- "$autoupdate_path" 2>/dev/null)" \
+        || fail "Unable to inspect Sparkle Autoupdate entitlements."
+    grep -Fq '<key>com.apple.application-identifier</key>' <<< "$entitlements" \
+        || fail "Sparkle Autoupdate application identifier entitlement is missing."
+    grep -Fq '<string>org.sparkle-project.Sparkle.Autoupdate</string>' <<< "$entitlements" \
+        || fail "Sparkle Autoupdate application identifier entitlement changed unexpectedly."
+}
+
 verify_signed_app_components() {
     local app_executable="$APP_PATH/Contents/MacOS/$PROJECT_NAME"
     local app_details
@@ -285,6 +297,7 @@ verify_signed_app_components() {
                 "$version_dir/Autoupdate" \
                 "$version_dir/Autoupdate" \
                 "$expected_team_id"
+            verify_sparkle_autoupdate_entitlement "$version_dir/Autoupdate"
             verify_distribution_code \
                 "$framework_path" \
                 "$version_dir/Sparkle" \

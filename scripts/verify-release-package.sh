@@ -99,6 +99,18 @@ verify_distribution_code() {
         || fail "nested executable is missing x86_64 slice: $executable_path ($archs)"
 }
 
+verify_sparkle_autoupdate_entitlement() {
+    local autoupdate_path="$1"
+    local entitlements
+
+    entitlements="$(codesign -d --entitlements :- "$autoupdate_path" 2>/dev/null)" \
+        || fail "unable to inspect Sparkle Autoupdate entitlements"
+    grep -Fq '<key>com.apple.application-identifier</key>' <<< "$entitlements" \
+        || fail "Sparkle Autoupdate application identifier entitlement is missing"
+    grep -Fq '<string>org.sparkle-project.Sparkle.Autoupdate</string>' <<< "$entitlements" \
+        || fail "Sparkle Autoupdate application identifier entitlement changed unexpectedly"
+}
+
 mounted_app_path=""
 mount_point=""
 
@@ -205,6 +217,7 @@ verify_app_bundle() {
         "$sparkle_version/Autoupdate" \
         "$sparkle_version/Autoupdate" \
         "$expected_team_id"
+    verify_sparkle_autoupdate_entitlement "$sparkle_version/Autoupdate"
     verify_distribution_code \
         "$sparkle_framework" \
         "$sparkle_version/Sparkle" \
