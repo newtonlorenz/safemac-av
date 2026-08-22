@@ -5,8 +5,8 @@ import XCTest
 
 @MainActor
 final class MenuBarManagerTests: XCTestCase {
-    func testApplicationBundleStartsAsUIElement() {
-        XCTAssertEqual(
+    func testApplicationBundleStartsAsForegroundApplication() {
+        XCTAssertNotEqual(
             Bundle(for: MenuBarApplicationDelegate.self)
                 .object(forInfoDictionaryKey: "LSUIElement") as? Bool,
             true
