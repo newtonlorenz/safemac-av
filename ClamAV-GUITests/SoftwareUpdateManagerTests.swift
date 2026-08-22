@@ -3,6 +3,8 @@ import XCTest
 
 @MainActor
 final class SoftwareUpdateManagerTests: XCTestCase {
+    private let validPublicKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
     func testRejectsMissingSparkleConfiguration() {
         XCTAssertFalse(SoftwareUpdateManager.hasRequiredSparkleConfiguration(feedURLString: nil, publicKey: nil))
         XCTAssertFalse(SoftwareUpdateManager.hasRequiredSparkleConfiguration(feedURLString: "https://example.com/appcast.xml", publicKey: ""))
@@ -21,13 +23,28 @@ final class SoftwareUpdateManagerTests: XCTestCase {
         XCTAssertFalse(
             SoftwareUpdateManager.hasRequiredSparkleConfiguration(
                 feedURLString: "http://example.com/appcast.xml",
-                publicKey: "public-key"
+                publicKey: validPublicKey
             )
         )
         XCTAssertFalse(
             SoftwareUpdateManager.hasRequiredSparkleConfiguration(
                 feedURLString: "not a url",
+                publicKey: validPublicKey
+            )
+        )
+    }
+
+    func testRequiresValidPublicEdDSAKey() {
+        XCTAssertFalse(
+            SoftwareUpdateManager.hasRequiredSparkleConfiguration(
+                feedURLString: "https://example.com/appcast.xml",
                 publicKey: "public-key"
+            )
+        )
+        XCTAssertFalse(
+            SoftwareUpdateManager.hasRequiredSparkleConfiguration(
+                feedURLString: "https://example.com/appcast.xml",
+                publicKey: "c2hvcnQ="
             )
         )
     }
@@ -36,7 +53,7 @@ final class SoftwareUpdateManagerTests: XCTestCase {
         XCTAssertFalse(
             SoftwareUpdateManager.hasRequiredSparkleConfiguration(
                 feedURLString: "https://example.com/appcast.xml",
-                publicKey: "public-key",
+                publicKey: validPublicKey,
                 requiresSignedFeed: false,
                 verifiesUpdateBeforeExtraction: true
             )
@@ -44,7 +61,7 @@ final class SoftwareUpdateManagerTests: XCTestCase {
         XCTAssertFalse(
             SoftwareUpdateManager.hasRequiredSparkleConfiguration(
                 feedURLString: "https://example.com/appcast.xml",
-                publicKey: "public-key",
+                publicKey: validPublicKey,
                 requiresSignedFeed: true,
                 verifiesUpdateBeforeExtraction: false
             )
@@ -55,7 +72,7 @@ final class SoftwareUpdateManagerTests: XCTestCase {
         XCTAssertTrue(
             SoftwareUpdateManager.hasRequiredSparkleConfiguration(
                 feedURLString: "https://example.com/appcast.xml",
-                publicKey: "public-key"
+                publicKey: validPublicKey
             )
         )
     }

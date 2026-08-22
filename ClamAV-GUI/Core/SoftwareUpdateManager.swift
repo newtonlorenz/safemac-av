@@ -72,7 +72,17 @@ final class SoftwareUpdateManager: ObservableObject {
 
         return !feedURLString.contains("$(")
             && !publicKey.contains("$(")
-            && !publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && isValidSparklePublicKey(publicKey)
+    }
+
+    nonisolated private static func isValidSparklePublicKey(_ publicKey: String) -> Bool {
+        let trimmedPublicKey = publicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPublicKey.isEmpty,
+              let decodedPublicKey = Data(base64Encoded: trimmedPublicKey) else {
+            return false
+        }
+
+        return decodedPublicKey.count == 32
     }
 
     nonisolated private static func defaultIsAutomatedTest() -> Bool {
