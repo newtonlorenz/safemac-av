@@ -8,6 +8,8 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+CLEAN_BUILD_REGISTRATIONS_SCRIPT="$SCRIPT_DIR/clean-build-registrations.sh"
 PACKAGE_DIR="${1:-build}"
 DMG_NAME="${DMG_NAME:-SafeMac-AV.dmg}"
 VOLUME_APP_NAME="${VOLUME_APP_NAME:-SafeMac AV.app}"
@@ -123,14 +125,26 @@ sparkle_feed_url=""
 sparkle_public_ed_key=""
 
 cleanup() {
+    local status=$?
+
+    trap - EXIT
+    set +e
     if [[ -n "$entitlements_dir" && -d "$entitlements_dir" ]]; then
         rm -f "$entitlements_dir/app.plist" "$entitlements_dir/finder.plist"
         rmdir "$entitlements_dir" >/dev/null 2>&1 || true
     fi
     if [[ -n "$mount_point" && -d "$mount_point" ]]; then
+        if [[ -x "$CLEAN_BUILD_REGISTRATIONS_SCRIPT" ]]; then
+            "$CLEAN_BUILD_REGISTRATIONS_SCRIPT" "$mount_point" \
+                || printf 'Warning: could not unregister apps below temporary mount %s\n' "$mount_point" >&2
+        else
+            printf 'Warning: registration cleanup script is unavailable: %s\n' \
+                "$CLEAN_BUILD_REGISTRATIONS_SCRIPT" >&2
+        fi
         hdiutil detach "$mount_point" -quiet >/dev/null 2>&1 || true
         rmdir "$mount_point" >/dev/null 2>&1 || true
     fi
+    return "$status"
 }
 
 verify_finder_handoff_entitlements() {
@@ -237,7 +251,10 @@ resolve_app_path() {
 
     command_path hdiutil
 
-    mount_point="$(mktemp -d "${TMPDIR:-/tmp}/safemac-release.XXXXXX")"
+    local temporary_root="${TMPDIR:-/tmp}"
+    temporary_root="${temporary_root%/}"
+    mount_point="$(mktemp -d "$temporary_root/safemac-release.XXXXXX")"
+    mount_point="$(cd "$mount_point" && pwd -P)"
     hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$mount_point" >/dev/null
     mounted_app_path="$mount_point/$VOLUME_APP_NAME"
     [[ -d "$mounted_app_path" ]] || fail "mounted app not found: $mounted_app_path"
