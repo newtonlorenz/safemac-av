@@ -117,11 +117,11 @@ struct ClamAVApp: App {
                 .eraseToAnyPublisher()
         )
         let menuBarManager = MenuBarManager()
+        let softwareUpdateManager = SoftwareUpdateManager(startsUpdater: false)
+        let softwareUpdateStartupCoordinator = SoftwareUpdateStartupCoordinator()
         _appState = StateObject(wrappedValue: appState)
         _menuBarManager = StateObject(wrappedValue: menuBarManager)
-        _softwareUpdateManager = StateObject(
-            wrappedValue: SoftwareUpdateManager(startsUpdater: launchMode.startsSoftwareUpdateSubsystem)
-        )
+        _softwareUpdateManager = StateObject(wrappedValue: softwareUpdateManager)
         _menuBarOwnership = StateObject(wrappedValue: menuBarOwnership)
         let bundleURL = Bundle.main.bundleURL
         let preferredColorScheme = Self.uiTestColorScheme(arguments: arguments)
@@ -140,14 +140,26 @@ struct ClamAVApp: App {
                 runInitialApplicationLaunch: { mode in
                     switch mode {
                     case .interactive:
-                        defer { menuBarOwnership.completeInteractiveLaunchAnchor() }
-                        if SignatureScheduleReconciliationPolicy.shouldReconcile(
-                            bundleURL: bundleURL,
-                            isAutomatedTest: isAutomatedTestLaunch
-                        ) {
-                            appState.reconcileSignatureUpdateSchedule()
-                        }
-                        await appState.drainExternalScanRequests()
+                        await softwareUpdateStartupCoordinator.runInitialMaintenance(
+                            launchMode: mode,
+                            settingsProvider: { appState.settings },
+                            isUITesting: arguments.contains("--ui-testing"),
+                            maintenance: {
+                                if SignatureScheduleReconciliationPolicy.shouldReconcile(
+                                    bundleURL: bundleURL,
+                                    isAutomatedTest: isAutomatedTestLaunch
+                                ) {
+                                    appState.reconcileSignatureUpdateSchedule()
+                                }
+                                await appState.drainExternalScanRequests()
+                            },
+                            afterMaintenance: {
+                                menuBarOwnership.completeInteractiveLaunchAnchor()
+                            },
+                            startUpdater: {
+                                softwareUpdateManager.startUpdaterIfPossible()
+                            }
+                        )
                     case .scheduledScan(let jobID, let paths):
                         await appState.runScheduledScan(jobID: jobID, paths: paths)
                     case .scheduledSignatureUpdate:
@@ -251,7 +263,7 @@ struct AppUpdateCommands: Commands {
             Button("Check for Updates...") {
                 updater.checkForUpdates()
             }
-            .disabled(!updater.canCheckForUpdates)
+            .disabled(!updater.isConfigured)
 
             if !updater.isConfigured {
                 Text("App update feed not configured")
