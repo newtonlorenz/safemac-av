@@ -221,6 +221,34 @@ run_archive_signature_failure_case() {
     mv "$WORK_DIR/package/SHA256SUMS.txt.bak" "$WORK_DIR/package/SHA256SUMS.txt"
 }
 
+run_duplicate_matching_enclosure_failure_case() {
+    cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+    swift - "$WORK_DIR/package/appcast/appcast.xml" <<'SWIFT'
+import CryptoKit
+import Foundation
+
+let appcastPath = CommandLine.arguments[1]
+let appcastURL = URL(fileURLWithPath: appcastPath)
+let appcastData = try Data(contentsOf: appcastURL)
+let prefix = Data("<!-- sparkle-signatures:\n".utf8)
+guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]) else { exit(1) }
+guard var content = String(data: appcastData[..<prefixRange.lowerBound], encoding: .utf8) else { exit(1) }
+let duplicate = #"      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="duplicate" />"#
+content = content.replacingOccurrences(of: "    </item>", with: duplicate + "\n    </item>")
+let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
+let signedContent = Data(content.utf8)
+let feedSignature = try privateKey.signature(for: signedContent).base64EncodedString()
+let signedAppcast = "\(content)<!-- sparkle-signatures:\nedSignature: \(feedSignature)\nlength: \(signedContent.count)\n-->\n"
+try signedAppcast.write(to: appcastURL, atomically: true, encoding: .utf8)
+SWIFT
+    if PATH="$WORK_DIR/bin:$PATH" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "duplicate matching appcast enclosure was accepted"
+    fi
+    mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+}
+
 run_nested_adhoc_failure_cases() {
     local app_dir="$WORK_DIR/SafeMac AV.app"
     local sparkle_dir="$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B"
@@ -299,6 +327,7 @@ main() {
     run_missing_appcast_failure_case
     run_feed_signature_failure_case
     run_archive_signature_failure_case
+    run_duplicate_matching_enclosure_failure_case
     printf 'verify-release-package tests passed\n'
 }
 

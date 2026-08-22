@@ -387,12 +387,14 @@ guard let feedSignature = Data(base64Encoded: feedSignatureBase64),
 guard let content = String(data: contentData, encoding: .utf8) else {
     fail("appcast content is not UTF-8")
 }
-guard let enclosure = allMatches(#"<enclosure\b[^>]*>"#, in: content).first(where: {
+let matchingEnclosures = allMatches(#"<enclosure\b[^>]*>"#, in: content).filter {
     $0.contains("sparkle:version=\"\(bundleVersion)\"") &&
     $0.contains("sparkle:shortVersionString=\"\(shortVersion)\"")
-}) else {
-    fail("matching appcast enclosure missing")
 }
+guard matchingEnclosures.count == 1 else {
+    fail("expected exactly one matching appcast enclosure")
+}
+let enclosure = matchingEnclosures[0]
 guard let archiveSignatureBase64 = firstMatch(#"\bsparkle:edSignature="([^"]+)""#, in: enclosure),
       let archiveURLString = firstMatch(#"\burl="([^"]+)""#, in: enclosure),
       let archiveURL = URL(string: archiveURLString),
