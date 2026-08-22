@@ -48,16 +48,25 @@ final class SoftwareUpdateManager: ObservableObject {
     nonisolated static func hasRequiredSparkleConfiguration(bundle: Bundle) -> Bool {
         hasRequiredSparkleConfiguration(
             feedURLString: bundle.object(forInfoDictionaryKey: "SUFeedURL") as? String,
-            publicKey: bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String
+            publicKey: bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
+            requiresSignedFeed: bundle.object(forInfoDictionaryKey: "SURequireSignedFeed") as? Bool,
+            verifiesUpdateBeforeExtraction: bundle.object(forInfoDictionaryKey: "SUVerifyUpdateBeforeExtraction") as? Bool
         )
     }
 
-    nonisolated static func hasRequiredSparkleConfiguration(feedURLString: String?, publicKey: String?) -> Bool {
+    nonisolated static func hasRequiredSparkleConfiguration(
+        feedURLString: String?,
+        publicKey: String?,
+        requiresSignedFeed: Bool? = true,
+        verifiesUpdateBeforeExtraction: Bool? = true
+    ) -> Bool {
         guard let feedURLString,
               let feedURL = URL(string: feedURLString),
               feedURL.scheme == "https",
               feedURL.host?.isEmpty == false,
-              let publicKey else {
+              let publicKey,
+              requiresSignedFeed == true,
+              verifiesUpdateBeforeExtraction == true else {
             return false
         }
 

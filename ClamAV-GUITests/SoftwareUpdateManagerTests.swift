@@ -32,6 +32,25 @@ final class SoftwareUpdateManagerTests: XCTestCase {
         )
     }
 
+    func testRequiresSignedFeedAndPreExtractionVerification() {
+        XCTAssertFalse(
+            SoftwareUpdateManager.hasRequiredSparkleConfiguration(
+                feedURLString: "https://example.com/appcast.xml",
+                publicKey: "public-key",
+                requiresSignedFeed: false,
+                verifiesUpdateBeforeExtraction: true
+            )
+        )
+        XCTAssertFalse(
+            SoftwareUpdateManager.hasRequiredSparkleConfiguration(
+                feedURLString: "https://example.com/appcast.xml",
+                publicKey: "public-key",
+                requiresSignedFeed: true,
+                verifiesUpdateBeforeExtraction: false
+            )
+        )
+    }
+
     func testAcceptsHTTPSFeedURLAndPublicKey() {
         XCTAssertTrue(
             SoftwareUpdateManager.hasRequiredSparkleConfiguration(

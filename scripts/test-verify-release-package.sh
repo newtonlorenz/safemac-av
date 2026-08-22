@@ -56,6 +56,14 @@ make_fixture() {
     <string>3</string>
     <key>CFBundleExecutable</key>
     <string>ClamAV-GUI</string>
+    <key>SUFeedURL</key>
+    <string>https://updates.example.com/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>__SPARKLE_PUBLIC_ED_KEY__</string>
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
 </dict>
 </plist>
 PLIST
@@ -76,16 +84,39 @@ PLIST
         "$sparkle_dir/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
         "$sparkle_dir/XPCServices/Installer.xpc/Contents/MacOS/Installer"
 
-    cat > "$package_dir/appcast/appcast.xml" <<'XML'
+    swift - "$package_dir/SafeMac-AV.dmg" "$package_dir/appcast/appcast.xml" "$app_dir/Contents/Info.plist" "$WORK_DIR/sparkle-public-key.txt" <<'SWIFT'
+import CryptoKit
+import Foundation
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+let dmgPath = arguments[0]
+let appcastPath = arguments[1]
+let infoPlistPath = arguments[2]
+let publicKeyPath = arguments[3]
+
+let seed = Data(repeating: 1, count: 32)
+let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
+let publicKeyBase64 = privateKey.publicKey.rawRepresentation.base64EncodedString()
+let archiveSignature = try privateKey.signature(for: Data(contentsOf: URL(fileURLWithPath: dmgPath))).base64EncodedString()
+let content = """
 <?xml version="1.0" encoding="utf-8"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
     <item>
-      <enclosure url="https://example.com/SafeMac-AV.dmg" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="signed" />
+      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="\(archiveSignature)" />
     </item>
   </channel>
 </rss>
-XML
+"""
+let contentWithTrailingNewline = content + "\n"
+let feedSignature = try privateKey.signature(for: Data(contentWithTrailingNewline.utf8)).base64EncodedString()
+let signedAppcast = "\(contentWithTrailingNewline)<!-- sparkle-signatures:\nedSignature: \(feedSignature)\nlength: \(contentWithTrailingNewline.utf8.count)\n-->\n"
+try signedAppcast.write(to: URL(fileURLWithPath: appcastPath), atomically: true, encoding: .utf8)
+try publicKeyBase64.write(to: URL(fileURLWithPath: publicKeyPath), atomically: true, encoding: .utf8)
+let plist = try String(contentsOfFile: infoPlistPath, encoding: .utf8)
+try plist.replacingOccurrences(of: "__SPARKLE_PUBLIC_ED_KEY__", with: publicKeyBase64)
+    .write(to: URL(fileURLWithPath: infoPlistPath), atomically: true, encoding: .utf8)
+SWIFT
 }
 
 make_fake_tools() {
@@ -129,6 +160,9 @@ fi'
 
 run_success_case() {
     PATH="$WORK_DIR/bin:$PATH" \
+    EXPECTED_SPARKLE_FEED_URL="https://updates.example.com/appcast.xml" \
+    EXPECTED_SPARKLE_PUBLIC_ED_KEY="$(cat "$WORK_DIR/sparkle-public-key.txt")" \
+    EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX="https://downloads.example.com/" \
     SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
         "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null
 }
@@ -150,6 +184,41 @@ run_appcast_failure_case() {
         fail "mismatched appcast version was accepted"
     fi
     perl -0pi -e 's/sparkle:version="4"/sparkle:version="3"/' "$WORK_DIR/package/appcast/appcast.xml"
+}
+
+run_missing_appcast_failure_case() {
+    mv "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+    if PATH="$WORK_DIR/bin:$PATH" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "missing appcast was accepted"
+    fi
+    mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+}
+
+run_feed_signature_failure_case() {
+    cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+    perl -0pi -e 's|<channel>|<channel>\n    <title>Tampered</title>|' "$WORK_DIR/package/appcast/appcast.xml"
+    if PATH="$WORK_DIR/bin:$PATH" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "tampered signed appcast was accepted"
+    fi
+    mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+}
+
+run_archive_signature_failure_case() {
+    cp "$WORK_DIR/package/SafeMac-AV.dmg" "$WORK_DIR/package/SafeMac-AV.dmg.bak"
+    cp "$WORK_DIR/package/SHA256SUMS.txt" "$WORK_DIR/package/SHA256SUMS.txt.bak"
+    printf 'tampered dmg\n' > "$WORK_DIR/package/SafeMac-AV.dmg"
+    (cd "$WORK_DIR/package" && shasum -a 256 SafeMac-AV.dmg > SHA256SUMS.txt)
+    if PATH="$WORK_DIR/bin:$PATH" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "tampered DMG with stale Sparkle signature was accepted"
+    fi
+    mv "$WORK_DIR/package/SafeMac-AV.dmg.bak" "$WORK_DIR/package/SafeMac-AV.dmg"
+    mv "$WORK_DIR/package/SHA256SUMS.txt.bak" "$WORK_DIR/package/SHA256SUMS.txt"
 }
 
 run_nested_adhoc_failure_cases() {
@@ -227,6 +296,9 @@ main() {
     run_nested_signature_policy_failure_cases
     run_missing_autoupdate_entitlement_case
     run_appcast_failure_case
+    run_missing_appcast_failure_case
+    run_feed_signature_failure_case
+    run_archive_signature_failure_case
     printf 'verify-release-package tests passed\n'
 }
 

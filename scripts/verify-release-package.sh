@@ -15,6 +15,9 @@ DMG_PATH="$PACKAGE_DIR/$DMG_NAME"
 CHECKSUM_PATH="$PACKAGE_DIR/SHA256SUMS.txt"
 APPCAST_PATH="${APPCAST_PATH:-$PACKAGE_DIR/appcast/appcast.xml}"
 SAFEMAC_VERIFY_APP_PATH="${SAFEMAC_VERIFY_APP_PATH:-}"
+EXPECTED_SPARKLE_FEED_URL="${EXPECTED_SPARKLE_FEED_URL:-}"
+EXPECTED_SPARKLE_PUBLIC_ED_KEY="${EXPECTED_SPARKLE_PUBLIC_ED_KEY:-}"
+EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX="${EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX:-}"
 
 fail() {
     printf 'Error: %s\n' "$1" >&2
@@ -113,6 +116,8 @@ verify_sparkle_autoupdate_entitlement() {
 
 mounted_app_path=""
 mount_point=""
+sparkle_feed_url=""
+sparkle_public_ed_key=""
 
 cleanup() {
     if [[ -n "$mount_point" && -d "$mount_point" ]]; then
@@ -163,6 +168,58 @@ bundle_value() {
 
     /usr/libexec/PlistBuddy -c "Print :$key" "$info_plist" 2>/dev/null \
         || fail "unable to read $key from $info_plist"
+}
+
+optional_bundle_value() {
+    local key="$1"
+    local info_plist="$mounted_app_path/Contents/Info.plist"
+
+    /usr/libexec/PlistBuddy -c "Print :$key" "$info_plist" 2>/dev/null || true
+}
+
+verify_sparkle_configuration() {
+    local requires_signed_feed
+    local verifies_before_extraction
+
+    command_path swift
+
+    sparkle_feed_url="$(bundle_value SUFeedURL)"
+    sparkle_public_ed_key="$(bundle_value SUPublicEDKey)"
+    requires_signed_feed="$(optional_bundle_value SURequireSignedFeed)"
+    verifies_before_extraction="$(optional_bundle_value SUVerifyUpdateBeforeExtraction)"
+
+    [[ "$sparkle_feed_url" != *'$('* ]] || fail "SUFeedURL contains an unresolved build setting"
+    [[ "$sparkle_public_ed_key" != *'$('* ]] || fail "SUPublicEDKey contains an unresolved build setting"
+    [[ "$requires_signed_feed" == "true" ]] || fail "SURequireSignedFeed must be true"
+    [[ "$verifies_before_extraction" == "true" ]] || fail "SUVerifyUpdateBeforeExtraction must be true"
+
+    if [[ -n "$EXPECTED_SPARKLE_FEED_URL" ]]; then
+        [[ "$sparkle_feed_url" == "$EXPECTED_SPARKLE_FEED_URL" ]] \
+            || fail "SUFeedURL does not match EXPECTED_SPARKLE_FEED_URL"
+    fi
+    if [[ -n "$EXPECTED_SPARKLE_PUBLIC_ED_KEY" ]]; then
+        [[ "$sparkle_public_ed_key" == "$EXPECTED_SPARKLE_PUBLIC_ED_KEY" ]] \
+            || fail "SUPublicEDKey does not match EXPECTED_SPARKLE_PUBLIC_ED_KEY"
+    fi
+
+    if ! swift - "$sparkle_feed_url" "$sparkle_public_ed_key" <<'SWIFT'
+import Foundation
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+guard arguments.count == 2 else { exit(1) }
+guard let components = URLComponents(string: arguments[0]),
+      components.scheme == "https",
+      components.host?.isEmpty == false else {
+    exit(1)
+}
+guard let publicKey = Data(base64Encoded: arguments[1]),
+      publicKey.count == 32 else {
+    exit(1)
+}
+SWIFT
+    then
+        fail "Sparkle feed URL or public EdDSA key is invalid"
+    fi
 }
 
 verify_app_bundle() {
@@ -231,6 +288,8 @@ verify_app_bundle() {
     finder_executable="$finder_extension/Contents/MacOS/ClamAV-GUI-Finder"
     verify_distribution_code "$finder_extension" "$finder_executable" "$expected_team_id"
 
+    verify_sparkle_configuration
+
     codesign --verify --deep --strict --verbose=2 "$mounted_app_path"
     info "mounted app, Finder extension, and nested Sparkle code use Developer ID Team $expected_team_id, hardened runtime, secure timestamps, and universal architectures"
 }
@@ -239,10 +298,7 @@ verify_appcast() {
     local bundle_version
     local short_version
 
-    if [[ ! -f "$APPCAST_PATH" ]]; then
-        printf 'Skipped: appcast not present at %s\n' "$APPCAST_PATH"
-        return
-    fi
+    require_file "$APPCAST_PATH" "Sparkle appcast"
 
     bundle_version="$(bundle_value CFBundleVersion)"
     short_version="$(bundle_value CFBundleShortVersionString)"
@@ -256,7 +312,109 @@ verify_appcast() {
     grep -Fq "sparkle:shortVersionString=\"$short_version\"" "$APPCAST_PATH" \
         || fail "appcast short version does not match CFBundleShortVersionString $short_version"
 
-    info "Sparkle appcast references the DMG and matches app version $short_version ($bundle_version)"
+    if ! swift - "$APPCAST_PATH" "$DMG_PATH" "$sparkle_public_ed_key" "$DMG_NAME" "$bundle_version" "$short_version" "$EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX" <<'SWIFT'
+import CryptoKit
+import Foundation
+
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+    exit(1)
+}
+
+func firstMatch(_ pattern: String, in value: String) -> String? {
+    guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+    let range = NSRange(value.startIndex..<value.endIndex, in: value)
+    guard let match = expression.firstMatch(in: value, range: range),
+          match.numberOfRanges > 1,
+          let swiftRange = Range(match.range(at: 1), in: value) else {
+        return nil
+    }
+    return String(value[swiftRange])
+}
+
+func allMatches(_ pattern: String, in value: String) -> [String] {
+    guard let expression = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
+        return []
+    }
+    let range = NSRange(value.startIndex..<value.endIndex, in: value)
+    return expression.matches(in: value, range: range).compactMap { match in
+        guard let swiftRange = Range(match.range, in: value) else { return nil }
+        return String(value[swiftRange])
+    }
+}
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+guard arguments.count == 7 else { fail("invalid verifier arguments") }
+
+let appcastURL = URL(fileURLWithPath: arguments[0])
+let dmgURL = URL(fileURLWithPath: arguments[1])
+let publicKeyBase64 = arguments[2]
+let dmgName = arguments[3]
+let bundleVersion = arguments[4]
+let shortVersion = arguments[5]
+let expectedDownloadURLPrefix = arguments[6]
+
+let appcastData = try Data(contentsOf: appcastURL)
+guard let publicKeyData = Data(base64Encoded: publicKeyBase64),
+      publicKeyData.count == 32 else {
+    fail("invalid public key")
+}
+let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: publicKeyData)
+
+let prefix = Data("<!-- sparkle-signatures:\n".utf8)
+let suffix = Data("-->".utf8)
+guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]) else {
+    fail("signed-feed block missing")
+}
+let contentData = appcastData[..<prefixRange.lowerBound]
+guard let suffixRange = appcastData.range(of: suffix, in: prefixRange.upperBound..<appcastData.endIndex) else {
+    fail("signed-feed block terminator missing")
+}
+guard let block = String(data: appcastData[prefixRange.upperBound..<suffixRange.lowerBound], encoding: .utf8) else {
+    fail("signed-feed block is not UTF-8")
+}
+guard let feedSignatureBase64 = firstMatch(#"(?m)^edSignature:\s*(\S+)"#, in: block),
+      let signedLengthString = firstMatch(#"(?m)^length:\s*(\d+)"#, in: block),
+      Int(signedLengthString) == contentData.count else {
+    fail("signed-feed metadata invalid")
+}
+guard let feedSignature = Data(base64Encoded: feedSignatureBase64),
+      feedSignature.count == 64,
+      publicKey.isValidSignature(feedSignature, for: contentData) else {
+    fail("signed-feed signature invalid")
+}
+
+guard let content = String(data: contentData, encoding: .utf8) else {
+    fail("appcast content is not UTF-8")
+}
+guard let enclosure = allMatches(#"<enclosure\b[^>]*>"#, in: content).first(where: {
+    $0.contains("sparkle:version=\"\(bundleVersion)\"") &&
+    $0.contains("sparkle:shortVersionString=\"\(shortVersion)\"")
+}) else {
+    fail("matching appcast enclosure missing")
+}
+guard let archiveSignatureBase64 = firstMatch(#"\bsparkle:edSignature="([^"]+)""#, in: enclosure),
+      let archiveURLString = firstMatch(#"\burl="([^"]+)""#, in: enclosure),
+      let archiveURL = URL(string: archiveURLString),
+      archiveURL.scheme == "https",
+      archiveURL.host?.isEmpty == false,
+      archiveURL.lastPathComponent == dmgName else {
+    fail("archive signature or URL invalid")
+}
+if !expectedDownloadURLPrefix.isEmpty && !archiveURLString.hasPrefix(expectedDownloadURLPrefix) {
+    fail("archive URL does not use expected download prefix")
+}
+guard let archiveSignature = Data(base64Encoded: archiveSignatureBase64),
+      archiveSignature.count == 64,
+      publicKey.isValidSignature(archiveSignature, for: try Data(contentsOf: dmgURL)) else {
+    fail("archive signature invalid")
+}
+SWIFT
+    then
+        fail "Sparkle appcast EdDSA verification failed"
+    fi
+
+    info "Sparkle appcast references the DMG, matches app version $short_version ($bundle_version), and verifies with the embedded EdDSA key"
 }
 
 main() {
