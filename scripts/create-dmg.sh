@@ -27,6 +27,8 @@ NOTARY_KEY_ID="${NOTARY_KEY_ID:-}"
 NOTARY_ISSUER_ID="${NOTARY_ISSUER_ID:-}"
 NOTARY_TIMEOUT="${NOTARY_TIMEOUT:-30m}"
 CHECKSUM_PATH="${CHECKSUM_PATH:-$BUILD_DIR/SHA256SUMS.txt}"
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-}"
+SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
 RESOLVED_SIGNING_IDENTITY=""
 
 RED=$'\033[0;31m'
@@ -157,6 +159,8 @@ build_app() {
         CODE_SIGN_IDENTITY="" \
         CODE_SIGNING_REQUIRED=NO \
         CODE_SIGNING_ALLOWED=NO \
+        SPARKLE_FEED_URL="$SPARKLE_FEED_URL" \
+        SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
         | tee "$BUILD_LOG"
 
     [[ -d "$ARCHIVE_PATH" ]] || fail "Archive was not created. See $BUILD_LOG"
@@ -174,15 +178,31 @@ export_app() {
 
 sign_app() {
     local extension_path
+    local framework_path
     local -a extension_paths=()
+    local -a framework_paths=()
 
     print_step "Signing the app with: $SIGNING_IDENTITY"
+
+    if [[ -d "$APP_PATH/Contents/Frameworks" ]]; then
+        shopt -s nullglob
+        framework_paths=("$APP_PATH"/Contents/Frameworks/*.framework)
+        shopt -u nullglob
+    fi
 
     if [[ -d "$APP_PATH/Contents/PlugIns" ]]; then
         shopt -s nullglob
         extension_paths=("$APP_PATH"/Contents/PlugIns/*.appex)
         shopt -u nullglob
     fi
+
+    for framework_path in "${framework_paths[@]}"; do
+        codesign --force \
+            --sign "$RESOLVED_SIGNING_IDENTITY" \
+            --options runtime \
+            --timestamp \
+            "$framework_path"
+    done
 
     for extension_path in "${extension_paths[@]}"; do
         codesign --force \
