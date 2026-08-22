@@ -271,7 +271,7 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             signatureDirectory: root.appendingPathComponent("signatures").path
         )
 
-        BackgroundSignatureUpdater.executeProcess(invocation, timeout: 0)
+        BackgroundSignatureUpdater.executeProcess(invocation, timeout: 0, terminationGrace: 0.05)
     }
 
     func testSettingsReloadKeepsLastKnownGoodAfterAtomicCorruption() throws {

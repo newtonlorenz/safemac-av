@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import Security
 
@@ -127,7 +128,9 @@ final class BackgroundSignatureUpdater {
 
     init(
         settingsURL: URL? = nil,
-        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = BackgroundSignatureUpdater.executeProcess
+        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = { invocation, timeout in
+            BackgroundSignatureUpdater.executeProcess(invocation, timeout: timeout)
+        }
     ) {
         settingsStore = BackgroundHelperSettingsStore(settingsURL: settingsURL ?? Self.defaultSettingsURL)
         self.execute = execute
@@ -135,7 +138,9 @@ final class BackgroundSignatureUpdater {
 
     init(
         settingsStore: BackgroundHelperSettingsStore,
-        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = BackgroundSignatureUpdater.executeProcess
+        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = { invocation, timeout in
+            BackgroundSignatureUpdater.executeProcess(invocation, timeout: timeout)
+        }
     ) {
         self.settingsStore = settingsStore
         self.execute = execute
@@ -161,7 +166,11 @@ final class BackgroundSignatureUpdater {
         execute(invocation, 300)
     }
 
-    static func executeProcess(_ invocation: FreshclamInvocation, timeout: TimeInterval) {
+    static func executeProcess(
+        _ invocation: FreshclamInvocation,
+        timeout: TimeInterval,
+        terminationGrace: TimeInterval = 2
+    ) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: invocation.executablePath)
         process.arguments = invocation.arguments
@@ -173,8 +182,15 @@ final class BackgroundSignatureUpdater {
             while process.isRunning, Date() < deadline {
                 Thread.sleep(forTimeInterval: 0.1)
             }
-            if process.isRunning { process.terminate() }
-            process.waitUntilExit()
+            guard process.isRunning else { return }
+            process.terminate()
+            let terminationDeadline = Date().addingTimeInterval(terminationGrace)
+            while process.isRunning, Date() < terminationDeadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
         } catch {
             return
         }
