@@ -45,7 +45,7 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         var installedMenuBar = 0
         var acquiredLease = 0
         var scheduledUpdates = 0
-        var completion: (() -> Void)?
+        var completion: (@MainActor @Sendable () -> Void)?
         var terminations = 0
         let coordinator = BackgroundHelperCoordinator(
             installStatusItem: { installedMenuBar += 1 },
