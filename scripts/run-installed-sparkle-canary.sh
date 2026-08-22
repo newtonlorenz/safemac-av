@@ -7,6 +7,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 APP_PATH="${SAFEMAC_CANARY_APP_PATH:-/Applications/SafeMac AV.app}"
 FEED_URL="${SAFEMAC_CANARY_FEED_URL:-}"
 SPARKLE_CLI="${SPARKLE_CLI:-}"
@@ -19,6 +20,7 @@ EXPECTED_TEAM_ID="CQPH8YR62A"
 ALLOW_UNSIGNED_TEST_FIXTURE="${SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE:-0}"
 TEST_ONLY_FIXTURE_ROOT="${SAFEMAC_CANARY_TEST_ONLY_FIXTURE_ROOT:-}"
 USER_AGENT="${SAFEMAC_CANARY_USER_AGENT:-SafeMac AV Sparkle canary}"
+LSREGISTER_BIN="${LSREGISTER_BIN:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
 
 WORK_DIR=""
 CANARY_APP_PATH=""
@@ -37,11 +39,23 @@ command_path() {
 }
 
 cleanup() {
-    if [[ -n "$WORK_DIR" && "$KEEP_WORKDIR" != "1" ]]; then
-        rm -rf "$WORK_DIR"
-    elif [[ -n "$WORK_DIR" ]]; then
-        printf 'Canary workdir kept at %s\n' "$WORK_DIR"
+    local status=$?
+
+    trap - EXIT
+    if [[ -n "$WORK_DIR" ]]; then
+        if LSREGISTER_BIN="$LSREGISTER_BIN" \
+            "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$WORK_DIR"; then
+            if [[ "$KEEP_WORKDIR" != "1" ]]; then
+                rm -rf "$WORK_DIR"
+            else
+                printf 'Canary workdir kept at %s\n' "$WORK_DIR"
+            fi
+        else
+            printf 'Warning: could not validate extension cleanup; preserving canary workdir at %s\n' \
+                "$WORK_DIR" >&2
+        fi
     fi
+    exit "$status"
 }
 
 trap cleanup EXIT
@@ -197,6 +211,7 @@ copy_canary_app() {
     if [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]]; then
         temp_root="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)"
     fi
+    temp_root="$(cd "$temp_root" && pwd -P)"
     WORK_DIR="$(mktemp -d "$temp_root/safemac-sparkle-canary.XXXXXX")"
     if [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]]; then
         printf 'SafeMac canary unsigned fixture\n' > "$WORK_DIR/.safemac-canary-unsigned-fixture"

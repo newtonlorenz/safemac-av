@@ -4,15 +4,35 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-run-sparkle-canary-test.XXXXXX")"
+TEMP_ROOT="$(cd "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" && pwd -P)"
+WORK_DIR="$(mktemp -d "$TEMP_ROOT/safemac-run-sparkle-canary-test.XXXXXX")"
 FAKE_BIN="$WORK_DIR/bin"
 APP_PATH="$WORK_DIR/SafeMac AV.app"
 SPARKLE_LOG="$WORK_DIR/sparkle.log"
-OUTSIDE_WORK_DIR="$(mktemp -d /tmp/safemac-run-sparkle-canary-outside.XXXXXX)"
+OUTSIDE_WORK_DIR="$(mktemp -d "$TEMP_ROOT/safemac-run-sparkle-canary-outside.XXXXXX")"
+LSREGISTER_LOG="$OUTSIDE_WORK_DIR/lsregister.log"
+LSREGISTER_BIN="$OUTSIDE_WORK_DIR/lsregister"
+
+cleanup_root() {
+    local root="$1"
+
+    [[ -d "$root" ]] || return 0
+    if LSREGISTER_BIN="$LSREGISTER_BIN" \
+        "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$root"; then
+        rm -rf "$root"
+    else
+        printf 'Warning: could not validate extension cleanup; preserving test workdir at %s\n' \
+            "$root" >&2
+    fi
+}
 
 cleanup() {
-    rm -rf "$WORK_DIR"
-    rm -rf "$OUTSIDE_WORK_DIR"
+    local status=$?
+
+    trap - EXIT
+    cleanup_root "$WORK_DIR"
+    cleanup_root "$OUTSIDE_WORK_DIR"
+    exit "$status"
 }
 
 trap cleanup EXIT
@@ -85,6 +105,10 @@ fi'
 
     write_fake_tool spctl '[[ "${CANARY_SPCTL_FAIL:-0}" != "1" ]]'
 
+    write_fake_tool lsregister '
+printf "%s\n" "$*" >> "${LSREGISTER_LOG:?}"'
+    cp "$FAKE_BIN/lsregister" "$LSREGISTER_BIN"
+
     write_fake_tool ditto '
 source_path="$1"
 destination_path="$2"
@@ -106,6 +130,8 @@ run_canary() {
     SPARKLE_CLI="$FAKE_BIN/sparkle" \
     SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
     SAFEMAC_CANARY_KEEP_WORKDIR=0 \
+    LSREGISTER_BIN="$LSREGISTER_BIN" \
+    LSREGISTER_LOG="$LSREGISTER_LOG" \
         "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh" >/dev/null
 }
 
@@ -160,9 +186,82 @@ test_install_mode_verifies_updated_temp_copy_policy() {
        SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
        SAFEMAC_CANARY_INSTALL=1 \
        SAFEMAC_CANARY_KEEP_WORKDIR=0 \
+       LSREGISTER_BIN="$LSREGISTER_BIN" \
+       LSREGISTER_LOG="$LSREGISTER_LOG" \
             "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh" >/dev/null 2>&1; then
         fail "install mode accepted updated temporary app without hardened runtime"
     fi
+}
+
+test_cleanup_unregisters_only_temporary_canary_copy() {
+    local output
+    local kept_workdir
+
+    : > "$LSREGISTER_LOG"
+    write_info_plist "$APP_PATH" "https://updates.example.com/appcast.xml" 1
+    output="$(PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+        SPARKLE_LOG="$SPARKLE_LOG" \
+        SPARKLE_CLI="$FAKE_BIN/sparkle" \
+        SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
+        SAFEMAC_CANARY_KEEP_WORKDIR=1 \
+        LSREGISTER_BIN="$LSREGISTER_BIN" \
+        LSREGISTER_LOG="$LSREGISTER_LOG" \
+            "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh")"
+    kept_workdir="${output##*Canary workdir kept at }"
+
+    [[ -d "$kept_workdir" ]] || fail "KEEP_WORKDIR did not preserve the canary workdir"
+    grep -Fq -- "-u $kept_workdir/Applications/SafeMac AV.app" "$LSREGISTER_LOG" \
+        || fail "temporary canary app was not unregistered when KEEP_WORKDIR=1"
+    if grep -Fq -- "-u $APP_PATH" "$LSREGISTER_LOG"; then
+        fail "installed source app was targeted for unregistration"
+    fi
+
+    cleanup_root "$kept_workdir"
+}
+
+test_cleanup_failure_warns_and_preserves_workdir() {
+    local output
+    local preserved_workdir
+
+    write_info_plist "$APP_PATH" "https://updates.example.com/appcast.xml" 1
+    output="$(PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+        SPARKLE_LOG="$SPARKLE_LOG" \
+        SPARKLE_CLI="$FAKE_BIN/sparkle" \
+        SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
+        SAFEMAC_CANARY_KEEP_WORKDIR=0 \
+        LSREGISTER_BIN="$WORK_DIR/missing-lsregister" \
+            "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh" 2>&1)"
+    preserved_workdir="${output##*preserving canary workdir at }"
+
+    [[ -d "$preserved_workdir" ]] \
+        || fail "cleanup validation failure did not preserve the canary workdir"
+    cleanup_root "$preserved_workdir"
+}
+
+test_cleanup_failure_preserves_canary_failure_status() {
+    local output
+    local preserved_workdir
+    local status
+
+    write_info_plist "$APP_PATH" "https://updates.example.com/appcast.xml" 1
+    set +e
+    output="$(PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+        SPARKLE_LOG="$SPARKLE_LOG" \
+        SPARKLE_CLI="$FAKE_BIN/sparkle" \
+        SPARKLE_PROBE_STATUS=4 \
+        SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
+        SAFEMAC_CANARY_EXPECT_UPDATE=1 \
+        LSREGISTER_BIN="$WORK_DIR/missing-lsregister" \
+            "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh" 2>&1)"
+    status=$?
+    set -e
+
+    [[ "$status" == "1" ]] \
+        || fail "cleanup failure replaced the canary failure status with $status"
+    preserved_workdir="${output##*preserving canary workdir at }"
+    [[ -d "$preserved_workdir" ]] \
+        || fail "failed canary workdir was not preserved after cleanup failure"
+    cleanup_root "$preserved_workdir"
 }
 
 test_installed_app_signature_policy_failures() {
@@ -308,6 +407,7 @@ test_expected_update_fails_when_probe_reports_no_update() {
 
 main() {
     make_fake_tools
+    export LSREGISTER_BIN LSREGISTER_LOG
     test_probe_invokes_sparkle_cli_against_temp_copy
     test_install_mode_updates_temp_copy
     test_install_mode_verifies_updated_temp_copy_policy
@@ -320,6 +420,9 @@ main() {
     test_placeholder_feed_is_rejected
     test_unsafe_remote_feed_urls_are_rejected_before_sparkle
     test_expected_update_fails_when_probe_reports_no_update
+    test_cleanup_unregisters_only_temporary_canary_copy
+    test_cleanup_failure_warns_and_preserves_workdir
+    test_cleanup_failure_preserves_canary_failure_status
     printf 'run installed Sparkle canary tests passed\n'
 }
 

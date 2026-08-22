@@ -7,6 +7,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-signing-test.XXXXXX")"
 FAKE_BIN="$WORK_DIR/bin"
 SIGN_LOG="$WORK_DIR/codesign.log"
+LSREGISTER_LOG="$WORK_DIR/lsregister.log"
 TEST_IDENTITY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 cleanup() {
@@ -123,9 +124,14 @@ fi'
     write_fake_tool hdiutil '
 if [[ "${1:-}" == "create" ]]; then
     printf dmg > "${!#}"
+    exit "${MOCK_HDIUTIL_STATUS:-0}"
 fi'
 
     write_fake_tool lipo 'printf "x86_64 arm64\n"'
+
+    write_fake_tool lsregister '
+[[ "$#" -eq 2 && "$1" == "-u" ]] || exit 93
+printf "%s\n" "$2" >> "${LSREGISTER_LOG:?}"'
 }
 
 line_for_target() {
@@ -168,8 +174,53 @@ run_packaging() {
     PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
     TEST_IDENTITY="$TEST_IDENTITY" \
     SIGN_LOG="$SIGN_LOG" \
+    LSREGISTER_LOG="$LSREGISTER_LOG" \
+    LSREGISTER_BIN="$FAKE_BIN/lsregister" \
     SIGNING_IDENTITY="$TEST_IDENTITY" \
         "$PROJECT_DIR/scripts/create-dmg.sh" >/dev/null
+}
+
+run_failed_packaging() {
+    set +e
+    PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+    TEST_IDENTITY="$TEST_IDENTITY" \
+    SIGN_LOG="$SIGN_LOG" \
+    LSREGISTER_LOG="$LSREGISTER_LOG" \
+    LSREGISTER_BIN="$FAKE_BIN/lsregister" \
+    MOCK_HDIUTIL_STATUS=41 \
+    SIGNING_IDENTITY="$TEST_IDENTITY" \
+        "$PROJECT_DIR/scripts/create-dmg.sh" >/dev/null 2>&1
+    PACKAGING_STATUS=$?
+    set -e
+}
+
+verify_build_products_unregistered() {
+    local expected="$WORK_DIR/expected-unregister-targets.txt"
+    local actual="$WORK_DIR/actual-unregister-targets.txt"
+
+    printf '%s\n' \
+        "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
+        "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app" \
+        "$PROJECT_DIR/build/export/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
+        "$PROJECT_DIR/build/export/SafeMac AV.app" \
+        | sort > "$expected"
+    sort "$LSREGISTER_LOG" > "$actual"
+    cmp -s "$expected" "$actual" \
+        || fail "packaging did not unregister exactly the archived and exported app bundles"
+}
+
+verify_required_build_products_unregistered() {
+    grep -Fxq \
+        "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app" \
+        "$LSREGISTER_LOG" \
+        || fail "failed packaging did not unregister the archived app bundle"
+    grep -Fxq \
+        "$PROJECT_DIR/build/export/SafeMac AV.app" \
+        "$LSREGISTER_LOG" \
+        || fail "failed packaging did not unregister the exported app bundle"
+    if grep -Fq '/Applications/SafeMac AV.app' "$LSREGISTER_LOG"; then
+        fail "packaging cleanup targeted the installed SafeMac AV app"
+    fi
 }
 
 verify_signing_order() {
@@ -200,8 +251,15 @@ verify_signing_order() {
 
 main() {
     make_fake_tools
+    : > "$LSREGISTER_LOG"
     run_packaging
     verify_signing_order
+    verify_build_products_unregistered
+    : > "$LSREGISTER_LOG"
+    run_failed_packaging
+    [[ "$PACKAGING_STATUS" -eq 41 ]] \
+        || fail "cleanup did not preserve the packaging failure status"
+    verify_required_build_products_unregistered
     printf 'create-dmg signing tests passed\n'
 }
 

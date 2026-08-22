@@ -4,13 +4,33 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-installed-sparkle-canary.XXXXXX")"
+TEMP_ROOT="$(cd "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" && pwd -P)"
+WORK_DIR="$(mktemp -d "$TEMP_ROOT/safemac-installed-sparkle-canary.XXXXXX")"
 FAKE_BIN="$WORK_DIR/bin"
-OUTSIDE_WORK_DIR="$(mktemp -d /tmp/safemac-installed-sparkle-canary-outside.XXXXXX)"
+OUTSIDE_WORK_DIR="$(mktemp -d "$TEMP_ROOT/safemac-installed-sparkle-canary-outside.XXXXXX")"
+LSREGISTER_LOG="$OUTSIDE_WORK_DIR/lsregister.log"
+LSREGISTER_BIN="$OUTSIDE_WORK_DIR/lsregister"
+
+cleanup_root() {
+    local root="$1"
+
+    [[ -d "$root" ]] || return 0
+    if LSREGISTER_BIN="$LSREGISTER_BIN" \
+        "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$root"; then
+        rm -rf "$root"
+    else
+        printf 'Warning: could not validate extension cleanup; preserving test workdir at %s\n' \
+            "$root" >&2
+    fi
+}
 
 cleanup() {
-    rm -rf "$WORK_DIR"
-    rm -rf "$OUTSIDE_WORK_DIR"
+    local status=$?
+
+    trap - EXIT
+    cleanup_root "$WORK_DIR"
+    cleanup_root "$OUTSIDE_WORK_DIR"
+    exit "$status"
 }
 
 trap cleanup EXIT
@@ -49,6 +69,9 @@ if [[ " $* " == *" -dv "* ]]; then
         "$flags" >&2
 fi'
     write_fake_tool spctl '[[ "${CANARY_SPCTL_FAIL:-0}" != "1" ]]'
+    write_fake_tool lsregister '
+printf "%s\n" "$*" >> "${LSREGISTER_LOG:?}"'
+    cp "$FAKE_BIN/lsregister" "$LSREGISTER_BIN"
 }
 
 make_fixture() {
@@ -398,6 +421,7 @@ run_test_fixture_override_symlink_escape_case() {
 main() {
     make_fake_tools
     export PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin"
+    export LSREGISTER_BIN LSREGISTER_LOG
     make_fixture
     run_success_case
     run_signature_policy_failure_cases

@@ -12,8 +12,19 @@ WORK_DIR="$(cd "$WORK_DIR" && pwd -P)"
 OUTSIDE_WORK_DIR="$(cd "$OUTSIDE_WORK_DIR" && pwd -P)"
 
 cleanup() {
+    local status=$?
+
+    trap - EXIT
+    set +e
+    if [[ -x "$PROJECT_DIR/scripts/clean-build-registrations.sh" ]]; then
+        LSREGISTER_BIN="${TEST_LSREGISTER_BIN:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}" \
+            "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$WORK_DIR" >/dev/null 2>&1 || true
+        LSREGISTER_BIN="${TEST_LSREGISTER_BIN:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}" \
+            "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$OUTSIDE_WORK_DIR" >/dev/null 2>&1 || true
+    fi
     rm -rf "$WORK_DIR"
     rm -rf "$OUTSIDE_WORK_DIR"
+    return "$status"
 }
 
 trap cleanup EXIT
@@ -161,8 +172,7 @@ if [[ " $* " == *" --entitlements :- "* && "$target" != "${MISSING_AUTOUPDATE_EN
     printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
 fi
 if [[ " $* " == *" --entitlements - --xml "* ]]; then
-    app_path="${SAFEMAC_VERIFY_APP_PATH:?}"
-    if [[ "$target" == "$app_path" ]]; then
+    if [[ "$target" == */SafeMac\ AV.app ]]; then
         group="${APP_GROUP_ENTITLEMENT:-TESTTEAM01.com.newtonlorenz.ClamAV-GUI}"
         sandbox="false"
     else
@@ -181,6 +191,25 @@ if [[ "$target" == "${NON_UNIVERSAL_PATH:-}" ]]; then
 else
     printf "%s\n" "${LIPO_ARCHS:-x86_64 arm64}"
 fi'
+    write_fake_tool lsregister '
+printf "unregister:%s\n" "${2:?}" >> "${CLEANUP_EVENT_LOG:?}"'
+    write_fake_tool hdiutil '
+case "${1:-}" in
+    attach)
+        mount_point="${!#}"
+        cp -R "${HDIUTIL_FIXTURE_APP:?}" "$mount_point/SafeMac AV.app"
+        ;;
+    detach)
+        printf "detach:%s\n" "${2:?}" >> "${CLEANUP_EVENT_LOG:?}"
+        rm -rf "${2:?}/SafeMac AV.app"
+        ;;
+    *) exit 2 ;;
+esac'
+    TEST_LSREGISTER_BIN="$WORK_DIR/bin/lsregister"
+    CLEANUP_EVENT_LOG="$WORK_DIR/fixture-cleanup-events.log"
+    : > "$CLEANUP_EVENT_LOG"
+    export TEST_LSREGISTER_BIN
+    export CLEANUP_EVENT_LOG
 }
 
 run_success_case() {
@@ -201,6 +230,59 @@ run_arch_failure_case() {
     fi
 }
 
+assert_mounted_cleanup_events() {
+    local mount_root
+    local expected
+    local actual
+
+    mount_root="$(sed -n 's/^detach://p' "$WORK_DIR/mounted-cleanup-events.log")"
+    [[ -n "$mount_root" ]] || fail "temporary DMG mount was not detached"
+    expected="unregister:$mount_root/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+unregister:$mount_root/SafeMac AV.app
+detach:$mount_root"
+    actual="$(cat "$WORK_DIR/mounted-cleanup-events.log")"
+    [[ "$actual" == "$expected" ]] \
+        || fail "temporary DMG app was not unregistered from its exact mount root before detach"
+    [[ "$mount_root" != /Applications && "$mount_root" != /Applications/* ]] \
+        || fail "temporary DMG cleanup targeted /Applications"
+}
+
+run_mounted_cleanup_case() {
+    : > "$WORK_DIR/mounted-cleanup-events.log"
+    if ! env \
+        -u SAFEMAC_VERIFY_APP_PATH \
+        -u SAFEMAC_VERIFY_TEST_ONLY_ALLOW_APP_OVERRIDE \
+        -u SAFEMAC_VERIFY_TEST_ONLY_FIXTURE_ROOT \
+        PATH="$WORK_DIR/bin:$PATH" \
+        CLEANUP_EVENT_LOG="$WORK_DIR/mounted-cleanup-events.log" \
+        HDIUTIL_FIXTURE_APP="$WORK_DIR/SafeMac AV.app" \
+        LSREGISTER_BIN="$WORK_DIR/bin/lsregister" \
+        EXPECTED_SPARKLE_FEED_URL="https://updates.example.com/appcast.xml" \
+        EXPECTED_SPARKLE_PUBLIC_ED_KEY="$(cat "$WORK_DIR/sparkle-public-key.txt")" \
+        EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX="https://downloads.example.com/" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null; then
+        fail "mounted release verification failed"
+    fi
+    assert_mounted_cleanup_events
+}
+
+run_mounted_failure_cleanup_case() {
+    : > "$WORK_DIR/mounted-cleanup-events.log"
+    if env \
+        -u SAFEMAC_VERIFY_APP_PATH \
+        -u SAFEMAC_VERIFY_TEST_ONLY_ALLOW_APP_OVERRIDE \
+        -u SAFEMAC_VERIFY_TEST_ONLY_FIXTURE_ROOT \
+        PATH="$WORK_DIR/bin:$PATH" \
+        CLEANUP_EVENT_LOG="$WORK_DIR/mounted-cleanup-events.log" \
+        HDIUTIL_FIXTURE_APP="$WORK_DIR/SafeMac AV.app" \
+        LSREGISTER_BIN="$WORK_DIR/bin/lsregister" \
+        LIPO_ARCHS="arm64" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "mounted release architecture failure was accepted"
+    fi
+    assert_mounted_cleanup_events
+}
+
 run_unscoped_app_override_failure_cases() {
     if env \
        -u SAFEMAC_VERIFY_TEST_ONLY_ALLOW_APP_OVERRIDE \
@@ -218,6 +300,24 @@ run_unscoped_app_override_failure_cases() {
         "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
         fail "symlinked release app override escaped its fixture root"
     fi
+}
+
+run_fixture_root_cleanup_case() {
+    local expected
+    local actual
+
+    : > "$CLEANUP_EVENT_LOG"
+    LSREGISTER_BIN="$TEST_LSREGISTER_BIN" \
+        "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$WORK_DIR"
+    LSREGISTER_BIN="$TEST_LSREGISTER_BIN" \
+        "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$OUTSIDE_WORK_DIR"
+    expected="unregister:$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+unregister:$WORK_DIR/SafeMac AV.app
+unregister:$OUTSIDE_WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+unregister:$OUTSIDE_WORK_DIR/SafeMac AV.app"
+    actual="$(cat "$CLEANUP_EVENT_LOG")"
+    [[ "$actual" == "$expected" ]] \
+        || fail "test fixture roots were not cleaned independently by exact root"
 }
 
 run_embedded_feed_url_failure_cases() {
@@ -590,7 +690,10 @@ main() {
     make_fake_tools
     configure_test_app_override
     run_success_case
+    run_mounted_cleanup_case
+    run_mounted_failure_cleanup_case
     run_unscoped_app_override_failure_cases
+    run_fixture_root_cleanup_case
     run_embedded_feed_url_failure_cases
     run_arch_failure_case
     run_nested_adhoc_failure_cases

@@ -27,17 +27,8 @@ Use this checklist for a signed and notarized release. Publication is a separate
 Run locally before tagging:
 
 ```bash
-xcodebuild test \
-  -project ClamAV-GUI.xcodeproj \
-  -scheme ClamAV-GUI \
-  -destination 'platform=macOS' \
-  -derivedDataPath build/DerivedData-Test
-
-xcodebuild build \
-  -project ClamAV-GUI.xcodeproj \
-  -scheme ClamAV-GUI \
-  -configuration Release \
-  -destination 'platform=macOS'
+./scripts/run-tests.sh unit
+./scripts/run-tests.sh release
 ```
 
 ## Tag and package

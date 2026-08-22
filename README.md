@@ -112,40 +112,25 @@ For a guided environment check, run `./setup.sh`. It is read-only by default; in
 
 ## Build and test
 
-Build from the command line without a signing identity:
+Build the Release configuration from the command line without a signing identity:
 
 ```bash
-xcodebuild \
-  -project ClamAV-GUI.xcodeproj \
-  -scheme ClamAV-GUI \
-  -configuration Debug \
-  -destination 'platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO \
-  build
+./scripts/run-tests.sh release
 ```
 
 Run the unit and integration suite:
 
 ```bash
-xcodebuild \
-  -project ClamAV-GUI.xcodeproj \
-  -scheme ClamAV-GUI \
-  -destination 'platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO \
-  test
+./scripts/run-tests.sh unit
 ```
 
 Run the interactive UI smoke test on a logged-in Mac. Unlike the headless unit suite, the UI runner needs a locally signable test host, so do not disable code signing for this command:
 
 ```bash
-xcodebuild \
-  -project ClamAV-GUI.xcodeproj \
-  -scheme ClamAV-GUI-UI \
-  -destination 'platform=macOS' \
-  test
+./scripts/run-tests.sh ui
 ```
 
-The hosted CI workflow intentionally omits UI automation because macOS UI tests require both a locally signable test host and a reliable logged-in window session. An ad-hoc or development-signed local test run is sufficient; forcing `CODE_SIGNING_ALLOWED=NO` terminates the UI runner before the test can execute.
+These wrappers use dedicated temporary DerivedData and unregister their app bundles when each command exits. The hosted CI workflow intentionally omits UI automation because macOS UI tests require both a locally signable test host and a reliable logged-in window session. An ad-hoc or development-signed local test run is sufficient; forcing `CODE_SIGNING_ALLOWED=NO` terminates the UI runner before the test can execute.
 
 ## Local packages and releases
 
