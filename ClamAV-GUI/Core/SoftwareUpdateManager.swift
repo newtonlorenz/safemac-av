@@ -197,5 +197,5 @@ final class SoftwareUpdateStartupCoordinator {
 }
 
 extension Notification.Name {
-    static let checkForAppUpdates = Notification.Name("com.newtonlorenz.ClamAV-GUI.checkForAppUpdates")
+    static let checkForAppUpdates = Notification.Name("com.newtonlorenz.SafeMacAV.checkForAppUpdates")
 }

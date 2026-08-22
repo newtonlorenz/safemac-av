@@ -6,14 +6,24 @@ struct SchedulerView: View {
     @State private var showingAddJob = false
     @State private var editingJob: ScanJob?
     @State private var actionError: SchedulerActionError?
+    @State private var loadState: SchedulerLoadState = .loading
 
     var body: some View {
         VStack(spacing: 12) {
-            if scheduledJobs.isEmpty {
+            switch loadState {
+            case .loading:
+                ProgressView("Loading schedules…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .failed:
+                SchedulerLoadFailureView {
+                    loadState = .loading
+                    reloadScheduledJobs()
+                }
+            case .loaded where scheduledJobs.isEmpty:
                 EmptySchedulerView {
                     showingAddJob = true
                 }
-            } else {
+            case .loaded:
                 HStack {
                     Text("\(scheduledJobs.count) scheduled scan\(scheduledJobs.count == 1 ? "" : "s")")
                         .foregroundColor(.secondary)
@@ -40,7 +50,7 @@ struct SchedulerView: View {
         .padding(.bottom, 16)
         .accessibilityIdentifier("scheduler-content")
         .onAppear {
-            scheduledJobs = appState.scanScheduler.listScheduledScans()
+            reloadScheduledJobs()
         }
         .sheet(isPresented: $showingAddJob) {
             ScheduleJobEditor(job: nil) { newJob in
@@ -65,14 +75,13 @@ struct SchedulerView: View {
     private func addJob(_ job: ScanJob) -> Bool {
         do {
             try appState.scanScheduler.createScheduledScan(job)
-            scheduledJobs = appState.scanScheduler.listScheduledScans()
-            return true
+            return reloadScheduledJobs()
         } catch {
             actionError = SchedulerActionError(
                 title: "Schedule Couldn’t Be Created",
                 message: "\"\(job.name)\" could not be saved. Check that the app can access your user scheduling settings, then try again."
             )
-            scheduledJobs = appState.scanScheduler.listScheduledScans()
+            reloadScheduledJobs(reportingError: false)
             return false
         }
     }
@@ -81,14 +90,13 @@ struct SchedulerView: View {
     private func updateJob(_ job: ScanJob) -> Bool {
         do {
             try appState.scanScheduler.updateScheduledScan(job)
-            scheduledJobs = appState.scanScheduler.listScheduledScans()
-            return true
+            return reloadScheduledJobs()
         } catch {
             actionError = SchedulerActionError(
                 title: "Schedule Couldn’t Be Updated",
                 message: "\"\(job.name)\" could not be updated. Its current state has been reloaded. Check your user scheduling settings, then try again."
             )
-            scheduledJobs = appState.scanScheduler.listScheduledScans()
+            reloadScheduledJobs(reportingError: false)
             return false
         }
     }
@@ -96,13 +104,14 @@ struct SchedulerView: View {
     private func deleteJob(_ job: ScanJob) {
         do {
             try appState.scanScheduler.removeScheduledScan(job)
+            reloadScheduledJobs()
         } catch {
             actionError = SchedulerActionError(
                 title: "Schedule Couldn’t Be Deleted",
                 message: "\"\(job.name)\" could not be deleted. Check your user scheduling settings, then try again."
             )
+            reloadScheduledJobs(reportingError: false)
         }
-        scheduledJobs = appState.scanScheduler.listScheduledScans()
     }
 
     private func toggleJob(_ job: ScanJob) {
@@ -110,20 +119,71 @@ struct SchedulerView: View {
         updatedJob.isEnabled.toggle()
         do {
             try appState.scanScheduler.updateScheduledScan(updatedJob)
+            reloadScheduledJobs()
         } catch {
             actionError = SchedulerActionError(
                 title: "Schedule Couldn’t Be Changed",
                 message: "\"\(job.name)\" could not be \(updatedJob.isEnabled ? "enabled" : "disabled"). Its current state has been reloaded."
             )
+            reloadScheduledJobs(reportingError: false)
         }
-        scheduledJobs = appState.scanScheduler.listScheduledScans()
     }
+
+    @discardableResult
+    private func reloadScheduledJobs(reportingError: Bool = true) -> Bool {
+        do {
+            scheduledJobs = try appState.scanScheduler.loadScheduledScans()
+            loadState = .loaded
+            if appState.scheduledScanMigrationError != nil {
+                actionError = SchedulerActionError(
+                    title: "Schedules Need Attention",
+                    message: "SafeMac AV loaded your schedules but could not safely update their background agents. Your legacy schedule files were left unchanged."
+                )
+            }
+            return true
+        } catch {
+            loadState = .failed
+            if reportingError {
+                actionError = SchedulerActionError(
+                    title: "Schedules Couldn’t Be Loaded",
+                    message: "SafeMac AV could not load your schedules safely. Your schedule files were left unchanged. Check your user scheduling settings, then try again."
+                )
+            }
+            return false
+        }
+    }
+}
+
+private enum SchedulerLoadState {
+    case loading
+    case loaded
+    case failed
 }
 
 private struct SchedulerActionError: Identifiable {
     let id = UUID()
     let title: String
     let message: String
+}
+
+private struct SchedulerLoadFailureView: View {
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 48))
+                .foregroundColor(.orange)
+            Text("Schedules Couldn’t Be Loaded")
+                .font(.title2)
+                .fontWeight(.semibold)
+            Text("SafeMac AV left your schedule files unchanged.")
+                .foregroundColor(.secondary)
+            Button("Retry", action: onRetry)
+                .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
 
 struct EmptySchedulerView: View {

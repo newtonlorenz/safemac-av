@@ -429,7 +429,7 @@ final class AppStateTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDirectory) }
 
         let settingsURL = tempDirectory
-            .appendingPathComponent("ClamAV-GUI", isDirectory: true)
+            .appendingPathComponent("SafeMac AV", isDirectory: true)
             .appendingPathComponent("settings.json", isDirectory: true)
         try FileManager.default.createDirectory(at: settingsURL, withIntermediateDirectories: true)
         let configManager = ConfigManager(appSupportURL: tempDirectory)

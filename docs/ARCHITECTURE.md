@@ -49,7 +49,7 @@ per-user launchd
 
 `FreshclamRunner` launches the configured `freshclam` executable with the local config and signature-data paths. Its output is parsed into success, already-current, or failure status. Network access belongs to `freshclam`; the Swift application does not implement an update client.
 
-`SignatureUpdateScheduler` owns the single per-user LaunchAgent `com.newtonlorenz.ClamAV-GUI.signature-update`. Its property list contains only the embedded `SafeMacAVBackground` executable and `--scheduled-signature-update`; configured ClamAV paths remain in app settings rather than launchd arguments. It validates that helper before changing the previous job. Daily and weekly calendar changes atomically replace the property list using modern per-user `launchctl bootstrap` and `bootout` operations. Reconciliation observes both the property list and launchd's loaded state so it repairs either kind of drift. A failed change restores the previous property list and runtime state; if restoration also fails, the app reports an indeterminate schedule instead of displaying a false enabled or disabled state.
+`SignatureUpdateScheduler` owns the single per-user LaunchAgent `com.newtonlorenz.SafeMacAV.signature-update`. Its property list contains only the embedded `SafeMacAVBackground` executable and `--scheduled-signature-update`; configured ClamAV paths remain in app settings rather than launchd arguments. It validates that helper before changing the previous job. Daily and weekly calendar changes atomically replace the property list using modern per-user `launchctl bootstrap` and `bootout` operations. Reconciliation observes both the property list and launchd's loaded state, boots out the exact legacy `com.newtonlorenz.ClamAV-GUI.signature-update` service before loading the replacement, and removes its property list only after the replacement succeeds. A failed change restores the previous property list and runtime state; if restoration also fails, the app reports an indeterminate schedule instead of displaying a false enabled or disabled state.
 
 Only the canonical `/Applications/SafeMac AV.app` install automatically reconciles the captured executable path; development, translocated, downloaded, and backup copies cannot take over the installed schedule. A scheduled invocation uses accessory mode, suppresses normal scenes, and runs from an application-delegate-owned task rather than a window lifecycle. It calls the same single-flight `AppState.updateSignatures()` path as manual updates, emits the same privacy-safe local result notification, and exits only after the update completes. If automatic updates were disabled after launchd queued an invocation, it exits without running `freshclam`. Malware-signature updates are distinct from SafeMac AV application updates and from Homebrew-managed ClamAV engine upgrades.
 
@@ -67,7 +67,7 @@ The quarantine directory is not an encryption or privilege boundary. The current
 
 ### Scheduled scan
 
-`ScanScheduler` persists job definitions in Application Support and writes one property list per enabled job under `~/Library/LaunchAgents/`. The LaunchAgent starts the app with a job UUID; the app loads the current stored definition rather than placing user-selected scan paths directly in the property list.
+`ScanScheduler` persists job definitions in `~/Library/Application Support/SafeMac AV/` and writes one `com.newtonlorenz.SafeMacAV.scan.<UUID>` property list per enabled job under `~/Library/LaunchAgents/`. Only canonical interactive startup from `/Applications/SafeMac AV.app` may mutate legacy LaunchAgents: it validates and atomically copies legacy metadata without deleting it, then unloads each exact loaded legacy job before ensuring its replacement is loaded. Development, translocated, downloaded, and backup copies can strictly read metadata but cannot inspect or migrate those agents; schedule updates and deletion fail without mutation when the exact legacy agent still exists. A failed replacement restores the legacy file and its exact prior loaded or unloaded state. The Schedules screen uses the scheduler's strict nonmutating load path and displays startup migration or metadata failures instead of converting them into an empty schedule list; the tolerant lookup remains available only for non-interactive best-effort callers. The LaunchAgent starts the app with a job UUID; the app loads the current stored definition rather than placing user-selected scan paths directly in the property list.
 
 Schedules run in the logged-in user's context. Moving or deleting the built app can invalidate the executable path captured in an existing LaunchAgent.
 
@@ -93,7 +93,7 @@ The Finder Sync extension receives the current Finder selection, writes a bounde
 
 The store requires the fixed Finder source, fresh request timestamps before a queued request is claimed, absolute normalized paths, UUID-matched filenames, bounded record and queue sizes, and current-user `0700` directory and `0600` file permissions. A recovered claim keeps its original timestamp and remains pending after the queue freshness window because it already passed validation before the app accepted responsibility for it; its source, paths, filename, size, ownership, and permissions are revalidated on every restart. Invalid records are isolated so they do not block valid requests. If the shared container is unavailable or a newly queued request is stale, oversized, symlinked, malformed, over-permissive, or cannot be acknowledged, the handoff fails closed and no scan is admitted. The main app presents one fixed generic error after opening; Finder uses the same generic alert only if the app cannot open. Neither surface exposes selected paths, notification payloads, or filesystem errors.
 
-A distributable build signs the app and extension consistently with the unprovisioned macOS app group `CQPH8YR62A.com.newtonlorenz.ClamAV-GUI`, whose prefix matches the Developer ID team. The notification, team-prefixed app group, and bundle identifiers are namespaced to the upstream project and must change together in a fork.
+A distributable build signs the app and extension consistently with the unprovisioned macOS app group `CQPH8YR62A.com.newtonlorenz.SafeMacAV`, whose prefix matches the Developer ID team. The main app intentionally retains `com.newtonlorenz.ClamAV-GUI` to preserve its installed Sparkle update lineage, while the Finder extension uses the host-prefixed child identity `com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync`. The notification, team-prefixed app group, and bundle identifiers are namespaced to the upstream project and must change together in a fork.
 
 ### Foreground and menu-bar operation
 
@@ -111,13 +111,13 @@ Notification content is intentionally summary-only. It includes counts and gener
 
 | Data | Default location | Lifetime |
 | --- | --- | --- |
-| Settings | `~/Library/Application Support/ClamAV-GUI/settings.json` | Persistent |
-| Scheduled-job definitions | `~/Library/Application Support/ClamAV-GUI/scheduled_jobs.json` | Persistent |
-| Finder request queue | App-group container `CQPH8YR62A.com.newtonlorenz.ClamAV-GUI` | Atomically claimed before waiting, recovered after restart, and acknowledged after scan admission; invalid records are removed during validation |
-| LaunchAgent definitions | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.scan.*.plist` | Until job removal |
-| Signature-update LaunchAgent | `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.signature-update.plist` | Until automatic updates are disabled |
+| Settings | `~/Library/Application Support/SafeMac AV/settings.json` | Persistent; validated legacy data is copied once and retained at its original path |
+| Scheduled-job definitions | `~/Library/Application Support/SafeMac AV/scheduled_jobs.json` | Persistent; validated legacy data is copied once and retained at its original path |
+| Finder request queue | App-group container `CQPH8YR62A.com.newtonlorenz.SafeMacAV` | Atomically claimed before waiting, recovered after restart, and acknowledged after scan admission; invalid records are removed during validation |
+| LaunchAgent definitions | `~/Library/LaunchAgents/com.newtonlorenz.SafeMacAV.scan.*.plist` | Until job removal |
+| Signature-update LaunchAgent | `~/Library/LaunchAgents/com.newtonlorenz.SafeMacAV.signature-update.plist` | Until automatic updates are disabled |
 | Embedded helper login item | macOS System Settings › General › Login Items | Until disabled by the user or app |
-| Background work leases | `~/Library/Application Support/ClamAV-GUI/*.lock` | Held only while work runs |
+| Background work leases | `~/Library/Application Support/SafeMac AV/*.lock` | Held only while work runs |
 | Quarantine payload and metadata | `~/.clamav-quarantine/` | Until restore or deletion |
 | Scan history and application logs | Process memory | Current app run |
 | ClamAV signatures | Homebrew's ClamAV data directory by default | Managed by `freshclam` |

@@ -65,8 +65,9 @@ mkdir -p \
     "$sparkle/XPCServices/Downloader.xpc/Contents/MacOS" \
     "$sparkle/XPCServices/Installer.xpc/Contents/MacOS"
 printf app > "$app/Contents/MacOS/ClamAV-GUI"
+printf "%s\\n" "<plist><dict><key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI</string></dict></plist>" > "$app/Contents/Info.plist"
 printf finder > "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
-printf "%s\\n" "<plist><dict><key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.FinderSync</string></dict></plist>" > "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/Info.plist"
+printf "%s\\n" "<plist><dict><key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync</string></dict></plist>" > "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/Info.plist"
 printf helper > "$helper/Contents/MacOS/SafeMacAVBackground"
 printf "%s\\n" "<plist><dict><key>CFBundleIdentifier</key><string>com.newtonlorenz.SafeMacAV.Background</string><key>LSUIElement</key><true/></dict></plist>" > "$helper/Contents/Info.plist"
 printf sparkle > "$sparkle/Sparkle"
@@ -123,9 +124,9 @@ elif [[ " $* " == *" --entitlements "* ]]; then
     elif [[ "$target" == *"/SafeMacAVBackground.app" ]]; then
         printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><false/></dict></plist>"
     elif [[ "$target" == *"/SafeMac AV.app" ]]; then
-        printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>CQPH8YR62A.com.newtonlorenz.ClamAV-GUI</string></array></dict></plist>"
+        printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>CQPH8YR62A.com.newtonlorenz.SafeMacAV</string></array></dict></plist>"
     elif [[ "$target" == *"/ClamAV-GUI-Finder.appex" ]]; then
-        printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><true/><key>com.apple.security.application-groups</key><array><string>CQPH8YR62A.com.newtonlorenz.ClamAV-GUI</string></array></dict></plist>"
+        printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><true/><key>com.apple.security.application-groups</key><array><string>CQPH8YR62A.com.newtonlorenz.SafeMacAV</string></array></dict></plist>"
     fi
 fi'
 
@@ -271,14 +272,20 @@ verify_project_child_bundle_identifiers() {
         || fail "background helper does not use the final SafeMac child identifier"
     grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.BackgroundTests";' "$project_file" \
         || fail "background helper tests do not use the final SafeMac child identifier"
-    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI.FinderSync";' "$project_file" \
-        || fail "Finder extension no longer uses the required app-prefixed compatibility identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync";' "$project_file" \
+        || fail "Finder extension does not use the final SafeMac child identifier"
     grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.Tests";' "$project_file" \
         || fail "unit test bundle does not use the final SafeMac child identifier"
     grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.UITests";' "$project_file" \
         || fail "UI test bundle does not use the final SafeMac child identifier"
     grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI";' "$project_file" \
         || fail "main app compatibility identifier changed"
+    grep -Fq 'CQPH8YR62A.com.newtonlorenz.SafeMacAV' "$PROJECT_DIR/ClamAV-GUI/ClamAV_GUI.entitlements" \
+        || fail "main app does not use the final SafeMac app group"
+    grep -Fq 'CQPH8YR62A.com.newtonlorenz.SafeMacAV' "$PROJECT_DIR/ClamAV-GUI-Finder/ClamAV_GUI_Finder.entitlements" \
+        || fail "Finder extension does not use the final SafeMac app group"
+    grep -Fq 'mainAppBundleIdentifier = "com.newtonlorenz.ClamAV-GUI"' "$PROJECT_DIR/ClamAV-GUI-Finder/FinderSync.swift" \
+        || fail "Finder extension does not retain the legacy main-app lookup identifier"
 }
 
 main() {

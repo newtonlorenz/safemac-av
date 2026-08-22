@@ -15,6 +15,18 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         super.tearDown()
     }
 
+    func testSafeMacFinderHandoffIdentityContract() {
+        XCTAssertEqual(ExternalScanRequestStore.appGroupIdentifier, "CQPH8YR62A.com.newtonlorenz.SafeMacAV")
+        XCTAssertEqual(
+            ExternalScanRequestStore.scanRequestNotificationName,
+            NSNotification.Name("com.newtonlorenz.SafeMacAV.scanRequest")
+        )
+        XCTAssertEqual(
+            ExternalScanRequestStore.scanRequestFailedNotificationName,
+            NSNotification.Name("com.newtonlorenz.SafeMacAV.scanRequestFailed")
+        )
+    }
+
     func testEnqueueLoadAndAcknowledgeRequests() throws {
         let store = ExternalScanRequestStore(baseURL: tempDirectory)
 

@@ -23,6 +23,7 @@ final class AppState: ObservableObject {
     @Published var settingsSaveError: String?
     @Published var launchAtLoginError: String?
     @Published var signatureUpdateScheduleError: String?
+    @Published var scheduledScanMigrationError: String?
     @Published private(set) var signatureUpdateScheduleState: SignatureUpdateScheduleState
     @Published private(set) var notificationPermissionStatus: NotificationPermissionStatus = .unknown
     @Published private(set) var notificationPermissionError: String?
@@ -490,6 +491,16 @@ final class AppState: ObservableObject {
             signatureUpdateScheduleState = .indeterminate
             signatureUpdateScheduleError = "SafeMac AV could not activate the automatic signature schedule. Open Updates and try again."
             addLog(.error, "Failed to reconcile automatic signature schedule")
+        }
+    }
+
+    func reconcileScheduledScanStorage() {
+        do {
+            try scanScheduler.migrateLegacyState()
+            scheduledScanMigrationError = nil
+        } catch {
+            scheduledScanMigrationError = "SafeMac AV could not migrate scheduled scans. Open Schedules and review them."
+            addLog(.error, "Failed to migrate legacy scheduled scans")
         }
     }
 

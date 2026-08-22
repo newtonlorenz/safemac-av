@@ -391,6 +391,30 @@ final class ApplicationLaunchConfigurationTests: XCTestCase {
         XCTAssertTrue(source.contains("ApplicationLaunchConfigurationRegistry.shared.install"))
     }
 
+    func testCanonicalStartupMaintenanceMigratesLegacyScheduledScans() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ClamAV-GUI/App/ClamAVApp.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("appState.reconcileScheduledScanStorage()"))
+    }
+
+    func testSchedulerViewSurfacesStrictLoadFailureInsteadOfShowingEmptyState() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ClamAV-GUI/Views/Scheduler/SchedulerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("loadScheduledScans()"))
+        XCTAssertTrue(source.contains("Schedules Couldn’t Be Loaded"))
+        XCTAssertTrue(source.contains("SchedulerLoadState"))
+        XCTAssertTrue(source.contains("case .failed"))
+        XCTAssertTrue(source.contains("Retry"))
+    }
+
     private func makeUnconfiguredDelegate(
         manager: MenuBarManager,
         configurationRegistry: ApplicationLaunchConfigurationRegistry,

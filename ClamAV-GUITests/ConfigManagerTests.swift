@@ -54,7 +54,7 @@ final class ConfigManagerTests: XCTestCase {
     func testSaveSettingsUsesOwnerOnlyDirectoryAndFilePermissions() throws {
         try configManager.saveSettings(.default)
 
-        let appDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI")
+        let appDirectory = tempDirectory.appendingPathComponent("SafeMac AV")
         let settingsURL = appDirectory.appendingPathComponent("settings.json")
         let directoryAttributes = try FileManager.default.attributesOfItem(atPath: appDirectory.path)
         let fileAttributes = try FileManager.default.attributesOfItem(atPath: settingsURL.path)
@@ -65,7 +65,7 @@ final class ConfigManagerTests: XCTestCase {
 
     func testLoadSettingsNormalizesLegacyPermissionsForBackgroundHelper() throws {
         try configManager.saveSettings(.default)
-        let appDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI")
+        let appDirectory = tempDirectory.appendingPathComponent("SafeMac AV")
         let settingsURL = appDirectory.appendingPathComponent("settings.json")
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: appDirectory.path)
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: settingsURL.path)
@@ -79,7 +79,7 @@ final class ConfigManagerTests: XCTestCase {
     }
 
     func testLoadCorruptedSettingsReturnsDefaultsWithoutOverwritingFile() throws {
-        let appDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI", isDirectory: true)
+        let appDirectory = tempDirectory.appendingPathComponent("SafeMac AV", isDirectory: true)
         try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: false)
         let settingsURL = appDirectory.appendingPathComponent("settings.json")
         let corruptedData = Data("{not valid settings".utf8)
@@ -96,7 +96,7 @@ final class ConfigManagerTests: XCTestCase {
     }
 
     func testSaveSettingsThrowsWhenDestinationCannotBeWritten() throws {
-        let appDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI", isDirectory: true)
+        let appDirectory = tempDirectory.appendingPathComponent("SafeMac AV", isDirectory: true)
         try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: false)
         let settingsURL = appDirectory.appendingPathComponent("settings.json", isDirectory: true)
         try FileManager.default.createDirectory(at: settingsURL, withIntermediateDirectories: false)
@@ -108,6 +108,157 @@ final class ConfigManagerTests: XCTestCase {
             XCTAssertEqual(path, settingsURL.path)
             XCTAssertFalse(reason.isEmpty)
         }
+    }
+
+    func testLoadSettingsMigratesValidLegacyFileWithoutDeletingIt() throws {
+        let legacyDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI", isDirectory: true)
+        let legacyURL = legacyDirectory.appendingPathComponent("settings.json")
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        var expected = AppSettings.default
+        expected.customExclusions = ["legacy-value"]
+        let legacyData = try JSONEncoder().encode(expected)
+        try legacyData.write(to: legacyURL)
+
+        XCTAssertEqual(configManager.loadSettings(), expected)
+
+        let migratedURL = tempDirectory
+            .appendingPathComponent("SafeMac AV", isDirectory: true)
+            .appendingPathComponent("settings.json")
+        XCTAssertEqual(try Data(contentsOf: migratedURL), legacyData)
+        XCTAssertEqual(try Data(contentsOf: legacyURL), legacyData)
+    }
+
+    func testExistingSafeMacSettingsAreNeverOverwrittenByLegacySettings() throws {
+        var current = AppSettings.default
+        current.customExclusions = ["current"]
+        try configManager.saveSettings(current)
+        let legacyDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        var legacy = AppSettings.default
+        legacy.customExclusions = ["legacy"]
+        try JSONEncoder().encode(legacy).write(
+            to: legacyDirectory.appendingPathComponent("settings.json")
+        )
+
+        XCTAssertEqual(configManager.loadSettings().customExclusions, ["current"])
+    }
+
+    func testLegacySettingsSymlinkIsNotFollowed() throws {
+        let outsideURL = tempDirectory.appendingPathComponent("outside-settings.json")
+        try JSONEncoder().encode(AppSettings.default).write(to: outsideURL)
+        let legacyDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: legacyDirectory.appendingPathComponent("settings.json"),
+            withDestinationURL: outsideURL
+        )
+
+        _ = configManager.loadSettings()
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: tempDirectory.appendingPathComponent("SafeMac AV/settings.json").path
+        ))
+        guard case .fallbackDueToError = configManager.lastSettingsLoadState else {
+            return XCTFail("Expected a migration failure for a symlinked legacy file")
+        }
+    }
+
+    func testInvalidLegacySettingsAreNotMigrated() throws {
+        let legacyDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        try Data("not settings json".utf8).write(
+            to: legacyDirectory.appendingPathComponent("settings.json")
+        )
+
+        _ = configManager.loadSettings()
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: tempDirectory.appendingPathComponent("SafeMac AV/settings.json").path
+        ))
+        guard case .fallbackDueToError = configManager.lastSettingsLoadState else {
+            return XCTFail("Expected invalid legacy data to fail migration")
+        }
+    }
+
+    func testExistingSafeMacSettingsSymlinkIsNotFollowed() throws {
+        let outsideURL = tempDirectory.appendingPathComponent("outside-current.json")
+        try JSONEncoder().encode(AppSettings.default).write(to: outsideURL)
+        let currentDirectory = tempDirectory.appendingPathComponent("SafeMac AV", isDirectory: true)
+        try FileManager.default.createDirectory(at: currentDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: currentDirectory.appendingPathComponent("settings.json"),
+            withDestinationURL: outsideURL
+        )
+
+        _ = configManager.loadSettings()
+
+        guard case .fallbackDueToError = configManager.lastSettingsLoadState else {
+            return XCTFail("Expected a migration failure for a symlinked current file")
+        }
+    }
+
+    func testPublishRaceRejectsDestinationSymlinkCreatedAfterInitialCheck() throws {
+        let legacyDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI", isDirectory: true)
+        let currentDirectory = tempDirectory.appendingPathComponent("SafeMac AV", isDirectory: true)
+        let legacyURL = legacyDirectory.appendingPathComponent("settings.json")
+        let currentURL = currentDirectory.appendingPathComponent("settings.json")
+        let outsideURL = tempDirectory.appendingPathComponent("race-target.json")
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        try JSONEncoder().encode(AppSettings.default).write(to: legacyURL)
+        try JSONEncoder().encode(AppSettings.default).write(to: outsideURL)
+
+        XCTAssertThrowsError(
+            try SafeMacPersistenceMigration.migrateFileIfNeeded(
+                from: legacyURL,
+                to: currentURL,
+                fileManager: .default,
+                validator: { _ = try JSONDecoder().decode(AppSettings.self, from: $0) },
+                publisher: { _, destination in
+                    try FileManager.default.createSymbolicLink(
+                        at: destination,
+                        withDestinationURL: outsideURL
+                    )
+                    errno = EEXIST
+                    return -1
+                }
+            )
+        )
+        XCTAssertTrue(
+            try FileManager.default.destinationOfSymbolicLink(atPath: currentURL.path)
+                .hasSuffix("race-target.json")
+        )
+    }
+
+    func testPublishRaceRejectsDestinationDirectorySwappedForSymlink() throws {
+        let legacyDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI", isDirectory: true)
+        let currentDirectory = tempDirectory.appendingPathComponent("SafeMac AV", isDirectory: true)
+        let displacedDirectory = tempDirectory.appendingPathComponent("displaced-safe-mac", isDirectory: true)
+        let attackerDirectory = tempDirectory.appendingPathComponent("attacker-safe-mac", isDirectory: true)
+        let legacyURL = legacyDirectory.appendingPathComponent("settings.json")
+        let currentURL = currentDirectory.appendingPathComponent("settings.json")
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: attackerDirectory, withIntermediateDirectories: true)
+        let validData = try JSONEncoder().encode(AppSettings.default)
+        try validData.write(to: legacyURL)
+        try validData.write(to: attackerDirectory.appendingPathComponent("settings.json"))
+
+        XCTAssertThrowsError(
+            try SafeMacPersistenceMigration.migrateFileIfNeeded(
+                from: legacyURL,
+                to: currentURL,
+                fileManager: .default,
+                validator: { _ = try JSONDecoder().decode(AppSettings.self, from: $0) },
+                publisher: { _, _ in
+                    try FileManager.default.moveItem(at: currentDirectory, to: displacedDirectory)
+                    try FileManager.default.createSymbolicLink(
+                        at: currentDirectory,
+                        withDestinationURL: attackerDirectory
+                    )
+                    errno = EEXIST
+                    return -1
+                }
+            )
+        )
     }
 
     // MARK: - Path Detection Tests

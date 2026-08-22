@@ -149,6 +149,7 @@ struct ClamAVApp: App {
                                     bundleURL: bundleURL,
                                     isAutomatedTest: isAutomatedTestLaunch
                                 ) {
+                                    appState.reconcileScheduledScanStorage()
                                     appState.reconcileSignatureUpdateSchedule()
                                 }
                                 await appState.drainExternalScanRequests()
