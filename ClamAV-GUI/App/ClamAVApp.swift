@@ -107,6 +107,7 @@ struct ClamAVApp: App {
             startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices
         )
         let menuBarOwnership = BackgroundMenuBarOwnershipCoordinator(
+            keepsMenuDuringInteractiveLaunch: launchMode.isInteractive && appState.settings.hideFromDock,
             startsRecoveryTimer: startsMenuOwnershipRecovery
         )
         menuBarOwnership.reconcile(helperEnabled: appState.launchAtLoginStatus == .enabled)
@@ -139,6 +140,7 @@ struct ClamAVApp: App {
                 runInitialApplicationLaunch: { mode in
                     switch mode {
                     case .interactive:
+                        defer { menuBarOwnership.completeInteractiveLaunchAnchor() }
                         if SignatureScheduleReconciliationPolicy.shouldReconcile(
                             bundleURL: bundleURL,
                             isAutomatedTest: isAutomatedTestLaunch

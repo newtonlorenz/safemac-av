@@ -503,6 +503,7 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
     private let startupGrace: TimeInterval
     private var lease: BackgroundWorkLease?
     private var helperEnabled = false
+    private var keepsMenuDuringInteractiveLaunch: Bool
     private var nextRecoveryAttempt = Date.distantFuture
     private var ownershipHintObserver: NSObjectProtocol?
     private var recoveryTimer: DispatchSourceTimer?
@@ -512,11 +513,14 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
         makeLease: @escaping () -> BackgroundWorkLease = { BackgroundWorkLease(name: "background-monitoring") },
         now: @escaping () -> Date = Date.init,
         startupGrace: TimeInterval = 5,
+        keepsMenuDuringInteractiveLaunch: Bool = false,
         startsRecoveryTimer: Bool = true
     ) {
         self.makeLease = makeLease
         self.now = now
         self.startupGrace = startupGrace
+        self.keepsMenuDuringInteractiveLaunch = keepsMenuDuringInteractiveLaunch
+        mainShouldPresentMenuBar = keepsMenuDuringInteractiveLaunch
         ownershipHintObserver = DistributedNotificationCenter.default().addObserver(
             forName: Self.helperWillAcquireNotification,
             object: nil,
@@ -544,6 +548,11 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
 
     func reconcile(helperEnabled: Bool) {
         self.helperEnabled = helperEnabled
+        guard !keepsMenuDuringInteractiveLaunch else {
+            mainShouldPresentMenuBar = true
+            nextRecoveryAttempt = now().addingTimeInterval(startupGrace)
+            return
+        }
         if helperEnabled {
             prepareForHelperOwnership()
         } else {
@@ -566,15 +575,34 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
     /// Called by the app lifecycle timer. It deliberately waits through a
     /// startup grace period so a late login helper can claim ownership first.
     func recoverIfHelperIsAbsent() {
+        guard !keepsMenuDuringInteractiveLaunch else { return }
         guard helperEnabled, now() >= nextRecoveryAttempt, lease == nil else { return }
         claimFallbackOwnership()
     }
 
     func prepareForHelperOwnership() {
+        guard !keepsMenuDuringInteractiveLaunch else {
+            mainShouldPresentMenuBar = true
+            nextRecoveryAttempt = now().addingTimeInterval(startupGrace)
+            return
+        }
         lease?.release()
         lease = nil
         mainShouldPresentMenuBar = false
         nextRecoveryAttempt = now().addingTimeInterval(startupGrace)
+    }
+
+    func completeInteractiveLaunchAnchor() {
+        guard keepsMenuDuringInteractiveLaunch else { return }
+        keepsMenuDuringInteractiveLaunch = false
+        if helperEnabled {
+            claimFallbackOwnership()
+            if !mainShouldPresentMenuBar {
+                prepareForHelperOwnership()
+            }
+        } else {
+            claimFallbackOwnership()
+        }
     }
 
     private func claimFallbackOwnership() {

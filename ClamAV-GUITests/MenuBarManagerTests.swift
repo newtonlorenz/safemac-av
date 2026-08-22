@@ -34,6 +34,60 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertTrue(ownership.mainShouldPresentMenuBar)
     }
 
+    func testHiddenInteractiveLaunchAnchorKeepsMainMenuWhileHelperOwnsLease() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helperLease = BackgroundWorkLease(name: "background-monitoring", baseURL: root)
+        XCTAssertTrue(helperLease.acquire())
+        defer { helperLease.release() }
+        let ownership = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) },
+            keepsMenuDuringInteractiveLaunch: true,
+            startsRecoveryTimer: false
+        )
+
+        ownership.reconcile(helperEnabled: true)
+        ownership.prepareForHelperOwnership()
+
+        XCTAssertTrue(ownership.mainShouldPresentMenuBar)
+    }
+
+    func testCompletingHiddenInteractiveLaunchAnchorReturnsOwnershipToHelper() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helperLease = BackgroundWorkLease(name: "background-monitoring", baseURL: root)
+        XCTAssertTrue(helperLease.acquire())
+        defer { helperLease.release() }
+        let ownership = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) },
+            keepsMenuDuringInteractiveLaunch: true,
+            startsRecoveryTimer: false
+        )
+        ownership.reconcile(helperEnabled: true)
+
+        ownership.completeInteractiveLaunchAnchor()
+
+        XCTAssertFalse(ownership.mainShouldPresentMenuBar)
+    }
+
+    func testCompletingHiddenInteractiveLaunchAnchorClaimsFallbackWhenHelperIsAbsent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ownership = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) },
+            keepsMenuDuringInteractiveLaunch: true,
+            startsRecoveryTimer: false
+        )
+        ownership.reconcile(helperEnabled: true)
+
+        ownership.completeInteractiveLaunchAnchor()
+
+        XCTAssertTrue(ownership.mainShouldPresentMenuBar)
+    }
+
     func testMainWindowRegistryFactoryIsLazyAndResettable() {
         let registry = MainWindowControllerRegistry()
         let first = MainWindowControllerMock()
