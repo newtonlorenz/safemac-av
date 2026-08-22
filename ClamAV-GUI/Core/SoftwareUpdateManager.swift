@@ -8,14 +8,18 @@ import Sparkle
 final class SoftwareUpdateManager: ObservableObject {
     let isConfigured: Bool
     private(set) var hasStartedUpdater = false
+    private var hasPendingUpdateCheck = false
 
 #if canImport(Sparkle)
     private var updaterController: SPUStandardUpdaterController?
+    private var canCheckForUpdates = false
+    private var canCheckObservation: NSKeyValueObservation?
 #endif
     private var routeObserver: NSObjectProtocol?
     private let isAutomatedTest: Bool
     private let updaterStartHandler: (() -> Void)?
     private let updateCheckHandler: (() -> Void)?
+    private let updateCheckReadinessHandler: (() -> Bool)?
 
     init(
         bundle: Bundle = .main,
@@ -23,12 +27,15 @@ final class SoftwareUpdateManager: ObservableObject {
         isAutomatedTest: Bool = SoftwareUpdateManager.defaultIsAutomatedTest(),
         isConfiguredOverride: Bool? = nil,
         updaterStartHandler: (() -> Void)? = nil,
-        updateCheckHandler: (() -> Void)? = nil
+        updateCheckHandler: (() -> Void)? = nil,
+        updateCheckReadinessHandler: (() -> Bool)? = nil
     ) {
         isConfigured = isConfiguredOverride ?? Self.hasRequiredSparkleConfiguration(bundle: bundle)
         self.isAutomatedTest = isAutomatedTest
         self.updaterStartHandler = updaterStartHandler
         self.updateCheckHandler = updateCheckHandler
+        self.updateCheckReadinessHandler = updateCheckReadinessHandler
+            ?? (updateCheckHandler == nil ? nil : { true })
         routeObserver = NotificationCenter.default.addObserver(
             forName: .checkForAppUpdates,
             object: nil,
@@ -45,6 +52,15 @@ final class SoftwareUpdateManager: ObservableObject {
                 userDriverDelegate: nil
             )
             updaterController = controller
+            canCheckObservation = controller.updater.observe(
+                \.canCheckForUpdates,
+                options: [.initial, .new]
+            ) { [weak self] updater, _ in
+                Task { @MainActor in
+                    self?.canCheckForUpdates = updater.canCheckForUpdates
+                    self?.updaterReadinessDidChange()
+                }
+            }
         }
 #endif
 
@@ -68,6 +84,32 @@ final class SoftwareUpdateManager: ObservableObject {
     func checkForUpdates() {
         startUpdaterIfPossible()
         guard hasStartedUpdater else { return }
+        guard isReadyForUpdateCheck else {
+            hasPendingUpdateCheck = true
+            return
+        }
+        performUpdateCheck()
+    }
+
+    /// Drains a user-initiated update check only after Sparkle reports it is ready.
+    func updaterReadinessDidChange() {
+        guard hasStartedUpdater, hasPendingUpdateCheck, isReadyForUpdateCheck else { return }
+        performUpdateCheck()
+    }
+
+    private var isReadyForUpdateCheck: Bool {
+        if let updateCheckReadinessHandler {
+            return updateCheckReadinessHandler()
+        }
+#if canImport(Sparkle)
+        return canCheckForUpdates
+#else
+        return false
+#endif
+    }
+
+    private func performUpdateCheck() {
+        hasPendingUpdateCheck = false
         if let updateCheckHandler {
             updateCheckHandler()
             return

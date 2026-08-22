@@ -95,6 +95,17 @@ final class SoftwareUpdateManagerTests: XCTestCase {
         XCTAssertEqual(starts, 0)
     }
 
+    func testStoppedSparkleControllerObservesItsInitialReadinessWithoutStarting() async {
+        let manager = SoftwareUpdateManager(
+            isAutomatedTest: false,
+            isConfiguredOverride: true
+        )
+
+        await Task.yield()
+
+        XCTAssertFalse(manager.hasStartedUpdater)
+    }
+
     func testExplicitAutomaticStartStartsTheDeferredControllerOnce() {
         var starts = 0
         let manager = SoftwareUpdateManager(
@@ -197,6 +208,31 @@ final class SoftwareUpdateManagerTests: XCTestCase {
 
         XCTAssertEqual(starts, 1)
         XCTAssertEqual(checks, 2)
+    }
+
+    func testExplicitCheckWaitsForSparkleReadinessThenRunsOnce() {
+        var starts = 0
+        var checks = 0
+        var isReady = false
+        let manager = SoftwareUpdateManager(
+            startsUpdater: false,
+            isAutomatedTest: false,
+            isConfiguredOverride: true,
+            updaterStartHandler: { starts += 1 },
+            updateCheckHandler: { checks += 1 },
+            updateCheckReadinessHandler: { isReady }
+        )
+
+        manager.checkForUpdates()
+
+        XCTAssertEqual(starts, 1)
+        XCTAssertEqual(checks, 0)
+
+        isReady = true
+        manager.updaterReadinessDidChange()
+        manager.updaterReadinessDidChange()
+
+        XCTAssertEqual(checks, 1)
     }
 
     func testExplicitCheckUpdatesRouteStartsUpdaterExactlyOnce() async {
