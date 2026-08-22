@@ -245,6 +245,19 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         XCTAssertFalse(FreshclamInvocation.isTrustedExecutable(at: executable.path))
     }
 
+    func testScheduledUpdaterDefaultProcessExecutionCompletesWithinBound() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let invocation = try FreshclamInvocation.make(
+            executablePath: "/usr/bin/true",
+            configDirectory: root.path,
+            signatureDirectory: root.appendingPathComponent("signatures").path
+        )
+
+        BackgroundSignatureUpdater.executeProcess(invocation, timeout: 1)
+    }
+
     func testSettingsReloadKeepsLastKnownGoodAfterAtomicCorruption() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -374,7 +387,8 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         let coordinator = BackgroundMenuBarOwnershipCoordinator(
             makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) },
             now: { currentTime },
-            startupGrace: 5
+            startupGrace: 5,
+            startsRecoveryTimer: false
         )
 
         // Main first, helper disabled: the main owns the lease for as long as
