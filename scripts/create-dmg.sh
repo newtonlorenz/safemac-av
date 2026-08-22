@@ -25,6 +25,8 @@ ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME/ClamAV_GUI.entitlements"
 FINDER_ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME-Finder/ClamAV_GUI_Finder.entitlements"
 BACKGROUND_HELPER_ENTITLEMENTS_PATH="$PROJECT_DIR/ClamAV-BackgroundHelper/SafeMacAVBackground.entitlements"
 APP_GROUP_IDENTIFIER="CQPH8YR62A.com.newtonlorenz.ClamAV-GUI"
+FINDER_EXTENSION_BUNDLE_IDENTIFIER="com.newtonlorenz.ClamAV-GUI.FinderSync"
+BACKGROUND_HELPER_BUNDLE_IDENTIFIER="com.newtonlorenz.SafeMacAV.Background"
 
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
@@ -339,12 +341,18 @@ verify_signed_app_components() {
 
     for extension_path in "${extension_paths[@]}"; do
         extension_executable="$extension_path/Contents/MacOS/$(basename "$extension_path" .appex)"
+        if [[ "$(basename "$extension_path")" == "$PROJECT_NAME-Finder.appex" ]]; then
+            [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$extension_path/Contents/Info.plist" 2>/dev/null)" == "$FINDER_EXTENSION_BUNDLE_IDENTIFIER" ]] \
+                || fail "Finder extension bundle identifier is invalid."
+        fi
         verify_distribution_code "$extension_path" "$extension_executable" "$expected_team_id"
     done
 
     background_helper="$APP_PATH/Contents/Library/LoginItems/SafeMacAVBackground.app"
     background_helper_executable="$background_helper/Contents/MacOS/SafeMacAVBackground"
     [[ -d "$background_helper" ]] || fail "Signed background helper not found: $background_helper"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$background_helper/Contents/Info.plist" 2>/dev/null)" == "$BACKGROUND_HELPER_BUNDLE_IDENTIFIER" ]] \
+        || fail "Background helper bundle identifier is invalid."
     verify_distribution_code "$background_helper" "$background_helper_executable" "$expected_team_id"
     helper_entitlements="$(codesign -d --entitlements :- "$background_helper" 2>/dev/null)" \
         || fail "Could not inspect background helper entitlements."

@@ -53,7 +53,7 @@ enum TrustedCodeRequirement {
 }
 
 enum BackgroundHelperBundle {
-    static let bundleIdentifier = "com.newtonlorenz.ClamAV-GUI.Background"
+    static let bundleIdentifier = "com.newtonlorenz.SafeMacAV.Background"
     static let executableName = "SafeMacAVBackground"
     static let teamIdentifier = "CQPH8YR62A"
     static let staticCodeRequirement = TrustedCodeRequirement.developerIDApplication(
@@ -297,7 +297,7 @@ enum BackgroundRoute: String, CaseIterable {
     }
 
     var distributedNotificationName: Notification.Name {
-        Notification.Name("com.newtonlorenz.ClamAV-GUI.background-route.\(rawValue)")
+        Notification.Name("com.newtonlorenz.SafeMacAV.background-route.\(rawValue)")
     }
 }
 
@@ -519,7 +519,7 @@ enum BackgroundMenuBarOwnership {
 
 @MainActor
 final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
-    static let helperWillAcquireNotification = Notification.Name("com.newtonlorenz.ClamAV-GUI.background-helper-will-acquire")
+    static let helperWillAcquireNotification = Notification.Name("com.newtonlorenz.SafeMacAV.background-helper-will-acquire")
 
     @Published private(set) var mainShouldPresentMenuBar = false
     private let makeLease: () -> BackgroundWorkLease

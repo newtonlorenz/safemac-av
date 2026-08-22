@@ -414,13 +414,15 @@ verify_app_bundle() {
 
     finder_extension="$mounted_app_path/Contents/PlugIns/ClamAV-GUI-Finder.appex"
     finder_executable="$finder_extension/Contents/MacOS/ClamAV-GUI-Finder"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$finder_extension/Contents/Info.plist" 2>/dev/null)" == "com.newtonlorenz.ClamAV-GUI.FinderSync" ]] \
+        || fail "Finder extension bundle identifier is invalid"
     verify_distribution_code "$finder_extension" "$finder_executable" "$expected_team_id"
     verify_finder_handoff_entitlements "$mounted_app_path" "$finder_extension" "$expected_team_id"
 
     background_helper="$mounted_app_path/Contents/Library/LoginItems/SafeMacAVBackground.app"
     background_helper_executable="$background_helper/Contents/MacOS/SafeMacAVBackground"
     [[ -d "$background_helper" ]] || fail "background login helper not found: $background_helper"
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$background_helper/Contents/Info.plist" 2>/dev/null)" == "com.newtonlorenz.ClamAV-GUI.Background" ]] \
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$background_helper/Contents/Info.plist" 2>/dev/null)" == "com.newtonlorenz.SafeMacAV.Background" ]] \
         || fail "background login helper bundle identifier is invalid"
     background_helper_lsui="$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$background_helper/Contents/Info.plist" 2>/dev/null || true)"
     [[ "$background_helper_lsui" == "true" ]] || fail "background login helper must be an LSUIElement agent"

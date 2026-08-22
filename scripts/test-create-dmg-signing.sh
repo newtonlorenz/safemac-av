@@ -66,8 +66,9 @@ mkdir -p \
     "$sparkle/XPCServices/Installer.xpc/Contents/MacOS"
 printf app > "$app/Contents/MacOS/ClamAV-GUI"
 printf finder > "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
+printf "%s\\n" "<plist><dict><key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.FinderSync</string></dict></plist>" > "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/Info.plist"
 printf helper > "$helper/Contents/MacOS/SafeMacAVBackground"
-printf "%s\\n" "<plist><dict><key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.Background</string><key>LSUIElement</key><true/></dict></plist>" > "$helper/Contents/Info.plist"
+printf "%s\\n" "<plist><dict><key>CFBundleIdentifier</key><string>com.newtonlorenz.SafeMacAV.Background</string><key>LSUIElement</key><true/></dict></plist>" > "$helper/Contents/Info.plist"
 printf sparkle > "$sparkle/Sparkle"
 printf autoupdate > "$sparkle/Autoupdate"
 printf updater > "$sparkle/Updater.app/Contents/MacOS/Updater"
@@ -206,8 +207,10 @@ verify_build_products_unregistered() {
     local actual="$WORK_DIR/actual-unregister-targets.txt"
 
     printf '%s\n' \
+        "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app/Contents/Library/LoginItems/SafeMacAVBackground.app" \
         "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
         "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app" \
+        "$PROJECT_DIR/build/export/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app" \
         "$PROJECT_DIR/build/export/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
         "$PROJECT_DIR/build/export/SafeMac AV.app" \
         | sort > "$expected"
@@ -261,7 +264,25 @@ verify_signing_order() {
     assert_before "$helper" "$app"
 }
 
+verify_project_child_bundle_identifiers() {
+    local project_file="$PROJECT_DIR/ClamAV-GUI.xcodeproj/project.pbxproj"
+
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.Background";' "$project_file" \
+        || fail "background helper does not use the final SafeMac child identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.BackgroundTests";' "$project_file" \
+        || fail "background helper tests do not use the final SafeMac child identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI.FinderSync";' "$project_file" \
+        || fail "Finder extension no longer uses the required app-prefixed compatibility identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.Tests";' "$project_file" \
+        || fail "unit test bundle does not use the final SafeMac child identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.UITests";' "$project_file" \
+        || fail "UI test bundle does not use the final SafeMac child identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI";' "$project_file" \
+        || fail "main app compatibility identifier changed"
+}
+
 main() {
+    verify_project_child_bundle_identifiers
     make_fake_tools
     : > "$LSREGISTER_LOG"
     run_packaging

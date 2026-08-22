@@ -88,6 +88,13 @@ make_fixture() {
 PLIST
     printf '#!/bin/bash\n' > "$app_dir/Contents/MacOS/ClamAV-GUI"
     printf 'finder\n' > "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
+    cat > "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.FinderSync</string>
+</dict></plist>
+PLIST
     chmod +x "$app_dir/Contents/MacOS/ClamAV-GUI"
     printf '#!/bin/bash\n' > "$helper_dir/Contents/MacOS/SafeMacAVBackground"
     chmod +x "$helper_dir/Contents/MacOS/SafeMacAVBackground"
@@ -95,7 +102,7 @@ PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-    <key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.Background</string>
+    <key>CFBundleIdentifier</key><string>com.newtonlorenz.SafeMacAV.Background</string>
     <key>CFBundleExecutable</key><string>SafeMacAVBackground</string>
     <key>LSUIElement</key><true/>
 </dict></plist>
@@ -262,7 +269,8 @@ assert_mounted_cleanup_events() {
 
     mount_root="$(sed -n 's/^detach://p' "$WORK_DIR/mounted-cleanup-events.log")"
     [[ -n "$mount_root" ]] || fail "temporary DMG mount was not detached"
-    expected="unregister:$mount_root/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+    expected="unregister:$mount_root/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app
+unregister:$mount_root/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
 unregister:$mount_root/SafeMac AV.app
 detach:$mount_root"
     actual="$(cat "$WORK_DIR/mounted-cleanup-events.log")"
@@ -336,8 +344,10 @@ run_fixture_root_cleanup_case() {
         "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$WORK_DIR"
     LSREGISTER_BIN="$TEST_LSREGISTER_BIN" \
         "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$OUTSIDE_WORK_DIR"
-    expected="unregister:$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+    expected="unregister:$WORK_DIR/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app
+unregister:$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
 unregister:$WORK_DIR/SafeMac AV.app
+unregister:$OUTSIDE_WORK_DIR/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app
 unregister:$OUTSIDE_WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
 unregister:$OUTSIDE_WORK_DIR/SafeMac AV.app"
     actual="$(cat "$CLEANUP_EVENT_LOG")"

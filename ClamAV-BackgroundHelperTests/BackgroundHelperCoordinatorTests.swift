@@ -5,6 +5,26 @@ import XCTest
 
 @MainActor
 final class BackgroundHelperCoordinatorTests: XCTestCase {
+    func testSafeMacChildIdentityAndNotificationContract() {
+        XCTAssertEqual(BackgroundHelperBundle.bundleIdentifier, "com.newtonlorenz.SafeMacAV.Background")
+        XCTAssertEqual(
+            BackgroundRoute.open.distributedNotificationName,
+            Notification.Name("com.newtonlorenz.SafeMacAV.background-route.open")
+        )
+        XCTAssertEqual(
+            BackgroundRoute.settings.distributedNotificationName,
+            Notification.Name("com.newtonlorenz.SafeMacAV.background-route.settings")
+        )
+        XCTAssertEqual(
+            BackgroundRoute.checkForUpdates.distributedNotificationName,
+            Notification.Name("com.newtonlorenz.SafeMacAV.background-route.checkForUpdates")
+        )
+        XCTAssertEqual(
+            BackgroundMenuBarOwnershipCoordinator.helperWillAcquireNotification,
+            Notification.Name("com.newtonlorenz.SafeMacAV.background-helper-will-acquire")
+        )
+    }
+
     func testLoginSessionIsVisibleAndDoesNotRunScheduledUpdate() {
         var installedMenuBar = 0
         var acquiredLease = 0
@@ -590,7 +610,7 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
     func testTrustedCodeRequirementsAnchorAppleGenericAndConstrainIdentifierAndTeam() {
         XCTAssertEqual(
             BackgroundHelperBundle.staticCodeRequirement,
-            "anchor apple generic and identifier \"com.newtonlorenz.ClamAV-GUI.Background\" and certificate leaf[subject.OU] = \"CQPH8YR62A\""
+            "anchor apple generic and identifier \"com.newtonlorenz.SafeMacAV.Background\" and certificate leaf[subject.OU] = \"CQPH8YR62A\""
         )
         XCTAssertEqual(
             TrustedCodeRequirement.developerIDApplication(
