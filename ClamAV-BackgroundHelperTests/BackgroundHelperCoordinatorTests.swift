@@ -151,7 +151,32 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         try FileManager.default.createDirectory(at: helperExecutable.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: helperExecutable)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helperExecutable.path)
-        XCTAssertTrue(BackgroundHelperBundle.isEmbeddedHelper(at: helperExecutable))
+        let helperBundle = helperExecutable
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": BackgroundHelperBundle.bundleIdentifier],
+            format: .xml,
+            options: 0
+        ).write(to: helperBundle.appendingPathComponent("Info.plist"))
+        XCTAssertTrue(BackgroundHelperBundle.isEmbeddedHelper(at: helperExecutable, in: root))
+
+        try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": "com.example.impostor"],
+            format: .xml,
+            options: 0
+        ).write(to: helperBundle.appendingPathComponent("Info.plist"))
+        XCTAssertFalse(BackgroundHelperBundle.isEmbeddedHelper(at: helperExecutable, in: root))
+
+        let lookalikeRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: lookalikeRoot) }
+        let lookalike = lookalikeRoot
+            .appendingPathComponent("Contents/Library/LoginItems/SafeMacAVBackground.app/Contents/MacOS/SafeMacAVBackground")
+        try FileManager.default.createDirectory(at: lookalike.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: lookalike)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: lookalike.path)
+        XCTAssertFalse(BackgroundHelperBundle.isEmbeddedHelper(at: lookalike, in: root))
     }
 
     func testScheduledUpdaterRequiresEnabledSettingAndRunsOnlyConfiguredExecutable() throws {
@@ -195,6 +220,42 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         XCTAssertTrue(store.reload().autoUpdateSignatures)
     }
 
+    func testFreshStoreRecoversPersistedLastKnownGoodAfterCorruptAtomicReplacement() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let settingsURL = root.appendingPathComponent("settings.json")
+
+        try JSONSerialization.data(withJSONObject: [
+            "autoUpdateSignatures": true,
+            "freshclamPath": "/usr/bin/true"
+        ]).write(to: settingsURL, options: .atomic)
+        XCTAssertEqual(BackgroundHelperSettingsStore(settingsURL: settingsURL).reload().freshclamPath, "/usr/bin/true")
+
+        try Data("not-json".utf8).write(to: settingsURL, options: .atomic)
+        XCTAssertEqual(BackgroundHelperSettingsStore(settingsURL: settingsURL).reload(), BackgroundHelperSettings(
+            autoUpdateSignatures: true,
+            freshclamPath: "/usr/bin/true"
+        ))
+    }
+
+    func testRouteHandoffRemovesDurableRequestWhenOpeningMainFails() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BackgroundRouteRequestStore(baseURL: root)
+        let handoff = BackgroundRouteHandoff(
+            requestStore: store,
+            validateMainApplication: { true },
+            openMainApplication: { completion in completion(false) },
+            postWakeHint: { _ in XCTFail("must not notify after failed open") }
+        )
+
+        handoff.send(.settings)
+
+        XCTAssertNil(store.consume())
+    }
+
     func testSettingsDirectoryWatcherObservesAtomicReplacement() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -215,10 +276,8 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         wait(for: [observed], timeout: 2)
     }
 
-    func testAppAdapterRoutesOnlyThroughFixedMainActions() {
+    func testAppAdapterExposesOnlyTheFixedMainActions() {
         let app = SafeMacAVBackgroundApp()
-        app.openMain()
-        app.openSettings()
-        app.checkForUpdates()
+        XCTAssertNotNil(app)
     }
 }

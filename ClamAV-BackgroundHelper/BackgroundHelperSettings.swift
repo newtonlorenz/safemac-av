@@ -13,6 +13,7 @@ struct BackgroundHelperSettings: Equatable {
 /// known-good settings; safe defaults are used only before a valid first load.
 final class BackgroundHelperSettingsStore {
     private let settingsURL: URL
+    private let lastKnownGoodURL: URL
     private let fileManager: FileManager
     private let lock = NSLock()
     private var lastKnownGood: BackgroundHelperSettings?
@@ -21,21 +22,34 @@ final class BackgroundHelperSettingsStore {
 
     init(settingsURL: URL, fileManager: FileManager = .default) {
         self.settingsURL = settingsURL
+        self.lastKnownGoodURL = settingsURL
+            .deletingPathExtension()
+            .appendingPathExtension("last-known-good.json")
         self.fileManager = fileManager
     }
 
     deinit {
+        let source = source
+        self.source = nil
+        if directoryDescriptor >= 0 {
+            close(directoryDescriptor)
+            directoryDescriptor = -1
+        }
+        source?.setCancelHandler {}
         source?.cancel()
-        if directoryDescriptor >= 0 { close(directoryDescriptor) }
     }
 
     @discardableResult
     func reload() -> BackgroundHelperSettings {
-        let decoded = decodeSettings()
+        let primarySettings = decodeSettings(at: settingsURL)
+        let decoded = primarySettings ?? decodePersistedLastKnownGood()
         lock.lock()
         defer { lock.unlock() }
         if let decoded {
             lastKnownGood = decoded
+            if primarySettings != nil {
+                persistLastKnownGood(decoded)
+            }
         }
         return lastKnownGood ?? .safeDefaults
     }
@@ -65,8 +79,8 @@ final class BackgroundHelperSettingsStore {
         source.resume()
     }
 
-    private func decodeSettings() -> BackgroundHelperSettings? {
-        guard let data = try? Data(contentsOf: settingsURL),
+    private func decodeSettings(at url: URL) -> BackgroundHelperSettings? {
+        guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let autoUpdateSignatures = object["autoUpdateSignatures"] as? Bool else {
             return nil
@@ -77,5 +91,34 @@ final class BackgroundHelperSettingsStore {
             autoUpdateSignatures: autoUpdateSignatures,
             freshclamPath: freshclamPath
         )
+    }
+
+    private func decodePersistedLastKnownGood() -> BackgroundHelperSettings? {
+        guard isSafeOwnerOnlyRegularFile(at: lastKnownGoodURL) else { return nil }
+        return decodeSettings(at: lastKnownGoodURL)
+    }
+
+    private func persistLastKnownGood(_ settings: BackgroundHelperSettings) {
+        guard let data = try? JSONSerialization.data(withJSONObject: [
+            "autoUpdateSignatures": settings.autoUpdateSignatures,
+            "freshclamPath": settings.freshclamPath as Any
+        ], options: [.sortedKeys]) else { return }
+        do {
+            try data.write(to: lastKnownGoodURL, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: lastKnownGoodURL.path)
+        } catch {
+            return
+        }
+    }
+
+    private func isSafeOwnerOnlyRegularFile(at url: URL) -> Bool {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              attributes[.ownerAccountID] as? NSNumber == NSNumber(value: geteuid()),
+              let mode = attributes[.posixPermissions] as? NSNumber,
+              mode.intValue & 0o077 == 0 else {
+            return false
+        }
+        return true
     }
 }
