@@ -170,6 +170,26 @@ final class LaunchModeParserTests: XCTestCase {
         XCTAssertEqual(store.peek(), .settings)
     }
 
+    func testBackgroundRouteAcknowledgementDoesNotDeleteNewerAtomicReplacement() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let requestURL = root.appendingPathComponent("background-route.request")
+        var store: BackgroundRouteRequestStore!
+        store = BackgroundRouteRequestStore(
+            baseURL: root,
+            removeRequest: { acknowledgedURL in
+                XCTAssertNotEqual(acknowledgedURL, requestURL)
+                XCTAssertTrue(store.enqueue(.open))
+                try FileManager.default.removeItem(at: acknowledgedURL)
+            }
+        )
+
+        XCTAssertTrue(store.enqueue(.settings))
+        XCTAssertTrue(store.acknowledge(.settings))
+        XCTAssertEqual(store.peek(), .open)
+    }
+
     func testBackgroundRouteStoreRejectsSymlinkedRequestFile() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

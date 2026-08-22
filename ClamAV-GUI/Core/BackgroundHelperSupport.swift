@@ -362,13 +362,24 @@ final class BackgroundRouteRequestStore {
     /// Acknowledge only the route just dispatched. A changed request remains
     /// durable for the next drain instead of being deleted as stale work.
     func acknowledge(_ route: BackgroundRoute) -> Bool {
-        guard readSecureRequest() == route.rawValue else {
+        let claimURL = requestURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".background-route.request.claim-\(UUID().uuidString)", isDirectory: false)
+        do {
+            try fileManager.moveItem(at: requestURL, to: claimURL)
+        } catch {
+            return false
+        }
+
+        guard readSecureRequest(at: claimURL) == route.rawValue else {
+            restoreClaim(at: claimURL)
             return false
         }
         do {
-            try removeRequest(requestURL)
+            try removeRequest(claimURL)
             return true
         } catch {
+            restoreClaim(at: claimURL)
             return false
         }
     }
@@ -412,8 +423,18 @@ final class BackgroundRouteRequestStore {
             && fchmod(descriptor, S_IRUSR | S_IWUSR) == 0
     }
 
-    private func readSecureRequest() -> String? {
-        let descriptor = open(requestURL.path, O_RDONLY | O_NOFOLLOW)
+    private func restoreClaim(at claimURL: URL) {
+        guard fileManager.fileExists(atPath: claimURL.path) else { return }
+        if fileManager.fileExists(atPath: requestURL.path) {
+            try? fileManager.removeItem(at: claimURL)
+        } else {
+            try? fileManager.moveItem(at: claimURL, to: requestURL)
+        }
+    }
+
+    private func readSecureRequest(at url: URL? = nil) -> String? {
+        let targetURL = url ?? requestURL
+        let descriptor = open(targetURL.path, O_RDONLY | O_NOFOLLOW)
         guard descriptor >= 0 else { return nil }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         var attributes = stat()

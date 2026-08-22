@@ -158,7 +158,9 @@ final class LaunchAtLoginManager: LaunchAtLoginManaging {
         self.init(
             service: BackgroundLoginItemLaunchAtLoginService(),
             legacyService: MainAppLaunchAtLoginService(),
-            shouldMigrateLegacyRegistration: Self.isCanonicalInstalledBundle
+            shouldMigrateLegacyRegistration: {
+                Self.isCanonicalInstalledBundle(at: Bundle.main.bundleURL)
+            }
         )
     }
 
@@ -279,11 +281,11 @@ final class LaunchAtLoginManager: LaunchAtLoginManaging {
         }
     }
 
-    private static func isCanonicalInstalledBundle() -> Bool {
+    static func isCanonicalInstalledBundle(at bundleURL: URL) -> Bool {
         let canonicalURL = URL(fileURLWithPath: "/Applications/SafeMac AV.app", isDirectory: true)
             .standardizedFileURL
             .resolvingSymlinksInPath()
-        return Bundle.main.bundleURL.standardizedFileURL.resolvingSymlinksInPath() == canonicalURL
+        return bundleURL.standardizedFileURL.resolvingSymlinksInPath().path == canonicalURL.path
     }
 
     private static func isRequested(_ serviceStatus: LaunchAtLoginServiceStatus) -> Bool {

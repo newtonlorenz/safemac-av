@@ -1023,6 +1023,13 @@ final class MenuBarManagerTests: XCTestCase {
             isAutomatedTest: true
         ))
     }
+
+    func testNonDirectoryURLHintStillQualifiesForLegacyLoginMigration() {
+        let installedURL = URL(fileURLWithPath: "/Applications/SafeMac AV.app", isDirectory: false)
+
+        XCTAssertEqual(installedURL.path, "/Applications/SafeMac AV.app")
+        XCTAssertTrue(LaunchAtLoginManager.isCanonicalInstalledBundle(at: installedURL))
+    }
 }
 
 @MainActor
