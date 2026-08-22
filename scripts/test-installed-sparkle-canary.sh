@@ -5,6 +5,7 @@ IFS=$'\n\t'
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/safemac-installed-sparkle-canary.XXXXXX")"
+FAKE_BIN="$WORK_DIR/bin"
 
 cleanup() {
     rm -rf "$WORK_DIR"
@@ -15,6 +16,37 @@ trap cleanup EXIT
 fail() {
     printf 'Test failed: %s\n' "$1" >&2
     exit 1
+}
+
+write_fake_tool() {
+    local name="$1"
+    local body="$2"
+
+    {
+        printf '#!/bin/bash\n'
+        printf 'set -Eeuo pipefail\n'
+        printf '%s\n' "$body"
+    } > "$FAKE_BIN/$name"
+    chmod +x "$FAKE_BIN/$name"
+}
+
+make_fake_tools() {
+    mkdir -p "$FAKE_BIN"
+    write_fake_tool codesign '
+if [[ " $* " == *" --verify "* && "${CANARY_CODESIGN_VERIFY_FAIL:-0}" == "1" ]]; then
+    exit 1
+fi
+if [[ " $* " == *" -dv "* ]]; then
+    team_id="${CANARY_CODESIGN_TEAM_ID:-CQPH8YR62A}"
+    flags="CodeDirectory v=20500 flags=0x10000(runtime)"
+    [[ "${CANARY_CODESIGN_MISSING_RUNTIME:-0}" != "1" ]] || flags="CodeDirectory v=20500 flags=0x0(none)"
+    printf "%s\n" \
+        "Authority=Developer ID Application: SafeMac Test ($team_id)" \
+        "TeamIdentifier=$team_id" \
+        "Timestamp=Aug 22, 2026 at 02:00:00" \
+        "$flags" >&2
+fi'
+    write_fake_tool spctl '[[ "${CANARY_SPCTL_FAIL:-0}" != "1" ]]'
 }
 
 make_fixture() {
@@ -33,6 +65,8 @@ make_fixture() {
     <string>1.1.0</string>
     <key>CFBundleVersion</key>
     <string>2</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.newtonlorenz.ClamAV-GUI</string>
     <key>SUFeedURL</key>
     <string>https://updates.example.com/appcast.xml</string>
     <key>SUPublicEDKey</key>
@@ -183,9 +217,47 @@ run_invalid_installed_key_failure_case() {
     mv "$WORK_DIR/SafeMac AV.app/Contents/Info.plist.bak" "$WORK_DIR/SafeMac AV.app/Contents/Info.plist"
 }
 
+run_signature_policy_failure_cases() {
+    if CANARY_CODESIGN_TEAM_ID="WRONGTEAM01" run_success_case >/dev/null 2>&1; then
+        fail "wrong-team installed app was accepted"
+    fi
+    if CANARY_CODESIGN_VERIFY_FAIL=1 run_success_case >/dev/null 2>&1; then
+        fail "tampered or unsigned installed app was accepted"
+    fi
+    if CANARY_CODESIGN_MISSING_RUNTIME=1 run_success_case >/dev/null 2>&1; then
+        fail "installed app without hardened runtime was accepted"
+    fi
+    if CANARY_SPCTL_FAIL=1 run_success_case >/dev/null 2>&1; then
+        fail "Gatekeeper-rejected installed app was accepted"
+    fi
+}
+
+run_test_fixture_override_case() {
+    CANARY_CODESIGN_VERIFY_FAIL=1 \
+    CANARY_SPCTL_FAIL=1 \
+    SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+        run_success_case >/dev/null \
+        || fail "explicit unsigned test-fixture override was rejected"
+}
+
+run_test_fixture_override_scope_case() {
+    mkdir -p "$WORK_DIR/unrelated-temp"
+    if TMPDIR="$WORK_DIR/unrelated-temp" \
+       CANARY_CODESIGN_VERIFY_FAIL=1 \
+       SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE=1 \
+        run_success_case >/dev/null 2>&1; then
+        fail "unsigned fixture override escaped its temporary test directory"
+    fi
+}
+
 main() {
+    make_fake_tools
+    export PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin"
     make_fixture
     run_success_case
+    run_signature_policy_failure_cases
+    run_test_fixture_override_case
+    run_test_fixture_override_scope_case
     run_same_version_failure_case
     run_feed_signature_failure_case
     run_archive_signature_failure_case

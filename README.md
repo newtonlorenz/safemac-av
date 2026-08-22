@@ -183,9 +183,9 @@ Maintainers can also run the manual **Release package** GitHub Actions workflow 
 - `NOTARY_KEY_BASE64`: base64-encoded App Store Connect API `.p8`
 - `NOTARY_KEY_ID`: App Store Connect API key ID
 - `NOTARY_ISSUER_ID`: App Store Connect issuer ID
-- `SPARKLE_PRIVATE_ED_KEY_BASE64`: base64-encoded Sparkle private EdDSA key for appcast generation
+- `SPARKLE_PRIVATE_ED_KEY_BASE64`: base64 encoding of the modern private-key file exported by Sparkle `generate_keys -x` (the exported file must decode to a 32-byte Ed25519 seed)
 
-Set repository variables `SPARKLE_FEED_URL`, `SPARKLE_PUBLIC_ED_KEY`, and `SPARKLE_DOWNLOAD_URL_PREFIX` to embed app-update configuration in release builds and generate appcasts with published DMG URLs. The release workflow requires all three variables plus the Sparkle private-key secret. If the feed URL or public key is missing from a non-release local build, SafeMac AV disables its app-update UI instead of checking a placeholder feed. Generate a local appcast from a directory containing release archives with:
+Set repository variables `SPARKLE_FEED_URL`, `SPARKLE_PUBLIC_ED_KEY`, and `SPARKLE_DOWNLOAD_URL_PREFIX` to embed app-update configuration in release builds and generate appcasts with published DMG URLs. Both URLs must be credential-free HTTPS URLs, the download prefix must end in `/`, and the public key must be canonical base64 for exactly 32 bytes. Before importing the Developer ID certificate, the release workflow decodes the private-key file under the runner's temporary directory with mode `0600`, derives its public key, and rejects any public/private mismatch. The temporary key is removed even if a later step fails. If the feed URL or public key is missing from a non-release local build, SafeMac AV disables its app-update UI instead of checking a placeholder feed. Generate a local appcast from a directory containing release archives with:
 
 ```bash
 SPARKLE_PRIVATE_ED_KEY='/path/to/sparkle_private_ed_key' \
@@ -193,7 +193,7 @@ SPARKLE_DOWNLOAD_URL_PREFIX='https://example.com/downloads/' \
   ./scripts/generate-appcast.sh build/appcast
 ```
 
-Before replacing the currently installed app, verify that the signed appcast advertises exactly one newer update to that installed build:
+Before replacing the currently installed app, verify that the signed appcast advertises exactly one newer update to that installed build. Both canary scripts require a deep, strict Developer ID Application signature from Team `CQPH8YR62A`, hardened runtime, secure timestamp, and Gatekeeper trust:
 
 ```bash
 ./scripts/verify-installed-sparkle-canary.sh "/Applications/SafeMac AV.app" build/appcast/appcast.xml build/SafeMac-AV.dmg

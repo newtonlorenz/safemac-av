@@ -36,6 +36,19 @@ jobs:
           xcodebuild -version
           xcrun notarytool --version
 
+      - name: Preflight Sparkle release trust
+        env:
+          SPARKLE_FEED_URL: ${{ vars.SPARKLE_FEED_URL }}
+          SPARKLE_DOWNLOAD_URL_PREFIX: ${{ vars.SPARKLE_DOWNLOAD_URL_PREFIX }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+          SPARKLE_PRIVATE_ED_KEY_BASE64: ${{ secrets.SPARKLE_PRIVATE_ED_KEY_BASE64 }}
+        run: |
+          set -Eeuo pipefail
+
+          SPARKLE_PRIVATE_ED_KEY="$RUNNER_TEMP/sparkle_private_ed_key"
+          ./scripts/prepare-sparkle-release-key.sh "$SPARKLE_PRIVATE_ED_KEY"
+          echo "SPARKLE_PRIVATE_ED_KEY=$SPARKLE_PRIVATE_ED_KEY" >> "$GITHUB_ENV"
+
       - name: Import Developer ID certificate
         env:
           CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
@@ -105,17 +118,12 @@ jobs:
 
       - name: Generate Sparkle appcast
         env:
-          SPARKLE_PRIVATE_ED_KEY_BASE64: ${{ secrets.SPARKLE_PRIVATE_ED_KEY_BASE64 }}
           SPARKLE_DOWNLOAD_URL_PREFIX: ${{ vars.SPARKLE_DOWNLOAD_URL_PREFIX }}
         run: |
           set -Eeuo pipefail
 
-          : "${SPARKLE_PRIVATE_ED_KEY_BASE64:?SPARKLE_PRIVATE_ED_KEY_BASE64 secret is required}"
           : "${SPARKLE_DOWNLOAD_URL_PREFIX:?SPARKLE_DOWNLOAD_URL_PREFIX repository variable is required}"
-
-          SPARKLE_PRIVATE_ED_KEY="$RUNNER_TEMP/sparkle_private_ed_key"
-          printf '%s' "$SPARKLE_PRIVATE_ED_KEY_BASE64" | base64 --decode > "$SPARKLE_PRIVATE_ED_KEY"
-          chmod 600 "$SPARKLE_PRIVATE_ED_KEY"
+          : "${SPARKLE_PRIVATE_ED_KEY:?Sparkle release preflight did not provide a private key}"
           mkdir -p build/appcast
           cp build/SafeMac-AV.dmg build/appcast/
           SPARKLE_PRIVATE_ED_KEY="$SPARKLE_PRIVATE_ED_KEY" \
@@ -144,6 +152,7 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          rm -f "$RUNNER_TEMP/sparkle_private_ed_key"
           if [[ -n "${RELEASE_KEYCHAIN_PATH:-}" && -f "$RELEASE_KEYCHAIN_PATH" ]]; then
             security delete-keychain "$RELEASE_KEYCHAIN_PATH"
           fi

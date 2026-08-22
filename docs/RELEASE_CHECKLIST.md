@@ -14,10 +14,11 @@ Use this checklist for a signed and notarized release. Publication is a separate
   - `NOTARY_KEY_ID`
   - `NOTARY_ISSUER_ID`
 - [ ] Confirm repository variables and appcast secret for signed Sparkle updates:
-  - `SPARKLE_FEED_URL`
-  - `SPARKLE_PUBLIC_ED_KEY`
-  - `SPARKLE_DOWNLOAD_URL_PREFIX`
-  - `SPARKLE_PRIVATE_ED_KEY_BASE64`
+  - `SPARKLE_FEED_URL`: credential-free HTTPS URL without a query or fragment
+  - `SPARKLE_PUBLIC_ED_KEY`: canonical base64 for exactly 32 bytes
+  - `SPARKLE_DOWNLOAD_URL_PREFIX`: credential-free HTTPS URL ending in `/`, without a query or fragment
+  - `SPARKLE_PRIVATE_ED_KEY_BASE64`: base64 encoding of a modern Sparkle exported key file whose decoded seed is exactly 32 bytes
+- [ ] Confirm the Sparkle public key belongs to that private key. The workflow independently derives and compares it before importing the Developer ID certificate.
 
 ## Verify source
 
@@ -57,14 +58,14 @@ shasum -a 256 -c SHA256SUMS.txt
 ./scripts/verify-release-package.sh build
 ```
 
-- [ ] Before replacing the currently installed app, verify the signed appcast advertises exactly one newer update to that installed build:
+- [ ] Before replacing the currently installed app, verify the signed appcast advertises exactly one newer update to that installed build. The verifier requires a deep, strict Developer ID Application signature from Team `CQPH8YR62A`, hardened runtime, secure timestamp, and Gatekeeper trust:
 
 ```bash
 ./scripts/verify-installed-sparkle-canary.sh "/Applications/SafeMac AV.app" build/appcast/appcast.xml build/SafeMac-AV.dmg
 ```
 
 - [ ] Copy `SafeMac AV.app` to `/Applications`, launch it, and confirm the main window and menu-bar item open.
-- [ ] If Sparkle is configured, confirm `appcast.xml` is present and references the published DMG URL prefix.
+- [ ] Confirm `appcast.xml` is present, has valid feed and archive EdDSA signatures, and references the published DMG URL prefix.
 
 ## Publish boundary
 
@@ -76,7 +77,7 @@ After final publication approval:
 - [ ] Upload `SafeMac-AV.dmg`, `SHA256SUMS.txt`, and `appcast.xml` if generated.
 - [ ] Re-download release assets and repeat checksum, stapler, and Gatekeeper verification.
 - [ ] Update any public download/appcast hosting that is not served from GitHub Releases.
-- [ ] Run the installed-app Sparkle canary against the published feed:
+- [ ] Run the installed-app Sparkle canary against the published feed. It rechecks the same signature, Team ID, runtime, timestamp, and Gatekeeper policy before and after updating its temporary copy:
 
 ```bash
 SAFEMAC_CANARY_EXPECT_UPDATE=1 \

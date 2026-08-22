@@ -218,6 +218,68 @@ run_feed_signature_failure_case() {
     mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
 }
 
+run_malformed_feed_signature_failure_cases() {
+    local replacement
+
+    for replacement in 'not-base64!' 'YWJj'; do
+        cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+        REPLACEMENT="$replacement" perl -0pi -e \
+            's/(?m)^edSignature:\s*\S+/edSignature: $ENV{REPLACEMENT}/' \
+            "$WORK_DIR/package/appcast/appcast.xml"
+        if PATH="$WORK_DIR/bin:$PATH" \
+           SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "malformed or wrong-length signed-feed signature was accepted: $replacement"
+        fi
+        mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+    done
+}
+
+write_resigned_archive_signature() {
+    local replacement="$1"
+
+    swift - "$WORK_DIR/package/appcast/appcast.xml" "$replacement" <<'SWIFT'
+import CryptoKit
+import Foundation
+
+let appcastURL = URL(fileURLWithPath: CommandLine.arguments[1])
+let replacement = CommandLine.arguments[2]
+let appcastData = try Data(contentsOf: appcastURL)
+let prefix = Data("<!-- sparkle-signatures:\n".utf8)
+guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]),
+      var content = String(data: appcastData[..<prefixRange.lowerBound], encoding: .utf8) else {
+    exit(1)
+}
+let expression = try NSRegularExpression(pattern: #"sparkle:edSignature="[^"]+""#)
+let range = NSRange(content.startIndex..<content.endIndex, in: content)
+content = expression.stringByReplacingMatches(
+    in: content,
+    range: range,
+    withTemplate: "sparkle:edSignature=\"\(replacement)\""
+)
+let signedContent = Data(content.utf8)
+let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
+let feedSignature = try key.signature(for: signedContent).base64EncodedString()
+let signedAppcast = "\(content)<!-- sparkle-signatures:\nedSignature: \(feedSignature)\nlength: \(signedContent.count)\n-->\n"
+try signedAppcast.write(to: appcastURL, atomically: true, encoding: .utf8)
+SWIFT
+}
+
+run_malformed_archive_signature_failure_cases() {
+    local replacement
+
+    for replacement in 'not-base64!' 'YWJj'; do
+        cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+        write_resigned_archive_signature "$replacement"
+        if PATH="$WORK_DIR/bin:$PATH" \
+           SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "malformed or wrong-length archive signature was accepted: $replacement"
+        fi
+        mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+    done
+}
+
 run_archive_signature_failure_case() {
     cp "$WORK_DIR/package/SafeMac-AV.dmg" "$WORK_DIR/package/SafeMac-AV.dmg.bak"
     cp "$WORK_DIR/package/SHA256SUMS.txt" "$WORK_DIR/package/SHA256SUMS.txt.bak"
@@ -359,7 +421,9 @@ main() {
     run_appcast_failure_case
     run_missing_appcast_failure_case
     run_feed_signature_failure_case
+    run_malformed_feed_signature_failure_cases
     run_archive_signature_failure_case
+    run_malformed_archive_signature_failure_cases
     run_duplicate_matching_enclosure_failure_case
     printf 'verify-release-package tests passed\n'
 }

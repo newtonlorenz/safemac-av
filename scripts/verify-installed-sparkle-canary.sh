@@ -11,6 +11,9 @@ INSTALLED_APP_PATH="${1:-/Applications/SafeMac AV.app}"
 APPCAST_PATH="${2:-build/appcast/appcast.xml}"
 DMG_PATH="${3:-build/SafeMac-AV.dmg}"
 EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX="${EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX:-}"
+EXPECTED_BUNDLE_ID="com.newtonlorenz.ClamAV-GUI"
+EXPECTED_TEAM_ID="CQPH8YR62A"
+ALLOW_UNSIGNED_TEST_FIXTURE="${SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE:-0}"
 
 fail() {
     printf 'Error: %s\n' "$1" >&2
@@ -44,11 +47,59 @@ optional_bundle_value() {
     /usr/libexec/PlistBuddy -c "Print :$key" "$info_plist" 2>/dev/null || true
 }
 
+is_explicit_test_fixture() {
+    local app_parent
+    local temp_root
+
+    [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]] || return 1
+    app_parent="$(cd "$(dirname "$INSTALLED_APP_PATH")" && pwd -P)"
+    temp_root="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+    [[ "$app_parent/" == "$temp_root/"* ]] \
+        || fail "unsigned fixture override is restricted to the temporary test directory"
+}
+
+verify_installed_app_policy() {
+    local bundle_id
+    local details
+
+    bundle_id="$(bundle_value CFBundleIdentifier)"
+    [[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]] \
+        || fail "installed app has an unexpected bundle identifier"
+
+    if is_explicit_test_fixture; then
+        info "unsigned temporary test fixture override is active"
+        return
+    fi
+
+    codesign --verify --deep --strict --verbose=2 "$INSTALLED_APP_PATH" \
+        || fail "installed app signature verification failed"
+    details="$(codesign -dv --verbose=4 "$INSTALLED_APP_PATH" 2>&1)" \
+        || fail "unable to inspect installed app signature"
+    grep -Fq 'Authority=Developer ID Application:' <<< "$details" \
+        || fail "installed app is not signed with Developer ID Application"
+    grep -Fq "TeamIdentifier=$EXPECTED_TEAM_ID" <<< "$details" \
+        || fail "installed app is not signed by the expected Developer ID team"
+    grep -Eq '^Timestamp=.+$' <<< "$details" \
+        || fail "installed app signature does not include a secure timestamp"
+    if grep -Fq 'Timestamp=none' <<< "$details"; then
+        fail "installed app signature does not include a secure timestamp"
+    fi
+    grep -Fq 'runtime' <<< "$details" \
+        || fail "installed app signature is missing hardened runtime"
+    spctl -a -vv -t execute "$INSTALLED_APP_PATH" >/dev/null 2>&1 \
+        || fail "Gatekeeper does not trust the installed app"
+
+    info "installed app uses Developer ID Team $EXPECTED_TEAM_ID, hardened runtime, and Gatekeeper trust"
+}
+
 main() {
+    command_path codesign
+    command_path spctl
     command_path swift
     [[ -d "$INSTALLED_APP_PATH" ]] || fail "installed app not found: $INSTALLED_APP_PATH"
     require_file "$APPCAST_PATH" "Sparkle appcast"
     require_file "$DMG_PATH" "release DMG"
+    verify_installed_app_policy
 
     local installed_version
     local installed_short_version

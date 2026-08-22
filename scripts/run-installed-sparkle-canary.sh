@@ -14,9 +14,9 @@ INSTALL_UPDATE="${SAFEMAC_CANARY_INSTALL:-0}"
 KEEP_WORKDIR="${SAFEMAC_CANARY_KEEP_WORKDIR:-0}"
 EXPECT_UPDATE="${SAFEMAC_CANARY_EXPECT_UPDATE:-0}"
 ALLOW_MAJOR_UPGRADES="${SAFEMAC_CANARY_ALLOW_MAJOR_UPGRADES:-0}"
-ALLOW_NON_DEVELOPER_ID="${SAFEMAC_CANARY_ALLOW_NON_DEVELOPER_ID:-0}"
-ALLOW_UNTRUSTED_GATEKEEPER="${SAFEMAC_CANARY_ALLOW_UNTRUSTED_GATEKEEPER:-0}"
 EXPECTED_BUNDLE_ID="${SAFEMAC_CANARY_BUNDLE_ID:-com.newtonlorenz.ClamAV-GUI}"
+EXPECTED_TEAM_ID="CQPH8YR62A"
+ALLOW_UNSIGNED_TEST_FIXTURE="${SAFEMAC_CANARY_TEST_ONLY_ALLOW_UNSIGNED_FIXTURE:-0}"
 USER_AGENT="${SAFEMAC_CANARY_USER_AGENT:-SafeMac AV Sparkle canary}"
 
 WORK_DIR=""
@@ -86,29 +86,44 @@ verify_app_policy() {
     [[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]] \
         || fail "$label has unexpected bundle identifier: ${bundle_id:-missing}"
 
+    if is_explicit_test_fixture "$app_path"; then
+        info "$label uses the explicit unsigned temporary test-fixture override"
+        return
+    fi
+
     codesign --verify --deep --strict --verbose=2 "$app_path" \
         || fail "$label signature verification failed"
 
     details="$(codesign -dv --verbose=4 "$app_path" 2>&1)" \
         || fail "unable to inspect $label signature"
-    if [[ "$ALLOW_NON_DEVELOPER_ID" != "1" ]]; then
-        grep -Fq 'Authority=Developer ID Application:' <<< "$details" \
-            || fail "$label is not signed with Developer ID Application"
-        grep -Eq '^Timestamp=.+$' <<< "$details" \
-            || fail "$label signature does not include a secure timestamp"
-        if grep -Fq 'Timestamp=none' <<< "$details"; then
-            fail "$label signature does not include a secure timestamp"
-        fi
-        grep -Fq 'runtime' <<< "$details" \
-            || fail "$label signature is missing hardened runtime"
+    grep -Fq 'Authority=Developer ID Application:' <<< "$details" \
+        || fail "$label is not signed with Developer ID Application"
+    grep -Fq "TeamIdentifier=$EXPECTED_TEAM_ID" <<< "$details" \
+        || fail "$label is not signed by the expected Developer ID team"
+    grep -Eq '^Timestamp=.+$' <<< "$details" \
+        || fail "$label signature does not include a secure timestamp"
+    if grep -Fq 'Timestamp=none' <<< "$details"; then
+        fail "$label signature does not include a secure timestamp"
     fi
+    grep -Fq 'runtime' <<< "$details" \
+        || fail "$label signature is missing hardened runtime"
 
-    if ! spctl -a -vv -t execute "$app_path" >/dev/null 2>&1; then
-        [[ "$ALLOW_UNTRUSTED_GATEKEEPER" == "1" ]] \
-            || fail "Gatekeeper does not trust $label"
-    fi
+    spctl -a -vv -t execute "$app_path" >/dev/null 2>&1 \
+        || fail "Gatekeeper does not trust $label"
 
-    info "$label signature and Gatekeeper trust are acceptable"
+    info "$label uses Developer ID Team $EXPECTED_TEAM_ID, hardened runtime, and Gatekeeper trust"
+}
+
+is_explicit_test_fixture() {
+    local app_path="$1"
+    local app_parent
+    local temp_root
+
+    [[ "$ALLOW_UNSIGNED_TEST_FIXTURE" == "1" ]] || return 1
+    app_parent="$(cd "$(dirname "$app_path")" && pwd -P)"
+    temp_root="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+    [[ "$app_parent/" == "$temp_root/"* ]] \
+        || fail "unsigned fixture override is restricted to the temporary test directory"
 }
 
 copy_canary_app() {
