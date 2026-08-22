@@ -379,11 +379,8 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertTrue(source.contains("MenuBarExtra"))
         XCTAssertFalse(source.contains("@StateObject private var initialLaunchHandler"))
         XCTAssertFalse(source.contains("applicationDelegate.configure"))
-        XCTAssertTrue(
-            source.contains(
-                "SoftwareUpdateManager(startsUpdater: launchMode.startsSoftwareUpdateSubsystem)"
-            )
-        )
+        XCTAssertTrue(source.contains("SoftwareUpdateManager(startsUpdater: false)"))
+        XCTAssertTrue(source.contains("softwareUpdateManager.startUpdaterIfPossible()"))
         let installConfiguration = try XCTUnwrap(
             source.range(of: "ApplicationLaunchConfigurationRegistry.shared.install")
         )

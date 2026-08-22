@@ -15,6 +15,7 @@ All notable project changes will be documented in this file. The format follows 
 
 - New automatic signature schedules invoke only the embedded helper with a fixed flag; the foreground app keeps the legacy scheduled-update handler for one compatibility release.
 - Freshclam success parsing now fails closed for every nonzero exit, and helper/main handoff code requirements require the Apple generic anchor, exact bundle identifier, and Team ID.
+- Sparkle now defers its first-run consent until visible interactive launch maintenance completes; hidden and scheduled modes start it only through an explicit Check for Updates action.
 
 ## [1.2.0] - 2026-08-22
 

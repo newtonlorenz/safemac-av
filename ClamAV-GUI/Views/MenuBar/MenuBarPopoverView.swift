@@ -73,7 +73,7 @@ struct MenuBarPopoverView: View {
                 Label("Check for App Updates", systemImage: "sparkles")
             }
             .buttonStyle(.plain)
-            .disabled(!softwareUpdateManager.canCheckForUpdates)
+            .disabled(!softwareUpdateManager.isConfigured)
             .accessibilityIdentifier("menu-bar-check-for-app-updates")
             .accessibilityLabel(updateAccessibilityLabel)
 
