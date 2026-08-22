@@ -99,6 +99,8 @@ jobs:
 
           : "${NOTARY_KEY_ID:?NOTARY_KEY_ID is required}"
           : "${NOTARY_ISSUER_ID:?NOTARY_ISSUER_ID is required}"
+          : "${SPARKLE_FEED_URL:?SPARKLE_FEED_URL repository variable is required}"
+          : "${SPARKLE_PUBLIC_ED_KEY:?SPARKLE_PUBLIC_ED_KEY repository variable is required}"
           ./scripts/create-dmg.sh
 
       - name: Generate Sparkle appcast
@@ -108,10 +110,8 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          if [[ -z "$SPARKLE_PRIVATE_ED_KEY_BASE64" ]]; then
-            echo "SPARKLE_PRIVATE_ED_KEY_BASE64 not set; skipping appcast generation."
-            exit 0
-          fi
+          : "${SPARKLE_PRIVATE_ED_KEY_BASE64:?SPARKLE_PRIVATE_ED_KEY_BASE64 secret is required}"
+          : "${SPARKLE_DOWNLOAD_URL_PREFIX:?SPARKLE_DOWNLOAD_URL_PREFIX repository variable is required}"
 
           SPARKLE_PRIVATE_ED_KEY="$RUNNER_TEMP/sparkle_private_ed_key"
           printf '%s' "$SPARKLE_PRIVATE_ED_KEY_BASE64" | base64 --decode > "$SPARKLE_PRIVATE_ED_KEY"
@@ -123,6 +123,10 @@ jobs:
             ./scripts/generate-appcast.sh build/appcast
 
       - name: Verify distribution artifacts
+        env:
+          EXPECTED_SPARKLE_FEED_URL: ${{ vars.SPARKLE_FEED_URL }}
+          EXPECTED_SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+          EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX: ${{ vars.SPARKLE_DOWNLOAD_URL_PREFIX }}
         run: ./scripts/verify-release-package.sh build
 
       - name: Upload release artifacts
