@@ -1,5 +1,4 @@
 import AppKit
-import Darwin
 import Foundation
 
 @main
@@ -101,50 +100,5 @@ private final class BackgroundSignatureUpdater {
               let path = object["freshclamPath"] as? String,
               path.hasPrefix("/") else { return nil }
         return path
-    }
-}
-
-private final class BackgroundWorkLease {
-    private let url: URL
-    private var descriptor: Int32 = -1
-
-    init(name: String) {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        url = support
-            .appendingPathComponent("ClamAV-GUI", isDirectory: true)
-            .appendingPathComponent("\(name).lock", isDirectory: false)
-    }
-
-    deinit { release() }
-
-    func acquire() -> Bool {
-        guard descriptor == -1 else { return true }
-        do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.deletingLastPathComponent().path)
-        } catch {
-            return false
-        }
-        let fd = open(url.path, O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
-        guard fd >= 0 else { return false }
-        var attributes = stat()
-        guard fstat(fd, &attributes) == 0,
-              attributes.st_uid == geteuid(),
-              (attributes.st_mode & S_IFMT) == S_IFREG,
-              (attributes.st_mode & 0o077) == 0,
-              flock(fd, LOCK_EX | LOCK_NB) == 0 else {
-            close(fd)
-            return false
-        }
-        descriptor = fd
-        return true
-    }
-
-    func release() {
-        guard descriptor >= 0 else { return }
-        flock(descriptor, LOCK_UN)
-        close(descriptor)
-        descriptor = -1
     }
 }

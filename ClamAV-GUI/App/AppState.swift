@@ -478,6 +478,12 @@ final class AppState: ObservableObject {
             addLog(.info, "Skipped scheduled signature update because automatic updates are disabled")
             return
         }
+        let lease = BackgroundWorkLease(name: "signature-update")
+        guard lease.acquire() else {
+            addLog(.info, "Skipped scheduled signature update because another SafeMac AV process is already updating signatures")
+            return
+        }
+        defer { lease.release() }
         await updateSignatures(using: settings)
     }
 

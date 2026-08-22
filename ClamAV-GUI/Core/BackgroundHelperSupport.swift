@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// The helper has a deliberately tiny command surface. It must never accept a
@@ -55,5 +56,65 @@ enum BackgroundRoute: String, CaseIterable {
 
     var distributedNotificationName: Notification.Name {
         Notification.Name("com.newtonlorenz.ClamAV-GUI.background-route.\(rawValue)")
+    }
+}
+
+/// A same-user, symlink-resistant advisory lease shared by the legacy main
+/// executable and the embedded helper. The descriptor stays open for the
+/// duration of work so the kernel releases it if either process terminates.
+final class BackgroundWorkLease {
+    private let url: URL
+    private let fileManager: FileManager
+    private var descriptor: Int32 = -1
+
+    init(
+        name: String,
+        baseURL: URL? = nil,
+        fileManager: FileManager = .default
+    ) {
+        self.fileManager = fileManager
+        if let baseURL {
+            url = baseURL.appendingPathComponent("\(name).lock", isDirectory: false)
+        } else {
+            let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+            url = support
+                .appendingPathComponent("ClamAV-GUI", isDirectory: true)
+                .appendingPathComponent("\(name).lock", isDirectory: false)
+        }
+    }
+
+    deinit { release() }
+
+    func acquire() -> Bool {
+        guard descriptor == -1 else { return true }
+        let directory = url.deletingLastPathComponent()
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        } catch {
+            return false
+        }
+
+        let fileDescriptor = open(url.path, O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
+        guard fileDescriptor >= 0 else { return false }
+        var attributes = stat()
+        guard fstat(fileDescriptor, &attributes) == 0,
+              attributes.st_uid == geteuid(),
+              (attributes.st_mode & S_IFMT) == S_IFREG,
+              (attributes.st_mode & 0o077) == 0,
+              flock(fileDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+            close(fileDescriptor)
+            return false
+        }
+        descriptor = fileDescriptor
+        return true
+    }
+
+    func release() {
+        guard descriptor >= 0 else { return }
+        flock(descriptor, LOCK_UN)
+        close(descriptor)
+        descriptor = -1
     }
 }
