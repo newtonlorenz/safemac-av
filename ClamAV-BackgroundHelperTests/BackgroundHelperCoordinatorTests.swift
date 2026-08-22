@@ -221,6 +221,7 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         var captured: (FreshclamInvocation, TimeInterval)?
         let updater = BackgroundSignatureUpdater(settingsURL: settingsURL) { invocation, timeout in
             captured = (invocation, timeout)
+            return .upToDate
         }
 
         updater.runIfAvailable()
@@ -255,7 +256,7 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             signatureDirectory: root.appendingPathComponent("signatures").path
         )
 
-        BackgroundSignatureUpdater.executeProcess(invocation, timeout: 1)
+        XCTAssertEqual(BackgroundSignatureUpdater.executeProcess(invocation, timeout: 1), .updated(main: nil, daily: nil, bytecode: nil))
     }
 
     func testScheduledUpdaterTerminatesProcessThatExceedsBound() throws {
@@ -271,7 +272,10 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             signatureDirectory: root.appendingPathComponent("signatures").path
         )
 
-        BackgroundSignatureUpdater.executeProcess(invocation, timeout: 0, terminationGrace: 0.05)
+        XCTAssertEqual(
+            BackgroundSignatureUpdater.executeProcess(invocation, timeout: 0, terminationGrace: 0.05),
+            .failed(message: "Signature update timed out")
+        )
     }
 
     func testSettingsReloadKeepsLastKnownGoodAfterAtomicCorruption() throws {
@@ -312,7 +316,8 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             autoUpdateSignatures: true,
             freshclamPath: "/usr/bin/true",
             configDirectory: nil,
-            signatureDirectory: nil
+            signatureDirectory: nil,
+            showNotifications: false
         ))
     }
 
@@ -401,6 +406,30 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
     }
 
+    func testHelperNotificationsDeliverOnlyAuthorizedPrivacySafeOutcome() async {
+        let delivery = BackgroundHelperNotificationMock(status: .authorized)
+        let coordinator = BackgroundHelperNotificationCoordinator(delivery: delivery)
+
+        await coordinator.deliverIfAuthorized(
+            outcome: .failed(message: "ERROR: /private/secret-path"),
+            notificationsEnabled: true
+        )
+
+        XCTAssertEqual(delivery.deliveries.count, 1)
+        XCTAssertEqual(delivery.deliveries[0].0, "Signature update failed")
+        XCTAssertFalse(delivery.deliveries[0].1.contains("secret-path"))
+    }
+
+    func testHelperNotificationsSuppressDeniedAndNotDeterminedWithoutPrompt() async {
+        for status in [BackgroundHelperNotificationAuthorization.denied, .notDetermined] {
+            let delivery = BackgroundHelperNotificationMock(status: status)
+            let coordinator = BackgroundHelperNotificationCoordinator(delivery: delivery)
+            await coordinator.deliverIfAuthorized(outcome: .upToDate, notificationsEnabled: true)
+            XCTAssertTrue(delivery.deliveries.isEmpty)
+            XCTAssertEqual(delivery.statusCalls, 1)
+        }
+    }
+
     func testAppAdapterExposesOnlyTheFixedMainActions() {
         let app = SafeMacAVBackgroundApp()
         XCTAssertNotNil(app)
@@ -442,5 +471,24 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
     private func writeSecureSettings(_ data: Data, to url: URL) throws {
         try data.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
+private final class BackgroundHelperNotificationMock: BackgroundHelperNotificationDelivering {
+    let status: BackgroundHelperNotificationAuthorization
+    var statusCalls = 0
+    var deliveries: [(String, String)] = []
+
+    init(status: BackgroundHelperNotificationAuthorization) {
+        self.status = status
+    }
+
+    func authorizationStatus() async -> BackgroundHelperNotificationAuthorization {
+        statusCalls += 1
+        return status
+    }
+
+    func deliver(title: String, body: String) async {
+        deliveries.append((title, body))
     }
 }
