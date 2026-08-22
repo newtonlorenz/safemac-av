@@ -105,6 +105,23 @@ final class ClamAV_GUIUITests: XCTestCase {
         XCTAssertTrue(app.buttons["menu-bar-quit"].exists)
     }
 
+    func testRepeatedMenuBarOpenReusesTheIdentifiedMainWindow() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
+        app.launch()
+
+        openMainWindow(in: app)
+        let menuBarItem = app.menuBars.statusItems["SafeMac AV"]
+        XCTAssertTrue(menuBarItem.waitForExistence(timeout: 5))
+        menuBarItem.click()
+        let openButton = app.buttons["menu-bar-open-main-window"]
+        XCTAssertTrue(openButton.waitForExistence(timeout: 3))
+        openButton.click()
+
+        XCTAssertEqual(app.windows.matching(identifier: "main-window").count, 1)
+    }
+
     func testLaunchAtLoginSettingShowsCurrentStatus() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
@@ -147,11 +164,6 @@ final class ClamAV_GUIUITests: XCTestCase {
         let mainWindow = app.windows["main-window"]
 
         if mainWindow.waitForExistence(timeout: 2) {
-            return
-        }
-
-        app.typeKey("n", modifierFlags: .command)
-        if mainWindow.waitForExistence(timeout: 5) {
             return
         }
 

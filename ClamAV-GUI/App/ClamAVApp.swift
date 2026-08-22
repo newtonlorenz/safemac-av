@@ -1,79 +1,180 @@
 import AppKit
+import Combine
 import SwiftUI
+
+@MainActor
+struct ApplicationLaunchConfiguration {
+    let manager: MenuBarManager
+    let settingsProvider: () -> AppSettings
+    let argumentsProvider: () -> [String]
+    let runInitialApplicationLaunch: (LaunchMode) async -> Void
+    let runActiveInteractiveMaintenance: (LaunchMode) async -> Void
+    let runScheduledSignatureUpdate: () async -> Void
+}
+
+@MainActor
+final class ApplicationLaunchConfigurationRegistry {
+    static let shared = ApplicationLaunchConfigurationRegistry()
+
+    private final class Subscription {
+        weak var owner: AnyObject?
+        let deliver: (AnyObject, ApplicationLaunchConfiguration) -> Void
+        var didReceiveConfiguration = false
+
+        init<Owner: AnyObject>(
+            owner: Owner,
+            operation: @escaping (Owner, ApplicationLaunchConfiguration) -> Void
+        ) {
+            self.owner = owner
+            deliver = { owner, configuration in
+                guard let owner = owner as? Owner else { return }
+                operation(owner, configuration)
+            }
+        }
+    }
+
+    private var configuration: ApplicationLaunchConfiguration?
+    private var subscriptions: [ObjectIdentifier: Subscription] = [:]
+    private var launchContinuationOwner: ObjectIdentifier?
+
+    func install(_ configuration: ApplicationLaunchConfiguration) {
+        self.configuration = configuration
+        removeReleasedSubscriptions()
+        let deliveries = subscriptions.values.filter { !$0.didReceiveConfiguration }
+        deliveries.forEach { $0.didReceiveConfiguration = true }
+        deliveries.forEach { subscription in
+            guard let owner = subscription.owner else { return }
+            subscription.deliver(owner, configuration)
+        }
+    }
+
+    func whenAvailable<Owner: AnyObject>(
+        for owner: Owner,
+        _ operation: @escaping (Owner, ApplicationLaunchConfiguration) -> Void
+    ) {
+        removeReleasedSubscriptions()
+        let identifier = ObjectIdentifier(owner)
+        guard subscriptions[identifier] == nil else { return }
+        let subscription = Subscription(owner: owner, operation: operation)
+        subscriptions[identifier] = subscription
+        guard let configuration else { return }
+        subscription.didReceiveConfiguration = true
+        subscription.deliver(owner, configuration)
+    }
+
+    func resetForTesting() {
+        configuration = nil
+        subscriptions.removeAll()
+        launchContinuationOwner = nil
+    }
+
+    func claimLaunchContinuation<Owner: AnyObject>(for owner: Owner) -> Bool {
+        let identifier = ObjectIdentifier(owner)
+        if let launchContinuationOwner {
+            return launchContinuationOwner == identifier
+        }
+        launchContinuationOwner = identifier
+        return true
+    }
+
+    private func removeReleasedSubscriptions() {
+        subscriptions = subscriptions.filter { $0.value.owner != nil }
+    }
+}
 
 @main
 struct ClamAVApp: App {
     static let mainWindowID = "main-window"
+    static let mainWindowTitle = "SafeMac AV"
 
     @NSApplicationDelegateAdaptor(MenuBarApplicationDelegate.self) private var applicationDelegate
     @StateObject private var appState: AppState
-    @StateObject private var menuBarManager = MenuBarManager()
-    @StateObject private var initialLaunchHandler = InitialLaunchHandler()
-    @StateObject private var softwareUpdateManager = SoftwareUpdateManager()
-    private let launchMode: LaunchMode
+    @StateObject private var menuBarManager: MenuBarManager
+    @StateObject private var softwareUpdateManager: SoftwareUpdateManager
     @State private var presentsMenuBarExtra: Bool
-    @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        let launchMode = LaunchModeParser.parse(arguments: CommandLine.arguments)
-        self.launchMode = launchMode
+        let arguments = CommandLine.arguments
+        let launchMode = LaunchModeParser.parse(arguments: arguments)
         _presentsMenuBarExtra = State(initialValue: launchMode.presentsUserInterface)
 
         let appState = AppState(
             startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices
         )
+        let menuBarManager = MenuBarManager()
         _appState = StateObject(wrappedValue: appState)
-        ScheduledSignatureUpdateLifecycle.shared.install {
-            await appState.runScheduledSignatureUpdate()
+        _menuBarManager = StateObject(wrappedValue: menuBarManager)
+        _softwareUpdateManager = StateObject(
+            wrappedValue: SoftwareUpdateManager(startsUpdater: launchMode.startsSoftwareUpdateSubsystem)
+        )
+        let isAutomatedTestLaunch = arguments.contains("--ui-testing")
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let bundleURL = Bundle.main.bundleURL
+        let preferredColorScheme = Self.uiTestColorScheme(arguments: arguments)
+
+        DockVisibilityLifecycle.shared.install(
+            settings: appState.$settings.eraseToAnyPublisher(),
+            launchMode: launchMode,
+            isUITesting: arguments.contains("--ui-testing"),
+            manager: menuBarManager
+        )
+        ApplicationLaunchConfigurationRegistry.shared.install(
+            ApplicationLaunchConfiguration(
+                manager: menuBarManager,
+                settingsProvider: { appState.settings },
+                argumentsProvider: { arguments },
+                runInitialApplicationLaunch: { mode in
+                    switch mode {
+                    case .interactive:
+                        if SignatureScheduleReconciliationPolicy.shouldReconcile(
+                            bundleURL: bundleURL,
+                            isAutomatedTest: isAutomatedTestLaunch
+                        ) {
+                            appState.reconcileSignatureUpdateSchedule()
+                        }
+                        await appState.drainExternalScanRequests()
+                    case .scheduledScan(let jobID, let paths):
+                        await appState.runScheduledScan(jobID: jobID, paths: paths)
+                    case .scheduledSignatureUpdate:
+                        break
+                    }
+                },
+                runActiveInteractiveMaintenance: { mode in
+                    guard mode.isInteractive else { return }
+                    appState.refreshProtectionScore()
+                    appState.refreshLaunchAtLoginStatus()
+                    await appState.drainExternalScanRequests()
+                },
+                runScheduledSignatureUpdate: {
+                    await appState.runScheduledSignatureUpdate()
+                }
+            )
+        )
+        MainWindowControllerRegistry.shared.installFactory {
+            MainWindowController(
+                appState: appState,
+                menuBarManager: menuBarManager,
+                preferredColorScheme: preferredColorScheme
+            )
         }
     }
 
     var body: some Scene {
-        WindowGroup("SafeMac AV", id: Self.mainWindowID) {
-            ContentView()
-                .environmentObject(appState)
-                .environmentObject(softwareUpdateManager)
-                .preferredColorScheme(uiTestColorScheme)
-                .background(MainWindowIdentifier(identifier: Self.mainWindowID))
-                .task {
-                    menuBarManager.applyDockVisibility(hidden: currentLaunchModeHidesDock)
-                    await handleInitialLaunch()
-                }
-                .onChange(of: appState.settings.hideFromDock) { isHidden in
-                    menuBarManager.applyDockVisibility(hidden: launchMode.hidesDock(
-                        settings: updatedSettings(hideFromDock: isHidden),
-                        isUITesting: isUITesting
-                    ))
-                }
-                .onChange(of: scenePhase) { phase in
-                    guard phase == .active, launchMode.runsActiveSceneMaintenance else { return }
-                    appState.refreshProtectionScore()
-                    appState.refreshLaunchAtLoginStatus()
-                    Task { await appState.drainExternalScanRequests() }
-                }
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1_060, height: 720)
-        .commands {
-            AppUpdateCommands(updater: softwareUpdateManager)
-            ScanCommands()
-        }
-
         MenuBarExtra(isInserted: $presentsMenuBarExtra) {
             MenuBarPopoverView()
                 .environmentObject(appState)
-                .environmentObject(menuBarManager)
                 .environmentObject(softwareUpdateManager)
-                .preferredColorScheme(uiTestColorScheme)
+                .preferredColorScheme(Self.uiTestColorScheme(arguments: CommandLine.arguments))
         } label: {
             Image(systemName: menuBarIcon)
                 .accessibilityLabel("SafeMac AV")
                 .accessibilityIdentifier("safe-mac-menu-bar-item")
-                .task {
-                    await handleInitialLaunch()
-                }
         }
         .menuBarExtraStyle(.window)
+        .commands {
+            AppUpdateCommands(updater: softwareUpdateManager)
+            ScanCommands()
+        }
     }
 
     private var menuBarIcon: String {
@@ -83,98 +184,18 @@ struct ClamAVApp: App {
         return appState.protectionScore.score >= 80 ? "checkmark.shield.fill" : "shield.fill"
     }
 
-    private var isUITesting: Bool {
-        CommandLine.arguments.contains("--ui-testing")
-    }
-
-    private var isAutomatedTestLaunch: Bool {
-        isUITesting
-            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-    }
-
-    private var currentLaunchModeHidesDock: Bool {
-        launchMode.hidesDock(settings: appState.settings, isUITesting: isUITesting)
-    }
-
-    private func updatedSettings(hideFromDock: Bool) -> AppSettings {
-        var settings = appState.settings
-        settings.hideFromDock = hideFromDock
-        return settings
-    }
-
-    private var uiTestColorScheme: ColorScheme? {
+    private static func uiTestColorScheme(arguments: [String]) -> ColorScheme? {
 #if DEBUG
-        if CommandLine.arguments.contains("--force-light-appearance") {
+        if arguments.contains("--force-light-appearance") {
             return .light
         }
-        if CommandLine.arguments.contains("--force-dark-appearance") {
+        if arguments.contains("--force-dark-appearance") {
             return .dark
         }
 #endif
         return nil
     }
 
-    @MainActor
-    private func handleInitialLaunch() async {
-        await initialLaunchHandler.handle(
-            launchMode: launchMode,
-            drainExternalScanRequests: {
-                if SignatureScheduleReconciliationPolicy.shouldReconcile(
-                    bundleURL: Bundle.main.bundleURL,
-                    isAutomatedTest: isAutomatedTestLaunch
-                ) {
-                    appState.reconcileSignatureUpdateSchedule()
-                }
-                await appState.drainExternalScanRequests()
-            },
-            runScheduledScan: { jobID, paths in
-                await appState.runScheduledScan(jobID: jobID, paths: paths)
-            }
-        )
-    }
-}
-
-@MainActor
-final class InitialLaunchHandler: ObservableObject {
-    private var didHandleInitialLaunch = false
-
-    func handle(
-        launchMode: LaunchMode,
-        drainExternalScanRequests: () async -> Void,
-        runScheduledScan: (UUID?, [URL]) async -> Void
-    ) async {
-        guard !didHandleInitialLaunch else { return }
-        didHandleInitialLaunch = true
-
-        switch launchMode {
-        case .interactive:
-            await drainExternalScanRequests()
-        case .scheduledScan(let jobID, let paths):
-            await runScheduledScan(jobID, paths)
-        case .scheduledSignatureUpdate:
-            break
-        }
-    }
-}
-
-private struct MainWindowIdentifier: NSViewRepresentable {
-    let identifier: String
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        applyIdentifier(to: view)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        applyIdentifier(to: nsView)
-    }
-
-    private func applyIdentifier(to view: NSView) {
-        DispatchQueue.main.async {
-            view.window?.identifier = NSUserInterfaceItemIdentifier(identifier)
-        }
-    }
 }
 
 struct ScanCommands: Commands {

@@ -26,6 +26,14 @@ final class LaunchModeParserTests: XCTestCase {
         )
     }
 
+    func testScheduledSignatureUpdateDoesNotStartSoftwareUpdateSubsystem() {
+        XCTAssertTrue(LaunchMode.interactive.startsSoftwareUpdateSubsystem)
+        XCTAssertTrue(
+            LaunchMode.scheduledScan(jobID: UUID(), paths: []).startsSoftwareUpdateSubsystem
+        )
+        XCTAssertFalse(LaunchMode.scheduledSignatureUpdate.startsSoftwareUpdateSubsystem)
+    }
+
     func testParsesScheduledScanWithRepeatedPaths() {
         let jobID = UUID()
         let mode = LaunchModeParser.parse(arguments: [

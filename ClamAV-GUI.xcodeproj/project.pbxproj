@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A1000001200000000000001 /* ClamAVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000001 /* ClamAVApp.swift */; };
 		A1000001200000000000002 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000002 /* AppState.swift */; };
+		C0DE00012000000000000096 /* MainWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000096 /* MainWindowController.swift */; };
 		A1000001200000000000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000003 /* ContentView.swift */; };
 		A1000001200000000000053 /* LaunchMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000053 /* LaunchMode.swift */; };
 		A1000001200000000000022 /* MenuBarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000022 /* MenuBarManager.swift */; };
@@ -64,6 +65,7 @@
 		A1000001200000000000074 /* NotificationManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000074 /* NotificationManagerTests.swift */; };
 		C0DE00012000000000000076 /* SignatureUpdateSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000076 /* SignatureUpdateSchedulerTests.swift */; };
 		C0DE00012000000000000077 /* SignatureUpdateAppStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000077 /* SignatureUpdateAppStateTests.swift */; };
+		C0DE00012000000000000095 /* ApplicationLaunchConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000095 /* ApplicationLaunchConfigurationTests.swift */; };
 		C0DE00012000000000000079 /* SoftwareUpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000079 /* SoftwareUpdateManager.swift */; };
 		C0DE00012000000000000080 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00032000000000000080 /* Sparkle */; };
 		C0DE00012000000000000081 /* SoftwareUpdateManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000081 /* SoftwareUpdateManagerTests.swift */; };
@@ -113,6 +115,7 @@
 /* Begin PBXFileReference section */
 		A1000002200000000000001 /* ClamAVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClamAVApp.swift; sourceTree = "<group>"; };
 		A1000002200000000000002 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		C0DE00022000000000000096 /* MainWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowController.swift; sourceTree = "<group>"; };
 		A1000002200000000000003 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1000002200000000000053 /* LaunchMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchMode.swift; sourceTree = "<group>"; };
 		A1000002200000000000004 /* ConfigManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigManager.swift; sourceTree = "<group>"; };
@@ -129,6 +132,7 @@
 		A1000002200000000000012 /* UpdateModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateModels.swift; sourceTree = "<group>"; };
 		C0DE00022000000000000076 /* SignatureUpdateSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureUpdateSchedulerTests.swift; sourceTree = "<group>"; };
 		C0DE00022000000000000077 /* SignatureUpdateAppStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureUpdateAppStateTests.swift; sourceTree = "<group>"; };
+		C0DE00022000000000000095 /* ApplicationLaunchConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationLaunchConfigurationTests.swift; sourceTree = "<group>"; };
 		A1000002200000000000013 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		A1000002200000000000014 /* LogModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogModels.swift; sourceTree = "<group>"; };
 		A1000002200000000000015 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
@@ -256,6 +260,7 @@
 				A1000002200000000000053 /* LaunchMode.swift */,
 				A1000002200000000000002 /* AppState.swift */,
 				A1000002200000000000003 /* ContentView.swift */,
+				C0DE00022000000000000096 /* MainWindowController.swift */,
 				A1000002200000000000022 /* MenuBarManager.swift */,
 				A1000002200000000000073 /* GlassDesignSystem.swift */,
 			);
@@ -424,6 +429,7 @@
 				A1000002200000000000074 /* NotificationManagerTests.swift */,
 				C0DE00022000000000000076 /* SignatureUpdateSchedulerTests.swift */,
 				C0DE00022000000000000077 /* SignatureUpdateAppStateTests.swift */,
+				C0DE00022000000000000095 /* ApplicationLaunchConfigurationTests.swift */,
 				C0DE00022000000000000081 /* SoftwareUpdateManagerTests.swift */,
 			);
 			path = "ClamAV-GUITests";
@@ -615,6 +621,7 @@
 				A1000001200000000000053 /* LaunchMode.swift in Sources */,
 				A1000001200000000000002 /* AppState.swift in Sources */,
 				A1000001200000000000003 /* ContentView.swift in Sources */,
+				C0DE00012000000000000096 /* MainWindowController.swift in Sources */,
 				A1000001200000000000004 /* ConfigManager.swift in Sources */,
 				A1000001200000000000005 /* ClamAVRunner.swift in Sources */,
 				A1000001200000000000006 /* FreshclamRunner.swift in Sources */,
@@ -674,6 +681,7 @@
 				A1000001200000000000074 /* NotificationManagerTests.swift in Sources */,
 				C0DE00012000000000000076 /* SignatureUpdateSchedulerTests.swift in Sources */,
 				C0DE00012000000000000077 /* SignatureUpdateAppStateTests.swift in Sources */,
+				C0DE00012000000000000095 /* ApplicationLaunchConfigurationTests.swift in Sources */,
 				C0DE00012000000000000081 /* SoftwareUpdateManagerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

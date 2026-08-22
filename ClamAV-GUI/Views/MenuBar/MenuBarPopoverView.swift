@@ -1,16 +1,22 @@
 import AppKit
 import SwiftUI
 
+@MainActor
 struct MenuBarPopoverView: View {
     @EnvironmentObject var appState: AppState
-    @EnvironmentObject var menuBarManager: MenuBarManager
     @EnvironmentObject var softwareUpdateManager: SoftwareUpdateManager
-    @Environment(\.openWindow) private var openWindow
 
-    private let quitAction: () -> Void
+    private let showMainWindowAction: @MainActor (NavigationTab?) -> Void
+    private let quitAction: @MainActor () -> Void
 
-    init(quitAction: @escaping () -> Void = { NSApplication.shared.terminate(nil) }) {
-        self.quitAction = quitAction
+    init(
+        showMainWindowAction: (@MainActor (NavigationTab?) -> Void)? = nil,
+        quitAction: (@MainActor () -> Void)? = nil
+    ) {
+        self.showMainWindowAction = showMainWindowAction ?? {
+            MainWindowControllerRegistry.shared.showMainWindow(selecting: $0)
+        }
+        self.quitAction = quitAction ?? { NSApplication.shared.terminate(nil) }
     }
 
     var body: some View {
@@ -191,12 +197,7 @@ struct MenuBarPopoverView: View {
     }
 
     private func showMainWindow(tab: NavigationTab?) {
-        if let tab {
-            appState.selectedTab = tab
-        }
-        menuBarManager.activateMainWindow {
-            openWindow(id: ClamAVApp.mainWindowID)
-        }
+        showMainWindowAction(tab)
     }
 }
 
