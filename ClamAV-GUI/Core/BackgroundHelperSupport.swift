@@ -1,6 +1,7 @@
 import Darwin
 import Combine
 import Foundation
+import Security
 
 /// The helper has a deliberately tiny command surface. It must never accept a
 /// main-app command line because it owns no windows, Finder handoff, or Sparkle.
@@ -27,6 +28,7 @@ enum BackgroundHelperLaunchModeParser {
 enum BackgroundHelperBundle {
     static let bundleIdentifier = "com.newtonlorenz.ClamAV-GUI.Background"
     static let executableName = "SafeMacAVBackground"
+    static let teamIdentifier = "CQPH8YR62A"
 
     static func executableURL(in mainBundleURL: URL) -> URL {
         mainBundleURL
@@ -42,11 +44,9 @@ enum BackgroundHelperBundle {
         fileManager: FileManager = .default
     ) -> Bool {
         guard fileManager.isExecutableFile(atPath: url.path) else { return false }
-        let normalizedMainBundle = mainBundleURL.standardizedFileURL.resolvingSymlinksInPath()
-        let expectedExecutable = executableURL(in: normalizedMainBundle)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        let normalizedExecutable = url.standardizedFileURL.resolvingSymlinksInPath()
+        let normalizedMainBundle = mainBundleURL.standardizedFileURL
+        let expectedExecutable = executableURL(in: normalizedMainBundle).standardizedFileURL
+        let normalizedExecutable = url.standardizedFileURL
         guard normalizedExecutable == expectedExecutable else { return false }
         let helperBundleURL = expectedExecutable
             .deletingLastPathComponent()
@@ -56,7 +56,22 @@ enum BackgroundHelperBundle {
               let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             return false
         }
-        return info["CFBundleIdentifier"] as? String == bundleIdentifier
+        guard info["CFBundleIdentifier"] as? String == bundleIdentifier else { return false }
+        var attributes = stat()
+        guard lstat(helperBundleURL.path, &attributes) == 0,
+              (attributes.st_mode & S_IFMT) == S_IFDIR,
+              lstat(expectedExecutable.path, &attributes) == 0,
+              (attributes.st_mode & S_IFMT) == S_IFREG else {
+            return false
+        }
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(helperBundleURL as CFURL, [], &code) == errSecSuccess,
+              let code else { return false }
+        let requirementString = "identifier \(bundleIdentifier) and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(requirementString as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        return SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
 }
 
@@ -82,6 +97,7 @@ struct FreshclamInvocation: Equatable {
         guard isTrustedExecutable(at: executablePath, fileManager: fileManager) else {
             throw FreshclamInvocationError.unsafeExecutable
         }
+        let resolvedExecutablePath = URL(fileURLWithPath: executablePath).resolvingSymlinksInPath().path
         guard configDirectory.hasPrefix("/"), signatureDirectory.hasPrefix("/") else {
             throw FreshclamInvocationError.unsafePath
         }
@@ -100,7 +116,9 @@ struct FreshclamInvocation: Equatable {
             arguments.append("--config-file=\(configFile.path)")
         }
         arguments += ["--stdout", "--datadir=\(signatureDirectory)", "--verbose"]
-        return FreshclamInvocation(executablePath: executablePath, arguments: arguments)
+        // Validate the resolved inode and execute that resolved path. This
+        // prevents a later symlink retarget from changing what is launched.
+        return FreshclamInvocation(executablePath: resolvedExecutablePath, arguments: arguments)
     }
 
     static func isTrustedExecutable(at path: String, fileManager: FileManager = .default) -> Bool {
@@ -190,9 +208,15 @@ enum BackgroundRoute: String, CaseIterable {
 final class BackgroundRouteRequestStore {
     private let requestURL: URL
     private let fileManager: FileManager
+    private let removeRequest: (URL) throws -> Void
 
-    init(baseURL: URL? = nil, fileManager: FileManager = .default) {
+    init(
+        baseURL: URL? = nil,
+        fileManager: FileManager = .default,
+        removeRequest: @escaping (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }
+    ) {
         self.fileManager = fileManager
+        self.removeRequest = removeRequest
         if let baseURL {
             requestURL = baseURL.appendingPathComponent("background-route.request", isDirectory: false)
         } else {
@@ -208,9 +232,16 @@ final class BackgroundRouteRequestStore {
         let directory = requestURL.deletingLastPathComponent()
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            guard prepareSecureDirectory(directory) else { return false }
+            var existing = stat()
+            if lstat(requestURL.path, &existing) == 0, !isSafeRegularFile(at: requestURL) {
+                return false
+            }
+            if lstat(requestURL.path, &existing) != 0, errno != ENOENT {
+                return false
+            }
             try Data(route.rawValue.utf8).write(to: requestURL, options: .atomic)
-            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: requestURL.path)
+            guard normalizeSecureFile(at: requestURL) else { return false }
             return isSafeRegularFile(at: requestURL)
         } catch {
             return false
@@ -223,8 +254,7 @@ final class BackgroundRouteRequestStore {
     }
 
     func peek() -> BackgroundRoute? {
-        guard isSafeRegularFile(at: requestURL),
-              let rawValue = try? String(contentsOf: requestURL, encoding: .utf8) else {
+        guard let rawValue = readSecureRequest() else {
             return nil
         }
         return BackgroundRoute.parse(rawValue)
@@ -233,12 +263,11 @@ final class BackgroundRouteRequestStore {
     /// Acknowledge only the route just dispatched. A changed request remains
     /// durable for the next drain instead of being deleted as stale work.
     func acknowledge(_ route: BackgroundRoute) -> Bool {
-        guard isSafeRegularFile(at: requestURL),
-              (try? String(contentsOf: requestURL, encoding: .utf8)) == route.rawValue else {
+        guard readSecureRequest() == route.rawValue else {
             return false
         }
         do {
-            try fileManager.removeItem(at: requestURL)
+            try removeRequest(requestURL)
             return true
         } catch {
             return false
@@ -252,14 +281,50 @@ final class BackgroundRouteRequestStore {
     }
 
     private func isSafeRegularFile(at url: URL) -> Bool {
-        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
-              attributes[.type] as? FileAttributeType == .typeRegular,
-              attributes[.ownerAccountID] as? NSNumber == NSNumber(value: geteuid()),
-              let mode = attributes[.posixPermissions] as? NSNumber,
-              mode.intValue & 0o077 == 0 else {
+        var attributes = stat()
+        guard lstat(url.path, &attributes) == 0,
+              (attributes.st_mode & S_IFMT) == S_IFREG,
+              attributes.st_uid == geteuid(),
+              (attributes.st_mode & 0o077) == 0 else {
             return false
         }
         return true
+    }
+
+    private func prepareSecureDirectory(_ directory: URL) -> Bool {
+        let descriptor = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        var attributes = stat()
+        return fstat(descriptor, &attributes) == 0
+            && (attributes.st_mode & S_IFMT) == S_IFDIR
+            && attributes.st_uid == geteuid()
+            && fchmod(descriptor, S_IRUSR | S_IWUSR | S_IXUSR) == 0
+    }
+
+    private func normalizeSecureFile(at url: URL) -> Bool {
+        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        var attributes = stat()
+        return fstat(descriptor, &attributes) == 0
+            && (attributes.st_mode & S_IFMT) == S_IFREG
+            && attributes.st_uid == geteuid()
+            && fchmod(descriptor, S_IRUSR | S_IWUSR) == 0
+    }
+
+    private func readSecureRequest() -> String? {
+        let descriptor = open(requestURL.path, O_RDONLY | O_NOFOLLOW)
+        guard descriptor >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var attributes = stat()
+        guard fstat(descriptor, &attributes) == 0,
+              (attributes.st_mode & S_IFMT) == S_IFREG,
+              attributes.st_uid == geteuid(),
+              (attributes.st_mode & 0o077) == 0 else {
+            return nil
+        }
+        return String(data: handle.readDataToEndOfFile(), encoding: .utf8)
     }
 }
 

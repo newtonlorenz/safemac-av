@@ -56,14 +56,18 @@ done
 [[ -n "$archive_path" ]]
 app="$archive_path/Products/Applications/ClamAV-GUI.app"
 sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
+helper="$app/Contents/Library/LoginItems/SafeMacAVBackground.app"
 mkdir -p \
     "$app/Contents/MacOS" \
     "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS" \
+    "$helper/Contents/MacOS" \
     "$sparkle/Updater.app/Contents/MacOS" \
     "$sparkle/XPCServices/Downloader.xpc/Contents/MacOS" \
     "$sparkle/XPCServices/Installer.xpc/Contents/MacOS"
 printf app > "$app/Contents/MacOS/ClamAV-GUI"
 printf finder > "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
+printf helper > "$helper/Contents/MacOS/SafeMacAVBackground"
+printf "%s\\n" "<plist><dict><key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.Background</string><key>LSUIElement</key><true/></dict></plist>" > "$helper/Contents/Info.plist"
 printf sparkle > "$sparkle/Sparkle"
 printf autoupdate > "$sparkle/Autoupdate"
 printf updater > "$sparkle/Updater.app/Contents/MacOS/Updater"
@@ -72,6 +76,7 @@ printf installer > "$sparkle/XPCServices/Installer.xpc/Contents/MacOS/Installer"
 chmod +x \
     "$app/Contents/MacOS/ClamAV-GUI" \
     "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder" \
+    "$helper/Contents/MacOS/SafeMacAVBackground" \
     "$sparkle/Sparkle" \
     "$sparkle/Autoupdate" \
     "$sparkle/Updater.app/Contents/MacOS/Updater" \
@@ -114,6 +119,8 @@ elif [[ " $* " == *" --entitlements "* ]]; then
     target="${!#}"
     if [[ "$target" == *"/Sparkle.framework/Versions/B/Autoupdate" ]]; then
         printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
+    elif [[ "$target" == *"/SafeMacAVBackground.app" ]]; then
+        printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><false/></dict></plist>"
     elif [[ "$target" == *"/SafeMac AV.app" ]]; then
         printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>CQPH8YR62A.com.newtonlorenz.ClamAV-GUI</string></array></dict></plist>"
     elif [[ "$target" == *"/ClamAV-GUI-Finder.appex" ]]; then
@@ -232,6 +239,7 @@ verify_signing_order() {
     local installer="$version/XPCServices/Installer.xpc"
     local autoupdate="$version/Autoupdate"
     local appex="$app/Contents/PlugIns/ClamAV-GUI-Finder.appex"
+    local helper="$app/Contents/Library/LoginItems/SafeMacAVBackground.app"
 
     assert_signed_with_distribution_options "$updater"
     assert_signed_with_distribution_options "$downloader"
@@ -239,6 +247,7 @@ verify_signing_order() {
     assert_signed_with_distribution_options "$autoupdate"
     assert_signed_with_distribution_options "$sparkle"
     assert_signed_with_distribution_options "$appex" false "$PROJECT_DIR/ClamAV-GUI-Finder/ClamAV_GUI_Finder.entitlements"
+    assert_signed_with_distribution_options "$helper" false "$PROJECT_DIR/ClamAV-BackgroundHelper/SafeMacAVBackground.entitlements"
     assert_signed_with_distribution_options "$app" false
 
     assert_before "$autoupdate" "$sparkle"
@@ -247,6 +256,9 @@ verify_signing_order() {
     assert_before "$updater" "$sparkle"
     assert_before "$sparkle" "$app"
     assert_before "$appex" "$app"
+    assert_before "$sparkle" "$helper"
+    assert_before "$appex" "$helper"
+    assert_before "$helper" "$app"
 }
 
 main() {

@@ -37,6 +37,8 @@ final class ConfigManager: ConfigManagerProtocol {
         do {
             let data = try Data(contentsOf: settingsURL)
             let settings = try JSONDecoder().decode(AppSettings.self, from: data)
+            try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: appDirectoryURL.path)
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settingsURL.path)
             lastSettingsLoadState = .loaded
             return settings
         } catch {

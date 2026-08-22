@@ -63,6 +63,21 @@ final class ConfigManagerTests: XCTestCase {
         XCTAssertEqual((fileAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
+    func testLoadSettingsNormalizesLegacyPermissionsForBackgroundHelper() throws {
+        try configManager.saveSettings(.default)
+        let appDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI")
+        let settingsURL = appDirectory.appendingPathComponent("settings.json")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: appDirectory.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: settingsURL.path)
+
+        _ = configManager.loadSettings()
+
+        let directoryAttributes = try FileManager.default.attributesOfItem(atPath: appDirectory.path)
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: settingsURL.path)
+        XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+        XCTAssertEqual((fileAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
     func testLoadCorruptedSettingsReturnsDefaultsWithoutOverwritingFile() throws {
         let appDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI", isDirectory: true)
         try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: false)

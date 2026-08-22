@@ -59,19 +59,25 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
     @objc func checkForUpdates() { MainAppHandoff.send(.checkForUpdates) }
     @objc private func quit() { NSApplication.shared.terminate(nil) }
 
-    private func runScheduledSignatureUpdate(completion: @escaping () -> Void) {
+    private func runScheduledSignatureUpdate(completion: @escaping @Sendable () -> Void) {
         let settingsStore = settingsStore
         let notificationCoordinator = notificationCoordinator
         DispatchQueue.global(qos: .utility).async {
-            defer { DispatchQueue.main.async(execute: completion) }
             let updater = BackgroundSignatureUpdater(settingsStore: settingsStore)
-            guard let outcome = updater.runIfAvailable() else { return }
+            guard let outcome = updater.runIfAvailable() else {
+                OperationQueue.main.addOperation(completion)
+                return
+            }
             let notificationsEnabled = settingsStore.reload().showNotifications
             Task {
                 await notificationCoordinator.deliverIfAuthorized(
                     outcome: outcome,
                     notificationsEnabled: notificationsEnabled
                 )
+                // The coordinator terminates this one-shot helper from its
+                // completion callback. Wait until the authorization lookup
+                // and any authorized notification submission have completed.
+                OperationQueue.main.addOperation(completion)
             }
         }
     }
@@ -91,8 +97,20 @@ protocol BackgroundHelperNotificationDelivering: AnyObject {
 final class BackgroundHelperNotificationCoordinator {
     private let delivery: BackgroundHelperNotificationDelivering
 
-    init(delivery: BackgroundHelperNotificationDelivering = SystemBackgroundHelperNotificationDelivery()) {
+    convenience init() {
+        self.init(delivery: Self.defaultDelivery())
+    }
+
+    init(delivery: BackgroundHelperNotificationDelivering) {
         self.delivery = delivery
+    }
+
+    private static func defaultDelivery() -> BackgroundHelperNotificationDelivering {
+#if DEBUG
+        return SuppressedBackgroundHelperNotificationDelivery()
+#else
+        return SystemBackgroundHelperNotificationDelivery()
+#endif
     }
 
     /// The helper only reads its own bundle authorization. It never requests
@@ -113,6 +131,7 @@ final class BackgroundHelperNotificationCoordinator {
     }
 }
 
+#if !DEBUG
 final class SystemBackgroundHelperNotificationDelivery: BackgroundHelperNotificationDelivering {
     func authorizationStatus() async -> BackgroundHelperNotificationAuthorization {
         switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
@@ -135,6 +154,12 @@ final class SystemBackgroundHelperNotificationDelivery: BackgroundHelperNotifica
         let request = UNNotificationRequest(identifier: "background-signature-update", content: content, trigger: nil)
         try? await UNUserNotificationCenter.current().add(request)
     }
+}
+#endif
+
+private final class SuppressedBackgroundHelperNotificationDelivery: BackgroundHelperNotificationDelivering {
+    func authorizationStatus() async -> BackgroundHelperNotificationAuthorization { .notDetermined }
+    func deliver(title: String, body: String) async {}
 }
 
 private enum MainAppHandoff {
