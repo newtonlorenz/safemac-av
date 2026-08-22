@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# Build a local SafeMac AV DMG. Set SIGNING_IDENTITY to produce a signed DMG,
-# and also set NOTARY_PROFILE to submit it with a notarytool Keychain profile.
+# Build a local SafeMac AV DMG. Set SIGNING_IDENTITY to produce a signed DMG.
+# Set NOTARY_PROFILE or the NOTARY_KEY_PATH/NOTARY_KEY_ID/NOTARY_ISSUER_ID
+# triplet to submit it with notarytool.
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -21,6 +22,12 @@ ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME/ClamAV_GUI.entitlements"
 
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
+NOTARY_KEY_PATH="${NOTARY_KEY_PATH:-}"
+NOTARY_KEY_ID="${NOTARY_KEY_ID:-}"
+NOTARY_ISSUER_ID="${NOTARY_ISSUER_ID:-}"
+NOTARY_TIMEOUT="${NOTARY_TIMEOUT:-30m}"
+CHECKSUM_PATH="${CHECKSUM_PATH:-$BUILD_DIR/SHA256SUMS.txt}"
+RESOLVED_SIGNING_IDENTITY=""
 
 RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
@@ -46,6 +53,21 @@ fail() {
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "$1 not found. $2"
+}
+
+resolve_signing_identity() {
+    local matches
+    local match_count
+
+    matches="$(security find-identity -v -p codesigning | grep -F -- "$SIGNING_IDENTITY" || true)"
+    match_count="$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+    [[ "$match_count" != "0" ]] || fail "Signing identity not found in the Keychain: $SIGNING_IDENTITY"
+    [[ "$match_count" == "1" ]] \
+        || fail "Signing identity is ambiguous; set SIGNING_IDENTITY to the certificate SHA-1 hash from security find-identity."
+
+    RESOLVED_SIGNING_IDENTITY="$(printf '%s\n' "$matches" | awk '{print $2}')"
+    [[ -n "$RESOLVED_SIGNING_IDENTITY" ]] || fail "Could not resolve signing identity hash."
 }
 
 assert_build_path() {
@@ -83,23 +105,39 @@ check_requirements() {
         fail "NOTARY_PROFILE requires SIGNING_IDENTITY; unsigned builds cannot be notarized."
     fi
 
+    if [[ -n "$NOTARY_KEY_PATH$NOTARY_KEY_ID$NOTARY_ISSUER_ID" && -z "$SIGNING_IDENTITY" ]]; then
+        fail "Notary API key credentials require SIGNING_IDENTITY; unsigned builds cannot be notarized."
+    fi
+
+    if [[ -n "$NOTARY_PROFILE" && -n "$NOTARY_KEY_PATH$NOTARY_KEY_ID$NOTARY_ISSUER_ID" ]]; then
+        fail "Set either NOTARY_PROFILE or NOTARY_KEY_PATH/NOTARY_KEY_ID/NOTARY_ISSUER_ID, not both."
+    fi
+
+    if [[ -z "$NOTARY_PROFILE" && -n "$NOTARY_KEY_PATH$NOTARY_KEY_ID$NOTARY_ISSUER_ID" ]]; then
+        [[ -n "$NOTARY_KEY_PATH" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER_ID" ]] \
+            || fail "Notary API key auth requires NOTARY_KEY_PATH, NOTARY_KEY_ID, and NOTARY_ISSUER_ID."
+        [[ -f "$NOTARY_KEY_PATH" ]] || fail "Notary API key file not found: $NOTARY_KEY_PATH"
+    fi
+
     if [[ -n "$SIGNING_IDENTITY" ]]; then
         require_command codesign "Install the Xcode command-line tools."
         require_command security "This script must run on macOS."
         [[ -f "$ENTITLEMENTS_PATH" ]] || fail "Entitlements file not found: $ENTITLEMENTS_PATH"
 
-        security find-identity -v -p codesigning \
-            | grep -F -- "$SIGNING_IDENTITY" >/dev/null \
-            || fail "Signing identity not found in the Keychain: $SIGNING_IDENTITY"
+        resolve_signing_identity
     fi
 
-    if [[ -n "$NOTARY_PROFILE" ]]; then
+    if notarization_enabled; then
         require_command xcrun "Install the Xcode command-line tools."
         xcrun --find notarytool >/dev/null \
             || fail "notarytool not found. Install a current version of Xcode."
         xcrun --find stapler >/dev/null \
             || fail "stapler not found. Install a current version of Xcode."
     fi
+}
+
+notarization_enabled() {
+    [[ -n "$NOTARY_PROFILE" || -n "$NOTARY_KEY_PATH$NOTARY_KEY_ID$NOTARY_ISSUER_ID" ]]
 }
 
 clean() {
@@ -148,14 +186,14 @@ sign_app() {
 
     for extension_path in "${extension_paths[@]}"; do
         codesign --force \
-            --sign "$SIGNING_IDENTITY" \
+            --sign "$RESOLVED_SIGNING_IDENTITY" \
             --options runtime \
             --timestamp \
             "$extension_path"
     done
 
     codesign --force \
-        --sign "$SIGNING_IDENTITY" \
+        --sign "$RESOLVED_SIGNING_IDENTITY" \
         --options runtime \
         --timestamp \
         --entitlements "$ENTITLEMENTS_PATH" \
@@ -185,15 +223,25 @@ create_dmg() {
 
 sign_dmg() {
     print_step "Signing the DMG"
-    codesign --force --sign "$SIGNING_IDENTITY" --timestamp "$DMG_PATH"
+    codesign --force --sign "$RESOLVED_SIGNING_IDENTITY" --timestamp "$DMG_PATH"
     codesign --verify --strict --verbose=2 "$DMG_PATH"
 }
 
 notarize_dmg() {
     print_step "Submitting the signed DMG for notarization"
-    xcrun notarytool submit "$DMG_PATH" \
-        --keychain-profile "$NOTARY_PROFILE" \
-        --wait
+    if [[ -n "$NOTARY_PROFILE" ]]; then
+        xcrun notarytool submit "$DMG_PATH" \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --wait \
+            --timeout "$NOTARY_TIMEOUT"
+    else
+        xcrun notarytool submit "$DMG_PATH" \
+            --key "$NOTARY_KEY_PATH" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait \
+            --timeout "$NOTARY_TIMEOUT"
+    fi
 
     print_step "Stapling and validating the notarization ticket"
     xcrun stapler staple "$DMG_PATH"
@@ -201,8 +249,14 @@ notarize_dmg() {
     codesign --verify --strict --verbose=2 "$DMG_PATH"
 }
 
+write_checksums() {
+    print_step "Writing checksums"
+    (cd "$BUILD_DIR" && shasum -a 256 "$(basename "$DMG_PATH")") > "$CHECKSUM_PATH"
+    [[ -f "$CHECKSUM_PATH" ]] || fail "Checksum file was not created: $CHECKSUM_PATH"
+}
+
 print_mode() {
-    if [[ -n "$NOTARY_PROFILE" ]]; then
+    if notarization_enabled; then
         print_step "Mode: signed and notarized distribution build"
     elif [[ -n "$SIGNING_IDENTITY" ]]; then
         print_step "Mode: signed local build (not notarized)"
@@ -229,16 +283,19 @@ main() {
         sign_dmg
     fi
 
-    if [[ -n "$NOTARY_PROFILE" ]]; then
+    if notarization_enabled; then
         notarize_dmg
     fi
 
+    write_checksums
+
     printf '\n%sBuild complete:%s %s\n' "$GREEN" "$NC" "$DMG_PATH"
+    printf '%sChecksums:%s %s\n' "$GREEN" "$NC" "$CHECKSUM_PATH"
 
     if [[ -z "$SIGNING_IDENTITY" ]]; then
         printf 'For a signed build, set SIGNING_IDENTITY to a Developer ID Application identity.\n'
-    elif [[ -z "$NOTARY_PROFILE" ]]; then
-        printf 'For notarization, store credentials with notarytool and set NOTARY_PROFILE to that Keychain profile.\n'
+    elif ! notarization_enabled; then
+        printf 'For notarization, set NOTARY_PROFILE or NOTARY_KEY_PATH/NOTARY_KEY_ID/NOTARY_ISSUER_ID.\n'
     fi
 }
 
