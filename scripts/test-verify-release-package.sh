@@ -33,7 +33,13 @@ make_fixture() {
     local package_dir="$WORK_DIR/package"
     local app_dir="$WORK_DIR/SafeMac AV.app"
 
-    mkdir -p "$package_dir/appcast" "$app_dir/Contents/MacOS" "$WORK_DIR/bin"
+    mkdir -p \
+        "$package_dir/appcast" \
+        "$app_dir/Contents/MacOS" \
+        "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc" \
+        "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
+        "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex" \
+        "$WORK_DIR/bin"
     printf 'fake dmg\n' > "$package_dir/SafeMac-AV.dmg"
     (cd "$package_dir" && shasum -a 256 SafeMac-AV.dmg > SHA256SUMS.txt)
 
@@ -52,7 +58,9 @@ make_fixture() {
 </plist>
 PLIST
     printf '#!/bin/bash\n' > "$app_dir/Contents/MacOS/ClamAV-GUI"
+    printf '#!/bin/bash\n' > "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
     chmod +x "$app_dir/Contents/MacOS/ClamAV-GUI"
+    chmod +x "$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
 
     cat > "$package_dir/appcast/appcast.xml" <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
@@ -67,7 +75,17 @@ XML
 }
 
 make_fake_tools() {
-    write_fake_tool codesign 'exit 0'
+    write_fake_tool codesign '
+path="${@: -1}"
+if [[ "$*" == *" -dv "* || "${1:-}" == "-dv" ]]; then
+    if [[ -n "${ADHOC_PATH_FRAGMENT:-}" && "$path" == *"$ADHOC_PATH_FRAGMENT"* ]]; then
+        printf "Signature=adhoc\n"
+    else
+        printf "Authority=Developer ID Application: Test (TEAMID1234)\n"
+        printf "TeamIdentifier=TEAMID1234\n"
+    fi
+fi
+exit 0'
     write_fake_tool spctl 'exit 0'
     write_fake_tool xcrun '[[ "${1:-}" == "stapler" && "${2:-}" == "validate" ]] || exit 2'
     write_fake_tool lipo 'printf "%s\n" "${LIPO_ARCHS:-x86_64 arm64}"'
@@ -95,6 +113,16 @@ run_appcast_failure_case() {
         "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
         fail "mismatched appcast version was accepted"
     fi
+    perl -0pi -e 's/sparkle:version="4"/sparkle:version="3"/' "$WORK_DIR/package/appcast/appcast.xml"
+}
+
+run_nested_adhoc_failure_case() {
+    if PATH="$WORK_DIR/bin:$PATH" \
+       ADHOC_PATH_FRAGMENT="Downloader.xpc" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "ad-hoc nested Sparkle helper was accepted"
+    fi
 }
 
 main() {
@@ -103,6 +131,7 @@ main() {
     run_success_case
     run_arch_failure_case
     run_appcast_failure_case
+    run_nested_adhoc_failure_case
     printf 'verify-release-package tests passed\n'
 }
 
