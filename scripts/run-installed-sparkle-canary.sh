@@ -73,7 +73,36 @@ resolve_feed_url() {
 
     [[ -n "$FEED_URL" ]] || fail "Sparkle feed URL is missing; set SAFEMAC_CANARY_FEED_URL or SUFeedURL"
     [[ "$FEED_URL" != *'$('* ]] || fail "Sparkle feed URL contains an unresolved build setting"
-    [[ "$FEED_URL" == https://* || "$FEED_URL" == file://* ]] || fail "Sparkle feed URL must be https:// or file:// for the canary"
+    if ! /usr/bin/swift - "$FEED_URL" <<'SWIFT'
+import Foundation
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+guard arguments.count == 1 else { exit(1) }
+let value = arguments[0]
+guard value.unicodeScalars.allSatisfy({
+          !$0.properties.isWhitespace && !CharacterSet.controlCharacters.contains($0)
+      }),
+      let components = URLComponents(string: value),
+      components.user == nil,
+      components.password == nil,
+      components.query == nil,
+      components.fragment == nil,
+      !components.percentEncodedPath.isEmpty,
+      let url = components.url,
+      url.absoluteString == value else {
+    exit(1)
+}
+if components.scheme == "https" {
+    guard components.host?.isEmpty == false else { exit(1) }
+} else if components.scheme == "file" {
+    guard url.isFileURL else { exit(1) }
+} else {
+    exit(1)
+}
+SWIFT
+    then
+        fail "Sparkle feed URL must be a strict HTTPS or local file URL"
+    fi
 }
 
 verify_app_policy() {

@@ -192,20 +192,29 @@ func firstMatch(_ pattern: String, in value: String) -> String? {
     return String(value[swiftRange])
 }
 
-func allMatches(_ pattern: String, in value: String) -> [String] {
-    guard let expression = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
-        return []
-    }
-    let range = NSRange(value.startIndex..<value.endIndex, in: value)
-    return expression.matches(in: value, range: range).compactMap { match in
-        guard let swiftRange = Range(match.range, in: value) else { return nil }
-        return String(value[swiftRange])
-    }
-}
+final class EnclosureCollector: NSObject, XMLParserDelegate {
+    var enclosures: [[String: String]] = []
+    var parseError: Error?
 
-func attribute(_ name: String, in tag: String) -> String? {
-    let escapedName = NSRegularExpression.escapedPattern(for: name)
-    return firstMatch(#"(?:^|\s)\#(escapedName)="([^"]+)""#, in: tag)
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String]
+    ) {
+        if elementName == "enclosure" || qName == "enclosure" {
+            enclosures.append(attributeDict)
+        }
+    }
+
+    func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
+        self.parseError = parseError
+    }
+
+    func parser(_ parser: XMLParser, validationErrorOccurred validationError: Error) {
+        self.parseError = validationError
+    }
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
@@ -235,6 +244,11 @@ let contentData = appcastData[..<prefixRange.lowerBound]
 guard let suffixRange = appcastData.range(of: suffix, in: prefixRange.upperBound..<appcastData.endIndex) else {
     fail("signed-feed block terminator missing")
 }
+let trailingData = appcastData[suffixRange.upperBound..<appcastData.endIndex]
+guard let trailing = String(data: trailingData, encoding: .utf8),
+      trailing.unicodeScalars.allSatisfy({ $0.properties.isWhitespace }) else {
+    fail("unsigned trailing appcast content")
+}
 guard let block = String(data: appcastData[prefixRange.upperBound..<suffixRange.lowerBound], encoding: .utf8) else {
     fail("signed-feed block is not UTF-8")
 }
@@ -249,24 +263,29 @@ guard let feedSignature = Data(base64Encoded: feedSignatureBase64),
     fail("signed-feed signature invalid")
 }
 
-guard let content = String(data: contentData, encoding: .utf8) else {
-    fail("appcast content is not UTF-8")
+let collector = EnclosureCollector()
+let parser = XMLParser(data: Data(contentData))
+parser.delegate = collector
+parser.shouldProcessNamespaces = false
+parser.shouldResolveExternalEntities = false
+guard parser.parse(), collector.parseError == nil else {
+    fail("appcast XML is invalid")
 }
-let updateEnclosures = allMatches(#"<enclosure\b[^>]*>"#, in: content).compactMap { tag -> (tag: String, version: Int)? in
-    guard let versionString = attribute("sparkle:version", in: tag),
+let updateEnclosures = collector.enclosures.compactMap { attributes -> (attributes: [String: String], version: Int)? in
+    guard let versionString = attributes["sparkle:version"],
           let version = Int(versionString),
           version > installedVersion else {
         return nil
     }
-    return (tag, version)
+    return (attributes, version)
 }
 guard updateEnclosures.count == 1 else {
     fail("expected exactly one newer appcast enclosure")
 }
-let enclosure = updateEnclosures[0].tag
+let enclosure = updateEnclosures[0].attributes
 
-guard let archiveSignatureBase64 = attribute("sparkle:edSignature", in: enclosure),
-      let archiveURLString = attribute("url", in: enclosure),
+guard let archiveSignatureBase64 = enclosure["sparkle:edSignature"],
+      let archiveURLString = enclosure["url"],
       let archiveComponents = URLComponents(string: archiveURLString),
       archiveComponents.scheme == "https",
       archiveComponents.host?.isEmpty == false,
@@ -283,7 +302,7 @@ if !expectedDownloadURLPrefix.isEmpty && !archiveURLString.hasPrefix(expectedDow
     fail("archive URL does not use expected download prefix")
 }
 let fileSize = (try FileManager.default.attributesOfItem(atPath: dmgURL.path)[.size] as? NSNumber)?.int64Value
-let declaredLength = attribute("sparkle:length", in: enclosure) ?? attribute("length", in: enclosure)
+let declaredLength = enclosure["sparkle:length"] ?? enclosure["length"]
 guard let declaredLength, Int64(declaredLength) == fileSize else {
     fail("archive length does not match release DMG")
 }

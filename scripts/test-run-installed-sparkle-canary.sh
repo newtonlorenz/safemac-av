@@ -271,6 +271,27 @@ test_placeholder_feed_is_rejected() {
     fi
 }
 
+test_unsafe_remote_feed_urls_are_rejected_before_sparkle() {
+    local feed_url
+    local -a feed_urls=(
+        "https://user@updates.example.com/appcast.xml"
+        "https://user:password@updates.example.com/appcast.xml"
+        "https://updates.example.com/appcast.xml?token=secret"
+        "https://updates.example.com/appcast.xml#fragment"
+        "https://updates.example.com/app cast.xml"
+    )
+
+    for feed_url in "${feed_urls[@]}"; do
+        : > "$SPARKLE_LOG"
+        write_info_plist "$APP_PATH" "$feed_url" 1
+        if run_canary >/dev/null 2>&1; then
+            fail "unsafe remote canary feed URL was accepted: $feed_url"
+        fi
+        [[ ! -s "$SPARKLE_LOG" ]] \
+            || fail "unsafe remote canary feed URL reached sparkle-cli: $feed_url"
+    done
+}
+
 test_expected_update_fails_when_probe_reports_no_update() {
     write_info_plist "$APP_PATH" "https://updates.example.com/appcast.xml" 1
 
@@ -297,6 +318,7 @@ main() {
     test_unsigned_fixture_override_requires_explicit_root
     test_unsigned_fixture_override_rejects_symlink_escape
     test_placeholder_feed_is_rejected
+    test_unsafe_remote_feed_urls_are_rejected_before_sparkle
     test_expected_update_fails_when_probe_reports_no_update
     printf 'run installed Sparkle canary tests passed\n'
 }

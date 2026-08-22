@@ -167,6 +167,20 @@ case "misleading-version":
         of: #"sparkle:version="3""#,
         with: #"data-sparkle:version="3" sparkle:version="1""#
     )
+case "commented-valid-invalid-real", "cdata-valid-invalid-real":
+    let expression = try NSRegularExpression(pattern: #"<enclosure\b[^>]*>"#)
+    let range = NSRange(content.startIndex..<content.endIndex, in: content)
+    guard let match = expression.firstMatch(in: content, range: range),
+          let swiftRange = Range(match.range, in: content) else { exit(2) }
+    let validEnclosure = String(content[swiftRange])
+    let invalidRealEnclosure = validEnclosure.replacingOccurrences(
+        of: #"sparkle:version="3""#,
+        with: #"sparkle:version="1""#
+    )
+    let hiddenValidEnclosure = mode == "commented-valid-invalid-real"
+        ? "<!-- \(validEnclosure) -->"
+        : "<![CDATA[\(validEnclosure)]]>"
+    content.replaceSubrange(swiftRange, with: "\(hiddenValidEnclosure)\n      \(invalidRealEnclosure)")
 default:
     exit(2)
 }
@@ -294,7 +308,7 @@ run_unsafe_feed_url_failure_case() {
 run_unsafe_archive_metadata_failure_cases() {
     local mode
 
-    for mode in url-user url-password url-query url-fragment misleading-version; do
+    for mode in url-user url-password url-query url-fragment misleading-version commented-valid-invalid-real cdata-valid-invalid-real; do
         cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
         mutate_and_resign_installed_appcast "$mode"
         if "$PROJECT_DIR/scripts/verify-installed-sparkle-canary.sh" \
@@ -302,6 +316,19 @@ run_unsafe_archive_metadata_failure_cases() {
             "$WORK_DIR/package/appcast/appcast.xml" \
             "$WORK_DIR/package/SafeMac-AV.dmg" >/dev/null 2>&1; then
             fail "unsafe installed appcast metadata was accepted: $mode"
+        fi
+        mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+    done
+}
+
+run_unsigned_trailing_appcast_failure_cases() {
+    local trailing
+
+    for trailing in '<!-- unsigned trailing comment -->' '<extra />' 'unsigned-junk'; do
+        cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+        printf '%s\n' "$trailing" >> "$WORK_DIR/package/appcast/appcast.xml"
+        if run_success_case >/dev/null 2>&1; then
+            fail "unsigned trailing installed appcast content was accepted: $trailing"
         fi
         mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
     done
@@ -385,6 +412,7 @@ main() {
     run_invalid_installed_key_failure_case
     run_unsafe_feed_url_failure_case
     run_unsafe_archive_metadata_failure_cases
+    run_unsigned_trailing_appcast_failure_cases
     printf 'installed Sparkle canary tests passed\n'
 }
 

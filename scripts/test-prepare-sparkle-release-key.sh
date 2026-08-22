@@ -48,6 +48,16 @@ run_preflight() {
         "$PROJECT_DIR/scripts/prepare-sparkle-release-key.sh" "$KEY_PATH"
 }
 
+run_preflight_check_only() {
+    RUNNER_TEMP="$WORK_DIR" \
+    SAFEMAC_SPARKLE_KEY_CHECK_ONLY=1 \
+    SPARKLE_FEED_URL="${SPARKLE_FEED_URL_VALUE:-https://updates.example.com/appcast.xml}" \
+    SPARKLE_DOWNLOAD_URL_PREFIX="${SPARKLE_DOWNLOAD_URL_PREFIX_VALUE:-https://downloads.example.com/releases/}" \
+    SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY_VALUE:-$(cat "$WORK_DIR/public-key.txt")}" \
+    SPARKLE_PRIVATE_ED_KEY_BASE64="${SPARKLE_PRIVATE_ED_KEY_BASE64_VALUE:-$(cat "$WORK_DIR/private-secret.txt")}" \
+        "$PROJECT_DIR/scripts/prepare-sparkle-release-key.sh"
+}
+
 expect_failure() {
     local label="$1"
     shift
@@ -70,6 +80,29 @@ test_valid_configuration() {
     [[ "$(stat -f '%Lp' "$KEY_PATH")" == "600" ]] || fail "private key file mode is not 0600"
     [[ "$(cat "$KEY_PATH")" == "$(printf '\001%.0s' {1..32} | base64)" ]] \
         || fail "preflight did not preserve the Sparkle exported key format"
+}
+
+test_check_only_configuration() {
+    rm -f "$KEY_PATH"
+    run_preflight_check_only >/dev/null
+    [[ ! -e "$KEY_PATH" ]] || fail "check-only preflight created the release key output"
+    if find "$WORK_DIR" -maxdepth 1 -name 'sparkle_private_ed_key.preflight.*' -print -quit | grep -q .; then
+        fail "check-only preflight left temporary private key material behind"
+    fi
+
+    printf 'existing-key\n' > "$KEY_PATH"
+    chmod 600 "$KEY_PATH"
+    run_preflight_check_only >/dev/null
+    [[ "$(cat "$KEY_PATH")" == "existing-key" ]] \
+        || fail "check-only preflight changed an existing release key output"
+    rm -f "$KEY_PATH"
+
+    if SPARKLE_FEED_URL_VALUE="http://updates.example.com/appcast.xml" \
+       run_preflight_check_only >"$WORK_DIR/stdout" 2>"$WORK_DIR/stderr"; then
+        fail "invalid check-only configuration was accepted"
+    fi
+    [[ "$(cat "$WORK_DIR/stderr")" == "Error: Sparkle release configuration is invalid" ]] \
+        || fail "check-only failure did not use the generic redacted error"
 }
 
 test_invalid_urls() {
@@ -141,14 +174,20 @@ test_workflow_runs_preflight_before_signing() {
     local preflight_line
     local certificate_line
     local credential_cleanup_line
+    local appcast_line
+    local sparkle_cleanup_line
+    local verifier_line
     local upload_line
 
     validation_line="$(grep -n 'name: Validate immutable release tag' "$workflow" | cut -d: -f1)"
     preflight_line="$(grep -n 'name: Preflight Sparkle release trust' "$workflow" | cut -d: -f1)"
     certificate_line="$(grep -n 'name: Import Developer ID certificate' "$workflow" | cut -d: -f1)"
     credential_cleanup_line="$(grep -n 'name: Remove release credentials before artifact upload' "$workflow" | cut -d: -f1 || true)"
+    appcast_line="$(grep -n 'name: Generate Sparkle appcast' "$workflow" | cut -d: -f1)"
+    sparkle_cleanup_line="$(grep -n 'cleanup_sparkle_key' "$workflow" | head -1 | cut -d: -f1 || true)"
+    verifier_line="$(grep -n 'name: Verify distribution artifacts' "$workflow" | cut -d: -f1)"
     upload_line="$(grep -n 'name: Upload release artifacts' "$workflow" | cut -d: -f1)"
-    [[ -n "$validation_line" && -n "$preflight_line" && -n "$certificate_line" && -n "$upload_line" ]] \
+    [[ -n "$validation_line" && -n "$preflight_line" && -n "$certificate_line" && -n "$appcast_line" && -n "$verifier_line" && -n "$upload_line" ]] \
         || fail "workflow trust steps are missing"
     [[ "$validation_line" -lt "$preflight_line" && "$preflight_line" -lt "$certificate_line" ]] \
         || fail "workflow does not validate the release tag before secret-bearing steps"
@@ -160,16 +199,21 @@ test_workflow_runs_preflight_before_signing() {
         || fail "workflow does not check out trusted main before validation"
     grep -Fq 'ref: ${{ steps.validate_release.outputs.release_commit }}' "$workflow" \
         || fail "workflow does not check out the immutable validated commit"
-    grep -Fq 'git merge-base --is-ancestor "$release_commit" refs/remotes/origin/main' "$workflow" \
-        || fail "workflow does not require the tag commit to be on main"
+    grep -Fq '[[ "$release_commit" == "$main_commit" ]] || fail' "$workflow" \
+        || fail "workflow does not require the tag commit to equal current main"
     grep -Fq '"$RUNNER_TEMP/sparkle_private_ed_key"' "$workflow" \
         || fail "workflow does not clean up the Sparkle private key"
     [[ -n "$credential_cleanup_line" && "$credential_cleanup_line" -lt "$upload_line" ]] \
         || fail "workflow does not remove release credentials before artifact upload"
     grep -Fq 'security delete-keychain "$RUNNER_TEMP/safemac-release.keychain-db"' "$workflow" \
         || fail "workflow cleanup does not cover a partially-created deterministic keychain"
-    grep -Fq 'echo "SPARKLE_PRIVATE_ED_KEY="' "$workflow" \
-        || fail "workflow does not clear signing-material paths before artifact upload"
+    [[ -n "$sparkle_cleanup_line" && "$appcast_line" -lt "$sparkle_cleanup_line" && "$sparkle_cleanup_line" -lt "$verifier_line" ]] \
+        || fail "workflow does not remove the Sparkle private key before verification"
+    grep -Fq 'SAFEMAC_SPARKLE_KEY_CHECK_ONLY: "1"' "$workflow" \
+        || fail "workflow preflight does not use check-only private-key validation"
+    if grep -Fq 'echo "SPARKLE_PRIVATE_ED_KEY=$SPARKLE_PRIVATE_ED_KEY"' "$workflow"; then
+        fail "workflow persists the Sparkle private-key path globally"
+    fi
 }
 
 extract_release_ref_validation() {
@@ -211,9 +255,12 @@ test_workflow_release_ref_validation_behavior() {
     git init -q -b main "$source"
     git -C "$source" config user.name "SafeMac Test"
     git -C "$source" config user.email "test@example.com"
-    printf 'main\n' > "$source/release.txt"
+    printf 'historical main\n' > "$source/release.txt"
     git -C "$source" add release.txt
-    git -C "$source" commit -q -m "main release"
+    git -C "$source" commit -q -m "historical release"
+    git -C "$source" tag -a v1.2.2 -m "SafeMac AV v1.2.2"
+    printf 'current main\n' > "$source/release.txt"
+    git -C "$source" commit -qam "current release"
     main_commit="$(git -C "$source" rev-parse HEAD)"
     git -C "$source" remote add origin "$origin"
     git -C "$source" push -q -u origin main
@@ -224,12 +271,16 @@ test_workflow_release_ref_validation_behavior() {
     printf 'not main\n' >> "$source/release.txt"
     git -C "$source" commit -qam "off-main release"
     git -C "$source" tag -a v1.2.5 -m "SafeMac AV v1.2.5"
-    git -C "$source" push -q origin refs/tags/v1.2.3 refs/tags/v1.2.4 refs/tags/v1.2.5
+    git -C "$source" push -q origin refs/tags/v1.2.2 refs/tags/v1.2.3 refs/tags/v1.2.4 refs/tags/v1.2.5
 
     git clone -q --branch main "$origin" "$runner"
     run_workflow_validation "$runner" "refs/tags/v1.2.3" >/dev/null
     grep -Fxq "release_commit=$main_commit" "$WORK_DIR/github-output" \
         || fail "valid annotated tag did not resolve to the expected commit"
+
+    if run_workflow_validation "$runner" "refs/tags/v1.2.2" >/dev/null 2>&1; then
+        fail "historical main release tag was accepted"
+    fi
 
     if run_workflow_validation "$runner" "refs/tags/v1.2.4" >/dev/null 2>&1; then
         fail "lightweight release tag was accepted"
@@ -248,6 +299,7 @@ test_workflow_release_ref_validation_behavior() {
 main() {
     make_key_fixture
     test_valid_configuration
+    test_check_only_configuration
     test_invalid_urls
     test_invalid_public_keys
     test_invalid_private_keys

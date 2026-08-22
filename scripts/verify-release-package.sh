@@ -15,6 +15,8 @@ DMG_PATH="$PACKAGE_DIR/$DMG_NAME"
 CHECKSUM_PATH="$PACKAGE_DIR/SHA256SUMS.txt"
 APPCAST_PATH="${APPCAST_PATH:-$PACKAGE_DIR/appcast/appcast.xml}"
 SAFEMAC_VERIFY_APP_PATH="${SAFEMAC_VERIFY_APP_PATH:-}"
+ALLOW_TEST_APP_OVERRIDE="${SAFEMAC_VERIFY_TEST_ONLY_ALLOW_APP_OVERRIDE:-0}"
+TEST_ONLY_FIXTURE_ROOT="${SAFEMAC_VERIFY_TEST_ONLY_FIXTURE_ROOT:-}"
 EXPECTED_SPARKLE_FEED_URL="${EXPECTED_SPARKLE_FEED_URL:-}"
 EXPECTED_SPARKLE_PUBLIC_ED_KEY="${EXPECTED_SPARKLE_PUBLIC_ED_KEY:-}"
 EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX="${EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX:-}"
@@ -194,8 +196,42 @@ verify_dmg_trust() {
 
 resolve_app_path() {
     if [[ -n "$SAFEMAC_VERIFY_APP_PATH" ]]; then
-        [[ -d "$SAFEMAC_VERIFY_APP_PATH" ]] || fail "override app path is not a directory: $SAFEMAC_VERIFY_APP_PATH"
-        mounted_app_path="$SAFEMAC_VERIFY_APP_PATH"
+        local app_real_path
+        local fixture_root
+        local marker_path
+        local system_temp_root
+
+        [[ "$ALLOW_TEST_APP_OVERRIDE" == "1" ]] \
+            || fail "release app override is restricted to explicit test fixtures"
+        [[ -n "$TEST_ONLY_FIXTURE_ROOT" && -d "$TEST_ONLY_FIXTURE_ROOT" && ! -L "$TEST_ONLY_FIXTURE_ROOT" ]] \
+            || fail "release app override requires a physical fixture root"
+        fixture_root="$(cd "$TEST_ONLY_FIXTURE_ROOT" && pwd -P)"
+        system_temp_root="$(cd "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" && pwd -P)"
+        [[ "$fixture_root/" == "$system_temp_root/"* ]] \
+            || fail "release app override root is outside the system temporary directory"
+        case "$(basename "$fixture_root")" in
+            safemac-release-test.*|safemac-verify-release-test.*) ;;
+            *) fail "release app override root has an unexpected name" ;;
+        esac
+        [[ "$(/usr/bin/stat -f '%u' "$fixture_root")" == "$(/usr/bin/id -u)" ]] \
+            || fail "release app override root has the wrong owner"
+        [[ "$(/usr/bin/stat -f '%Lp' "$fixture_root")" == "700" ]] \
+            || fail "release app override root must use mode 0700"
+        marker_path="$fixture_root/.safemac-release-verify-app-fixture"
+        [[ -f "$marker_path" && ! -L "$marker_path" ]] \
+            || fail "release app override requires a validated fixture root"
+        [[ "$(/usr/bin/stat -f '%u' "$marker_path")" == "$(/usr/bin/id -u)" ]] \
+            || fail "release app override marker has the wrong owner"
+        [[ "$(/usr/bin/stat -f '%Lp' "$marker_path")" == "600" ]] \
+            || fail "release app override marker must use mode 0600"
+        [[ "$(< "$marker_path")" == "SafeMac release verifier app fixture" ]] \
+            || fail "release app override marker is invalid"
+        [[ -d "$SAFEMAC_VERIFY_APP_PATH" && ! -L "$SAFEMAC_VERIFY_APP_PATH" ]] \
+            || fail "release app override must be a physical directory"
+        app_real_path="$(cd "$SAFEMAC_VERIFY_APP_PATH" && pwd -P)"
+        [[ "$app_real_path/" == "$fixture_root/"* ]] \
+            || fail "release app override is restricted to the validated fixture root"
+        mounted_app_path="$app_real_path"
         return
     fi
 
@@ -381,20 +417,37 @@ func firstMatch(_ pattern: String, in value: String) -> String? {
     return String(value[swiftRange])
 }
 
-func allMatches(_ pattern: String, in value: String) -> [String] {
-    guard let expression = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
-        return []
+final class EnclosureCollector: NSObject, XMLParserDelegate {
+    var enclosures: [[String: String]] = []
+    var parseError: Error?
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String]
+    ) {
+        if elementName == "enclosure" || qName == "enclosure" {
+            enclosures.append(attributeDict)
+        }
     }
-    let range = NSRange(value.startIndex..<value.endIndex, in: value)
-    return expression.matches(in: value, range: range).compactMap { match in
-        guard let swiftRange = Range(match.range, in: value) else { return nil }
-        return String(value[swiftRange])
+
+    func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
+        self.parseError = parseError
+    }
+
+    func parser(_ parser: XMLParser, validationErrorOccurred validationError: Error) {
+        self.parseError = validationError
     }
 }
 
-func attribute(_ name: String, in tag: String) -> String? {
-    let escapedName = NSRegularExpression.escapedPattern(for: name)
-    return firstMatch(#"(?:^|\s)\#(escapedName)="([^"]+)""#, in: tag)
+func containsSingleQuotedCriticalAttribute(_ value: String) -> Bool {
+    guard let expression = try? NSRegularExpression(
+        pattern: #"(?:sparkle:version|sparkle:shortVersionString|sparkle:edSignature|sparkle:length|length|url)\s*='"#
+    ) else { return true }
+    let range = NSRange(value.startIndex..<value.endIndex, in: value)
+    return expression.firstMatch(in: value, range: range) != nil
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
@@ -424,6 +477,11 @@ let contentData = appcastData[..<prefixRange.lowerBound]
 guard let suffixRange = appcastData.range(of: suffix, in: prefixRange.upperBound..<appcastData.endIndex) else {
     fail("signed-feed block terminator missing")
 }
+let trailingData = appcastData[suffixRange.upperBound..<appcastData.endIndex]
+guard let trailing = String(data: trailingData, encoding: .utf8),
+      trailing.unicodeScalars.allSatisfy({ $0.properties.isWhitespace }) else {
+    fail("unsigned trailing appcast content")
+}
 guard let block = String(data: appcastData[prefixRange.upperBound..<suffixRange.lowerBound], encoding: .utf8) else {
     fail("signed-feed block is not UTF-8")
 }
@@ -441,16 +499,27 @@ guard let feedSignature = Data(base64Encoded: feedSignatureBase64),
 guard let content = String(data: contentData, encoding: .utf8) else {
     fail("appcast content is not UTF-8")
 }
-let matchingEnclosures = allMatches(#"<enclosure\b[^>]*>"#, in: content).filter { tag in
-    attribute("sparkle:version", in: tag) == bundleVersion &&
-    attribute("sparkle:shortVersionString", in: tag) == shortVersion
+guard !containsSingleQuotedCriticalAttribute(content) else {
+    fail("critical enclosure attributes must use double quotes")
+}
+let collector = EnclosureCollector()
+let parser = XMLParser(data: Data(contentData))
+parser.delegate = collector
+parser.shouldProcessNamespaces = false
+parser.shouldResolveExternalEntities = false
+guard parser.parse(), collector.parseError == nil else {
+    fail("appcast XML is invalid")
+}
+let matchingEnclosures = collector.enclosures.filter { attributes in
+    attributes["sparkle:version"] == bundleVersion &&
+    attributes["sparkle:shortVersionString"] == shortVersion
 }
 guard matchingEnclosures.count == 1 else {
     fail("expected exactly one matching appcast enclosure")
 }
 let enclosure = matchingEnclosures[0]
-guard let archiveSignatureBase64 = attribute("sparkle:edSignature", in: enclosure),
-      let archiveURLString = attribute("url", in: enclosure),
+guard let archiveSignatureBase64 = enclosure["sparkle:edSignature"],
+      let archiveURLString = enclosure["url"],
       let archiveComponents = URLComponents(string: archiveURLString),
       archiveComponents.scheme == "https",
       archiveComponents.host?.isEmpty == false,
@@ -467,7 +536,7 @@ if !expectedDownloadURLPrefix.isEmpty && !archiveURLString.hasPrefix(expectedDow
     fail("archive URL does not use expected download prefix")
 }
 let fileSize = (try FileManager.default.attributesOfItem(atPath: dmgURL.path)[.size] as? NSNumber)?.int64Value
-let declaredLength = attribute("sparkle:length", in: enclosure) ?? attribute("length", in: enclosure)
+let declaredLength = enclosure["sparkle:length"] ?? enclosure["length"]
 guard let declaredLength,
       let declaredLengthValue = Int64(declaredLength),
       let fileSize,
