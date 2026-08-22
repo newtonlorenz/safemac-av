@@ -331,10 +331,10 @@ verify_signed_app_components() {
     verify_distribution_code "$background_helper" "$background_helper_executable" "$expected_team_id"
     helper_entitlements="$(codesign -d --entitlements :- "$background_helper" 2>/dev/null)" \
         || fail "Could not inspect background helper entitlements."
-    grep -Fq '<key>com.apple.security.app-sandbox</key>' <<< "$helper_entitlements" \
-        || fail "Background helper sandbox entitlement is missing."
-    grep -Fq '<false/>' <<< "$helper_entitlements" \
-        || fail "Background helper sandbox entitlement must remain disabled."
+    command -v jq >/dev/null 2>&1 || fail "jq is required to validate background helper entitlements."
+    jq -e '."com.apple.security.app-sandbox" == false' \
+        <<< "$(plutil -convert json -o - - <<< "$helper_entitlements")" >/dev/null \
+        || fail "Background helper sandbox entitlement must be exactly false."
     ! grep -Fq 'com.apple.security.application-groups' <<< "$helper_entitlements" \
         || fail "Background helper must not claim an unused app-group entitlement."
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$background_helper/Contents/Info.plist")" == "true" ]] \

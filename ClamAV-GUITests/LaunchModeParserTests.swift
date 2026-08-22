@@ -2,6 +2,8 @@ import XCTest
 @testable import ClamAV_GUI
 
 final class LaunchModeParserTests: XCTestCase {
+    private enum RouteStoreTestError: Error { case acknowledgementFailed }
+
     func testParsesInteractiveModeByDefault() {
         let mode = LaunchModeParser.parse(arguments: ["ClamAV-GUI"])
         XCTAssertEqual(mode, .interactive)
@@ -151,6 +153,32 @@ final class LaunchModeParserTests: XCTestCase {
         XCTAssertNil(store.consume())
 
         try "--finder-request".data(using: .utf8)?.write(to: root.appendingPathComponent("background-route.request"))
+        XCTAssertNil(store.consume())
+    }
+
+    func testBackgroundRouteIsNotDispatchedWhenDurableAcknowledgementFails() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BackgroundRouteRequestStore(
+            baseURL: root,
+            removeRequest: { _ in throw RouteStoreTestError.acknowledgementFailed }
+        )
+
+        XCTAssertTrue(store.enqueue(.settings))
+        XCTAssertNil(store.consume())
+        XCTAssertEqual(store.peek(), .settings)
+    }
+
+    func testBackgroundRouteStoreRejectsSymlinkedRequestFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let request = root.appendingPathComponent("background-route.request")
+        try FileManager.default.createSymbolicLink(at: request, withDestinationURL: URL(fileURLWithPath: "/tmp"))
+
+        let store = BackgroundRouteRequestStore(baseURL: root)
+        XCTAssertFalse(store.enqueue(.settings))
         XCTAssertNil(store.consume())
     }
 }

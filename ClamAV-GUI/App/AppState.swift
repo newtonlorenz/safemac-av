@@ -212,8 +212,11 @@ final class AppState: ObservableObject {
     func drainBackgroundRouteRequests() -> Int {
         guard MainWindowControllerRegistry.shared.isRouterAvailable else { return 0 }
         var count = 0
-        while let route = backgroundRouteRequestStore.peek() {
-            guard handleBackgroundRoute(route), backgroundRouteRequestStore.acknowledge(route) else { break }
+        while let route = backgroundRouteRequestStore.consume() {
+            guard handleBackgroundRoute(route) else {
+                _ = backgroundRouteRequestStore.enqueue(route)
+                break
+            }
             count += 1
         }
         return count

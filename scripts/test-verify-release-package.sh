@@ -174,6 +174,8 @@ if [[ " $* " == *" --entitlements :- "* && "$target" != "${MISSING_AUTOUPDATE_EN
     if [[ "$target" == */SafeMacAVBackground.app ]]; then
         if [[ "${BACKGROUND_HELPER_ENTITLEMENT_MODE:-valid}" == "valid" ]]; then
             printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><false/></dict></plist>"
+        elif [[ "${BACKGROUND_HELPER_ENTITLEMENT_MODE:-}" == "sandbox-true-with-unrelated-false" ]]; then
+            printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><true/><key>com.apple.security.get-task-allow</key><false/></dict></plist>"
         else
             printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>unexpected</string></array></dict></plist>"
         fi
@@ -587,6 +589,30 @@ run_background_helper_presence_and_policy_failure_cases() {
         "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
         fail "release verifier accepted invalid background helper entitlements"
     fi
+
+    if PATH="$WORK_DIR/bin:$PATH" \
+       BACKGROUND_HELPER_ENTITLEMENT_MODE=sandbox-true-with-unrelated-false \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted an enabled helper sandbox with an unrelated false entitlement"
+    fi
+
+    local signature_failure_variable
+    local -a signature_failure_variables=(
+        WRONG_TEAM_CODESIGN_PATH
+        ADHOC_CODESIGN_PATH
+        MISSING_TIMESTAMP_PATH
+        MISSING_RUNTIME_PATH
+    )
+    for signature_failure_variable in "${signature_failure_variables[@]}"; do
+        if env \
+            PATH="$WORK_DIR/bin:$PATH" \
+            "$signature_failure_variable=$helper" \
+            SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "release verifier accepted invalid background helper signature policy: $signature_failure_variable"
+        fi
+    done
 }
 
 run_nested_signature_policy_failure_cases() {

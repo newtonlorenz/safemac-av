@@ -160,7 +160,7 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             format: .xml,
             options: 0
         ).write(to: helperBundle.appendingPathComponent("Info.plist"))
-        XCTAssertTrue(BackgroundHelperBundle.isEmbeddedHelper(at: helperExecutable, in: root))
+        XCTAssertFalse(BackgroundHelperBundle.isEmbeddedHelper(at: helperExecutable, in: root))
 
         try PropertyListSerialization.data(
             fromPropertyList: ["CFBundleIdentifier": "com.example.impostor"],
@@ -235,6 +235,36 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         XCTAssertEqual(captured?.1, 300)
     }
 
+    func testScheduledUpdaterSupportsTheInjectableSettingsStoreContract() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        let settingsURL = root.appendingPathComponent("settings.json")
+        try writeSecureSettings(JSONSerialization.data(withJSONObject: [
+            "autoUpdateSignatures": true,
+            "freshclamPath": "/usr/bin/true",
+            "configDirectory": root.path,
+            "signatureDirectory": root.appendingPathComponent("signatures").path
+        ]), to: settingsURL)
+        var invoked = false
+        let updater = BackgroundSignatureUpdater(
+            settingsStore: BackgroundHelperSettingsStore(settingsURL: settingsURL),
+            execute: { _, _ in
+                invoked = true
+                return .upToDate
+            }
+        )
+
+        XCTAssertEqual(updater.runIfAvailable(), .upToDate)
+        XCTAssertTrue(invoked)
+    }
+
+    func testDefaultHelperNotificationDeliverySuppressesWithoutPromptInDebug() async {
+        await BackgroundHelperNotificationCoordinator()
+            .deliverIfAuthorized(outcome: .upToDate, notificationsEnabled: true)
+    }
+
     func testFreshclamInvocationRejectsGroupWritableExecutable() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -244,6 +274,25 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: executable.path)
 
         XCTAssertFalse(FreshclamInvocation.isTrustedExecutable(at: executable.path))
+    }
+
+    func testFreshclamInvocationRunsResolvedTrustedExecutableInsteadOfInputSymlink() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("freshclam")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let symlink = root.appendingPathComponent("freshclam-link")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: executable)
+
+        let invocation = try FreshclamInvocation.make(
+            executablePath: symlink.path,
+            configDirectory: root.path,
+            signatureDirectory: root.appendingPathComponent("signatures").path
+        )
+
+        XCTAssertEqual(invocation.executablePath, executable.path)
     }
 
     func testScheduledUpdaterDefaultProcessExecutionCompletesWithinBound() throws {
@@ -428,6 +477,27 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             XCTAssertTrue(delivery.deliveries.isEmpty)
             XCTAssertEqual(delivery.statusCalls, 1)
         }
+    }
+
+    func testHelperNotificationsUseSafeSuccessAndCurrentSummaries() async {
+        for outcome in [
+            FreshclamUpdateOutcome.updated(main: "1", daily: "2", bytecode: "3"),
+            .upToDate
+        ] {
+            let delivery = BackgroundHelperNotificationMock(status: .authorized)
+            await BackgroundHelperNotificationCoordinator(delivery: delivery)
+                .deliverIfAuthorized(outcome: outcome, notificationsEnabled: true)
+            XCTAssertEqual(delivery.deliveries.count, 1)
+            XCTAssertFalse(delivery.deliveries[0].1.contains("1"))
+        }
+    }
+
+    func testHelperNotificationsRespectForegroundPreference() async {
+        let delivery = BackgroundHelperNotificationMock(status: .authorized)
+        await BackgroundHelperNotificationCoordinator(delivery: delivery)
+            .deliverIfAuthorized(outcome: .upToDate, notificationsEnabled: false)
+        XCTAssertTrue(delivery.deliveries.isEmpty)
+        XCTAssertEqual(delivery.statusCalls, 0)
     }
 
     func testAppAdapterExposesOnlyTheFixedMainActions() {

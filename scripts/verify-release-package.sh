@@ -121,10 +121,10 @@ verify_background_helper_entitlements() {
     local entitlements
     entitlements="$(codesign -d --entitlements :- "$helper_path" 2>/dev/null)" \
         || fail "unable to inspect background helper entitlements"
-    grep -Fq '<key>com.apple.security.app-sandbox</key>' <<< "$entitlements" \
-        || fail "background helper sandbox entitlement is missing"
-    grep -Fq '<false/>' <<< "$entitlements" \
-        || fail "background helper sandbox entitlement must remain disabled"
+    command_path jq
+    jq -e '."com.apple.security.app-sandbox" == false' \
+        <<< "$(plutil -convert json -o - - <<< "$entitlements")" >/dev/null \
+        || fail "background helper sandbox entitlement must be exactly false"
     ! grep -Fq 'com.apple.security.application-groups' <<< "$entitlements" \
         || fail "background helper must not claim an unused app-group entitlement"
 }
