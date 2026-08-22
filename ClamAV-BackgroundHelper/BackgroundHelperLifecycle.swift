@@ -1,5 +1,38 @@
 import Foundation
 
+/// Keeps the durable fixed-enum request authoritative across a canonical main
+/// app launch. A failed launch removes the pending request so it cannot replay
+/// later; distributed notifications remain only a post-launch wake hint.
+final class BackgroundRouteHandoff {
+    private let requestStore: BackgroundRouteRequestStore
+    private let validateMainApplication: () -> Bool
+    private let openMainApplication: (@escaping (Bool) -> Void) -> Void
+    private let postWakeHint: (BackgroundRoute) -> Void
+
+    init(
+        requestStore: BackgroundRouteRequestStore,
+        validateMainApplication: @escaping () -> Bool,
+        openMainApplication: @escaping (@escaping (Bool) -> Void) -> Void,
+        postWakeHint: @escaping (BackgroundRoute) -> Void
+    ) {
+        self.requestStore = requestStore
+        self.validateMainApplication = validateMainApplication
+        self.openMainApplication = openMainApplication
+        self.postWakeHint = postWakeHint
+    }
+
+    func send(_ route: BackgroundRoute) {
+        guard validateMainApplication(), requestStore.enqueue(route) else { return }
+        openMainApplication { [requestStore, postWakeHint] succeeded in
+            guard succeeded else {
+                requestStore.discard()
+                return
+            }
+            postWakeHint(route)
+        }
+    }
+}
+
 @MainActor
 final class BackgroundHelperCoordinator {
     enum Presentation: Equatable {

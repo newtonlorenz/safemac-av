@@ -48,9 +48,7 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
         launchAgentsDirectory: URL? = nil,
         applicationBundlePath: String = Bundle.main.bundlePath,
         backgroundHelperExecutableURL: URL? = nil,
-        backgroundHelperValidator: @escaping (URL) -> Bool = { url in
-            BackgroundHelperBundle.isEmbeddedHelper(at: url)
-        },
+        backgroundHelperValidator: ((URL) -> Bool)? = nil,
         userID: uid_t = getuid(),
         launchctlExecutableURL: URL = URL(fileURLWithPath: "/bin/launchctl"),
         dataWriter: @escaping DataWriter = { data, url, options in
@@ -67,9 +65,12 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
                 .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
         self.applicationBundlePath = applicationBundlePath
         let bundleURL = URL(fileURLWithPath: applicationBundlePath, isDirectory: true)
-        self.backgroundHelperExecutableURL = backgroundHelperExecutableURL
+        let helperExecutableURL = backgroundHelperExecutableURL
             ?? BackgroundHelperBundle.executableURL(in: bundleURL)
-        self.backgroundHelperValidator = backgroundHelperValidator
+        self.backgroundHelperExecutableURL = helperExecutableURL
+        self.backgroundHelperValidator = backgroundHelperValidator ?? { url in
+            BackgroundHelperBundle.isEmbeddedHelper(at: url, in: bundleURL)
+        }
         self.domain = domain
         self.serviceTarget = serviceTarget
         self.dataWriter = dataWriter

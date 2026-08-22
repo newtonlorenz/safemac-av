@@ -35,12 +35,27 @@ enum BackgroundHelperBundle {
             .appendingPathComponent(executableName, isDirectory: false)
     }
 
-    static func isEmbeddedHelper(at url: URL, fileManager: FileManager = .default) -> Bool {
+    static func isEmbeddedHelper(
+        at url: URL,
+        in mainBundleURL: URL,
+        fileManager: FileManager = .default
+    ) -> Bool {
         guard fileManager.isExecutableFile(atPath: url.path) else { return false }
-        let normalized = url.standardizedFileURL.resolvingSymlinksInPath()
-        return normalized.pathComponents.suffix(6) == [
-            "Contents", "Library", "LoginItems", "SafeMacAVBackground.app", "Contents", "MacOS", executableName
-        ].suffix(6)
+        let normalizedMainBundle = mainBundleURL.standardizedFileURL.resolvingSymlinksInPath()
+        let expectedExecutable = executableURL(in: normalizedMainBundle)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let normalizedExecutable = url.standardizedFileURL.resolvingSymlinksInPath()
+        guard normalizedExecutable == expectedExecutable else { return false }
+        let helperBundleURL = expectedExecutable
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        guard let data = try? Data(contentsOf: helperBundleURL.appendingPathComponent("Info.plist")),
+              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return false
+        }
+        return info["CFBundleIdentifier"] as? String == bundleIdentifier
     }
 }
 
@@ -104,6 +119,13 @@ final class BackgroundRouteRequestStore {
         } catch {
             return nil
         }
+    }
+
+    /// Drops a request only after proving it is our owner-only regular file.
+    /// Used if canonical main-app launch fails, preventing later replay.
+    func discard() {
+        guard isSafeRegularFile(at: requestURL) else { return }
+        try? fileManager.removeItem(at: requestURL)
     }
 
     private func isSafeRegularFile(at url: URL) -> Bool {

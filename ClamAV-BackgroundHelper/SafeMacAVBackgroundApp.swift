@@ -70,16 +70,24 @@ private enum MainAppHandoff {
     private static let mainBundleIdentifier = "com.newtonlorenz.ClamAV-GUI"
 
     static func send(_ route: BackgroundRoute) {
-        guard BackgroundRouteRequestStore().enqueue(route),
-              let bundle = Bundle(url: bundleURL), bundle.bundleIdentifier == mainBundleIdentifier else { return }
-        NSWorkspace.shared.openApplication(at: bundleURL, configuration: .init()) { _, error in
-            guard error == nil else { return }
-            DistributedNotificationCenter.default().post(
-                name: route.distributedNotificationName,
-                object: nil,
-                userInfo: nil
-            )
-        }
+        BackgroundRouteHandoff(
+            requestStore: BackgroundRouteRequestStore(),
+            validateMainApplication: {
+                Bundle(url: bundleURL)?.bundleIdentifier == mainBundleIdentifier
+            },
+            openMainApplication: { completion in
+                NSWorkspace.shared.openApplication(at: bundleURL, configuration: .init()) { _, error in
+                    completion(error == nil)
+                }
+            },
+            postWakeHint: { route in
+                DistributedNotificationCenter.default().post(
+                    name: route.distributedNotificationName,
+                    object: nil,
+                    userInfo: nil
+                )
+            }
+        ).send(route)
     }
 }
 
