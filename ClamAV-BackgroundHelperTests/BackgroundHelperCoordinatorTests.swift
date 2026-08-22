@@ -295,6 +295,29 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         XCTAssertEqual(invocation.executablePath, executable.path)
     }
 
+    func testHelperPathGuardRejectsIntermediateSymlinkComponents() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("Contents"),
+            withDestinationURL: outside
+        )
+        let executable = root.appendingPathComponent(
+            "Contents/Library/LoginItems/SafeMacAVBackground.app/Contents/MacOS/SafeMacAVBackground"
+        )
+
+        XCTAssertFalse(BackgroundHelperBundle.hasNoSymlinkComponents(
+            from: root,
+            through: executable
+        ))
+    }
+
     func testScheduledUpdaterDefaultProcessExecutionCompletesWithinBound() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
