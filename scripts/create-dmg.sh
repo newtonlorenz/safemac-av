@@ -12,6 +12,8 @@ PRODUCT_NAME="SafeMac AV"
 DMG_NAME="SafeMac-AV"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 BUILD_DIR="$PROJECT_DIR/build"
+CLEAN_REGISTRATIONS_BIN="$PROJECT_DIR/scripts/clean-build-registrations.sh"
+LSREGISTER_BIN="${LSREGISTER_BIN:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
 ARCHIVE_PATH="$BUILD_DIR/$PROJECT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 APP_PATH="$EXPORT_PATH/$PRODUCT_NAME.app"
@@ -102,6 +104,21 @@ remove_tree() {
 remove_file() {
     assert_build_path "$1"
     rm -f -- "$1"
+}
+
+cleanup_build_registrations() {
+    local command_status=$?
+
+    trap - EXIT
+    if [[ -x "$CLEAN_REGISTRATIONS_BIN" ]]; then
+        if ! LSREGISTER_BIN="$LSREGISTER_BIN" \
+            "$CLEAN_REGISTRATIONS_BIN" "$BUILD_DIR"; then
+            print_warning "Could not unregister every app bundle under $BUILD_DIR"
+        fi
+    else
+        print_warning "Build registration cleanup helper is unavailable: $CLEAN_REGISTRATIONS_BIN"
+    fi
+    exit "$command_status"
 }
 
 check_requirements() {
@@ -562,4 +579,5 @@ main() {
     fi
 }
 
+trap cleanup_build_registrations EXIT
 main "$@"

@@ -38,37 +38,22 @@ Do not add real malware, secrets, personal files, signing certificates, provisio
 Unit and integration tests:
 
 ```bash
-xcodebuild \
-  -project ClamAV-GUI.xcodeproj \
-  -scheme ClamAV-GUI \
-  -destination 'platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO \
-  test
+./scripts/run-tests.sh unit
 ```
 
 Release build:
 
 ```bash
-xcodebuild \
-  -project ClamAV-GUI.xcodeproj \
-  -scheme ClamAV-GUI \
-  -configuration Release \
-  -destination 'platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO \
-  build
+./scripts/run-tests.sh release
 ```
 
 Interactive UI smoke test, from a logged-in macOS session with a locally signable test host. Do not disable code signing for this command:
 
 ```bash
-xcodebuild \
-  -project ClamAV-GUI.xcodeproj \
-  -scheme ClamAV-GUI-UI \
-  -destination 'platform=macOS' \
-  test
+./scripts/run-tests.sh ui
 ```
 
-An ad-hoc or development-signed local test run is sufficient. With `CODE_SIGNING_ALLOWED=NO`, macOS terminates the UI runner before the test executes. For UI changes, also launch the built application and exercise the affected flow directly. Never test destructive quarantine actions against irreplaceable files.
+The wrapper uses dedicated temporary DerivedData and unregisters its app bundles when the command exits. An ad-hoc or development-signed local UI test run is sufficient. With `CODE_SIGNING_ALLOWED=NO`, macOS terminates the UI runner before the test executes. For UI changes, also launch the built application and exercise the affected flow directly. Never test destructive quarantine actions against irreplaceable files.
 
 ## Pull requests
 

@@ -32,28 +32,10 @@ jobs:
           ./scripts/test-verify-release-package.sh
           ./scripts/test-installed-sparkle-canary.sh
           ./scripts/test-run-installed-sparkle-canary.sh
+          ./scripts/test-xcodebuild-cleanup.sh
 
       - name: Run unit and integration tests
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project ClamAV-GUI.xcodeproj \
-            -scheme ClamAV-GUI \
-            -destination 'platform=macOS' \
-            -derivedDataPath "$RUNNER_TEMP/ClamAV-GUI-DerivedData" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            test
+        run: ./scripts/run-tests.sh unit
 
       - name: Build Release configuration
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project ClamAV-GUI.xcodeproj \
-            -scheme ClamAV-GUI \
-            -configuration Release \
-            -destination 'platform=macOS' \
-            -derivedDataPath "$RUNNER_TEMP/ClamAV-GUI-Release" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            build
+        run: ./scripts/run-tests.sh release
