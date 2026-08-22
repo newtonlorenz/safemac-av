@@ -122,7 +122,9 @@ let content = """
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
     <item>
-      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(try Data(contentsOf: URL(fileURLWithPath: dmgPath)).count)" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="\(archiveSignature)" />
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(try Data(contentsOf: URL(fileURLWithPath: dmgPath)).count)" sparkle:edSignature="\(archiveSignature)" />
     </item>
   </channel>
 </rss>
@@ -271,13 +273,13 @@ run_embedded_feed_url_failure_cases() {
 }
 
 run_appcast_failure_case() {
-    perl -0pi -e 's/sparkle:version="3"/sparkle:version="4"/' "$WORK_DIR/package/appcast/appcast.xml"
+    perl -0pi -e 's|<sparkle:version>3</sparkle:version>|<sparkle:version>4</sparkle:version>|' "$WORK_DIR/package/appcast/appcast.xml"
     if PATH="$WORK_DIR/bin:$PATH" \
        SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
         "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
         fail "mismatched appcast version was accepted"
     fi
-    perl -0pi -e 's/sparkle:version="4"/sparkle:version="3"/' "$WORK_DIR/package/appcast/appcast.xml"
+    perl -0pi -e 's|<sparkle:version>4</sparkle:version>|<sparkle:version>3</sparkle:version>|' "$WORK_DIR/package/appcast/appcast.xml"
 }
 
 run_missing_appcast_failure_case() {
@@ -368,16 +370,27 @@ guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]),
 switch mode {
 case "misleading-version":
     content = content.replacingOccurrences(
-        of: #"sparkle:version="3""#,
-        with: #"data-sparkle:version="3" sparkle:version="999""#
+        of: "<sparkle:version>3</sparkle:version>",
+        with: "<data-sparkle:version>3</data-sparkle:version><sparkle:version>999</sparkle:version>"
     )
 case "misleading-short-version":
     content = content.replacingOccurrences(
-        of: #"sparkle:shortVersionString="1.2.0""#,
-        with: #"data-sparkle:shortVersionString="1.2.0" sparkle:shortVersionString="9.9.9""#
+        of: "<sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>",
+        with: "<data-sparkle:shortVersionString>1.2.0</data-sparkle:shortVersionString><sparkle:shortVersionString>9.9.9</sparkle:shortVersionString>"
     )
-case "single-quoted-version":
-    content = content.replacingOccurrences(of: #"sparkle:version="3""#, with: "sparkle:version='3'")
+case "version-on-enclosure":
+    content = content.replacingOccurrences(of: "<sparkle:version>3</sparkle:version>\n", with: "")
+    content = content.replacingOccurrences(of: "<enclosure ", with: "<enclosure sparkle:version=\"3\" ")
+case "duplicate-item-version":
+    content = content.replacingOccurrences(
+        of: "<sparkle:version>3</sparkle:version>",
+        with: "<sparkle:version>3</sparkle:version><sparkle:version>3</sparkle:version>"
+    )
+case "nested-item-version":
+    content = content.replacingOccurrences(
+        of: "<sparkle:version>3</sparkle:version>",
+        with: "<description><sparkle:version>3</sparkle:version></description>"
+    )
 case "wrong-length":
     content = content.replacingOccurrences(of: #"length="9""#, with: #"length="999""#)
 case "url-user":
@@ -401,19 +414,12 @@ case "url-fragment":
         with: "https://downloads.example.com/SafeMac-AV.dmg#fragment"
     )
 case "commented-valid-invalid-real", "cdata-valid-invalid-real":
-    let expression = try NSRegularExpression(pattern: #"<enclosure\b[^>]*>"#)
-    let range = NSRange(content.startIndex..<content.endIndex, in: content)
-    guard let match = expression.firstMatch(in: content, range: range),
-          let swiftRange = Range(match.range, in: content) else { exit(2) }
-    let validEnclosure = String(content[swiftRange])
-    let invalidRealEnclosure = validEnclosure.replacingOccurrences(
-        of: #"sparkle:version="3""#,
-        with: #"sparkle:version="999""#
-    )
+    let validVersion = "<sparkle:version>3</sparkle:version>"
+    let invalidVersion = "<sparkle:version>999</sparkle:version>"
     let hiddenValidEnclosure = mode == "commented-valid-invalid-real"
-        ? "<!-- \(validEnclosure) -->"
-        : "<![CDATA[\(validEnclosure)]]>"
-    content.replaceSubrange(swiftRange, with: "\(hiddenValidEnclosure)\n      \(invalidRealEnclosure)")
+        ? "<!-- \(validVersion) -->"
+        : "<![CDATA[\(validVersion)]]>"
+    content = content.replacingOccurrences(of: validVersion, with: "\(hiddenValidEnclosure)\n      \(invalidVersion)")
 default:
     exit(2)
 }
@@ -432,7 +438,9 @@ run_exact_enclosure_metadata_failure_cases() {
     for mode in \
         misleading-version \
         misleading-short-version \
-        single-quoted-version \
+        version-on-enclosure \
+        duplicate-item-version \
+        nested-item-version \
         wrong-length \
         url-user \
         url-password \
@@ -506,7 +514,7 @@ let appcastData = try Data(contentsOf: appcastURL)
 let prefix = Data("<!-- sparkle-signatures:\n".utf8)
 guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]) else { exit(1) }
 guard var content = String(data: appcastData[..<prefixRange.lowerBound], encoding: .utf8) else { exit(1) }
-let duplicate = #"      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="duplicate" />"#
+    let duplicate = #"      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" sparkle:edSignature="duplicate" />"#
 content = content.replacingOccurrences(of: "    </item>", with: duplicate + "\n    </item>")
 let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
 let signedContent = Data(content.utf8)
