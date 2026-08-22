@@ -96,7 +96,10 @@ struct ClamAVApp: App {
     init() {
         let arguments = CommandLine.arguments
         let launchMode = LaunchModeParser.parse(arguments: arguments)
-        _presentsMenuBarExtra = State(initialValue: launchMode.presentsUserInterface)
+        // The embedded helper owns the persistent menu-bar session. Keeping the
+        // foreground app's scene uninserted avoids a duplicate status item when
+        // a user opens SafeMac AV from that helper.
+        _presentsMenuBarExtra = State(initialValue: false)
 
         let appState = AppState(
             startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices

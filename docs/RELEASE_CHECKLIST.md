@@ -51,13 +51,15 @@ shasum -a 256 -c SHA256SUMS.txt
 ./scripts/verify-release-package.sh build
 ```
 
+- [ ] Confirm the verifier reports the embedded `SafeMacAVBackground.app` helper. It must be Developer-ID signed by Team `CQPH8YR62A`, hardened, timestamped, universal, `LSUIElement=true`, and free of Sparkle.
+
 - [ ] Before replacing the currently installed app, verify the signed appcast advertises exactly one newer update to that installed build. The verifier requires a deep, strict Developer ID Application signature from Team `CQPH8YR62A`, hardened runtime, secure timestamp, and Gatekeeper trust:
 
 ```bash
 ./scripts/verify-installed-sparkle-canary.sh "/Applications/SafeMac AV.app" build/appcast/appcast.xml build/SafeMac-AV.dmg
 ```
 
-- [ ] Copy `SafeMac AV.app` to `/Applications`, launch it, and confirm the main window and menu-bar item open.
+- [ ] Copy `SafeMac AV.app` to `/Applications`, launch it, and confirm the main window opens. Enable launch at login, approve it if macOS asks, then confirm the embedded helper owns one menu-bar item without prompting for notification permission.
 - [ ] Confirm `appcast.xml` is present, has valid feed and archive EdDSA signatures, and references the published DMG URL prefix.
 
 ## Publish boundary
