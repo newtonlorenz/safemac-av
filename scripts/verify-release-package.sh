@@ -116,6 +116,19 @@ verify_sparkle_autoupdate_entitlement() {
         || fail "Sparkle Autoupdate application identifier entitlement changed unexpectedly"
 }
 
+verify_background_helper_entitlements() {
+    local helper_path="$1"
+    local entitlements
+    entitlements="$(codesign -d --entitlements :- "$helper_path" 2>/dev/null)" \
+        || fail "unable to inspect background helper entitlements"
+    grep -Fq '<key>com.apple.security.app-sandbox</key>' <<< "$entitlements" \
+        || fail "background helper sandbox entitlement is missing"
+    grep -Fq '<false/>' <<< "$entitlements" \
+        || fail "background helper sandbox entitlement must remain disabled"
+    ! grep -Fq 'com.apple.security.application-groups' <<< "$entitlements" \
+        || fail "background helper must not claim an unused app-group entitlement"
+}
+
 mounted_app_path=""
 mount_point=""
 entitlements_dir=""
@@ -397,6 +410,7 @@ verify_app_bundle() {
     [[ ! -e "$background_helper/Contents/Frameworks/Sparkle.framework" ]] \
         || fail "background login helper must not embed Sparkle"
     verify_distribution_code "$background_helper" "$background_helper_executable" "$expected_team_id"
+    verify_background_helper_entitlements "$background_helper"
 
     verify_sparkle_configuration
 

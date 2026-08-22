@@ -29,6 +29,17 @@
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
       <Testables>
+		 <TestableReference
+			skipped = "NO"
+			parallelizable = "NO">
+			<BuildableReference
+				BuildableIdentifier = "primary"
+				BlueprintIdentifier = "BAA050050000000000000001"
+				BuildableName = "SafeMacAVBackgroundTests.xctest"
+				BlueprintName = "SafeMacAVBackgroundTests"
+				ReferencedContainer = "container:ClamAV-GUI.xcodeproj">
+			</BuildableReference>
+		 </TestableReference>
          <TestableReference
             skipped = "NO"
             parallelizable = "YES">

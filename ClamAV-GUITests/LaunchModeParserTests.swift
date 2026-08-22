@@ -133,5 +133,23 @@ final class LaunchModeParserTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: unsafe, withDestinationURL: URL(fileURLWithPath: "/tmp"))
         let symlinked = BackgroundWorkLease(name: "symlinked", baseURL: root)
         XCTAssertFalse(symlinked.acquire())
+
+        let unsafeDirectory = root.appendingPathComponent("unsafe-directory")
+        try FileManager.default.createSymbolicLink(at: unsafeDirectory, withDestinationURL: URL(fileURLWithPath: "/tmp"))
+        XCTAssertFalse(BackgroundWorkLease(name: "directory", baseURL: unsafeDirectory).acquire())
+    }
+
+    func testBackgroundRoutesPersistOnlyFixedEnumValuesAndDrainOnce() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BackgroundRouteRequestStore(baseURL: root)
+
+        XCTAssertTrue(store.enqueue(.settings))
+        XCTAssertEqual(store.consume(), .settings)
+        XCTAssertNil(store.consume())
+
+        try "--finder-request".data(using: .utf8)?.write(to: root.appendingPathComponent("background-route.request"))
+        XCTAssertNil(store.consume())
     }
 }

@@ -173,15 +173,28 @@ final class LaunchAtLoginManager: LaunchAtLoginManaging {
     }
 
     var status: LaunchAtLoginStatus {
+        let helperStatus: LaunchAtLoginStatus
         switch service.serviceStatus {
         case .notRegistered:
-            return .disabled
+            helperStatus = .disabled
+        case .enabled:
+            helperStatus = .enabled
+        case .requiresApproval:
+            helperStatus = .requiresApproval
+        case .notFound:
+            helperStatus = .unavailable
+        }
+        guard helperStatus == .disabled || helperStatus == .unavailable,
+              let legacyService else {
+            return helperStatus
+        }
+        switch legacyService.serviceStatus {
         case .enabled:
             return .enabled
         case .requiresApproval:
             return .requiresApproval
-        case .notFound:
-            return .unavailable
+        case .notRegistered, .notFound:
+            return helperStatus
         }
     }
 
@@ -191,8 +204,34 @@ final class LaunchAtLoginManager: LaunchAtLoginManaging {
             guard service.serviceStatus != .enabled, service.serviceStatus != .requiresApproval else { return }
             try service.register()
         } else {
-            guard status.isRequested else { return }
+            try disableAllRegisteredServices()
+        }
+    }
+
+    private func disableAllRegisteredServices() throws {
+        let helperWasRegistered = Self.isRequested(service.serviceStatus)
+        let legacyWasRegistered = legacyService.map { Self.isRequested($0.serviceStatus) } ?? false
+        guard helperWasRegistered || legacyWasRegistered else { return }
+
+        var helperWasUnregistered = false
+        if helperWasRegistered {
             try service.unregister()
+            helperWasUnregistered = true
+        }
+
+        guard legacyWasRegistered, let legacyService else { return }
+        do {
+            try legacyService.unregister()
+        } catch {
+            guard helperWasUnregistered else {
+                throw LaunchAtLoginMigrationError.legacyRemovalFailed
+            }
+            do {
+                try service.register()
+            } catch {
+                throw LaunchAtLoginMigrationError.rollbackFailed
+            }
+            throw LaunchAtLoginMigrationError.legacyRemovalFailed
         }
     }
 
@@ -245,5 +284,14 @@ final class LaunchAtLoginManager: LaunchAtLoginManaging {
             .standardizedFileURL
             .resolvingSymlinksInPath()
         return Bundle.main.bundleURL.standardizedFileURL.resolvingSymlinksInPath() == canonicalURL
+    }
+
+    private static func isRequested(_ serviceStatus: LaunchAtLoginServiceStatus) -> Bool {
+        switch serviceStatus {
+        case .enabled, .requiresApproval:
+            return true
+        case .notRegistered, .notFound:
+            return false
+        }
     }
 }
