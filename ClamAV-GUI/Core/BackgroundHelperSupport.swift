@@ -52,4 +52,8 @@ enum BackgroundRoute: String, CaseIterable {
         guard let rawValue else { return nil }
         return BackgroundRoute(rawValue: rawValue)
     }
+
+    var distributedNotificationName: Notification.Name {
+        Notification.Name("com.newtonlorenz.ClamAV-GUI.background-route.\(rawValue)")
+    }
 }

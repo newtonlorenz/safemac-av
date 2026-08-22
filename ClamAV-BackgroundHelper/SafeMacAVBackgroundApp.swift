@@ -5,6 +5,7 @@ import Foundation
 @main
 final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
     private let lease = BackgroundWorkLease(name: "background-monitoring")
+    private var statusItem: NSStatusItem?
 
     static func main() {
         let application = NSApplication.shared
@@ -28,6 +29,7 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
 
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = item
         item.button?.image = NSImage(systemSymbolName: "checkmark.shield.fill", accessibilityDescription: "SafeMac AV")
         let menu = NSMenu()
         menu.addItem(withTitle: "Open SafeMac AV", action: #selector(openMain), keyEquivalent: "")
@@ -61,16 +63,10 @@ private enum MainAppHandoff {
         guard let bundle = Bundle(url: bundleURL), bundle.bundleIdentifier == mainBundleIdentifier else { return }
         NSWorkspace.shared.openApplication(at: bundleURL, configuration: .init()) { _, _ in }
         DistributedNotificationCenter.default().post(
-            name: route.notificationName,
+            name: route.distributedNotificationName,
             object: nil,
             userInfo: nil
         )
-    }
-}
-
-private extension BackgroundRoute {
-    var notificationName: Notification.Name {
-        Notification.Name("com.newtonlorenz.ClamAV-GUI.background-route.\(rawValue)")
     }
 }
 

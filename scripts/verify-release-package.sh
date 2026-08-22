@@ -341,6 +341,10 @@ verify_app_bundle() {
     local sparkle_version
     local finder_extension
     local finder_executable
+    local background_helper
+    local background_helper_executable
+    local background_helper_lsui
+    local main_lsui
 
     resolve_app_path
     executable_name="$(bundle_value CFBundleExecutable)"
@@ -366,6 +370,8 @@ verify_app_bundle() {
     [[ -n "$expected_team_id" && "$expected_team_id" != "not set" ]] \
         || fail "app signature has no Developer ID Team identifier"
     verify_distribution_code "$mounted_app_path" "$executable_path" "$expected_team_id"
+    main_lsui="$(optional_bundle_value LSUIElement)"
+    [[ "$main_lsui" != "true" ]] || fail "main app must not be an LSUIElement agent"
 
     sparkle_framework="$mounted_app_path/Contents/Frameworks/Sparkle.framework"
     [[ -d "$sparkle_framework" ]] || fail "Sparkle framework not found: $sparkle_framework"
@@ -398,11 +404,22 @@ verify_app_bundle() {
     verify_distribution_code "$finder_extension" "$finder_executable" "$expected_team_id"
     verify_finder_handoff_entitlements "$mounted_app_path" "$finder_extension" "$expected_team_id"
 
+    background_helper="$mounted_app_path/Contents/Library/LoginItems/SafeMacAVBackground.app"
+    background_helper_executable="$background_helper/Contents/MacOS/SafeMacAVBackground"
+    [[ -d "$background_helper" ]] || fail "background login helper not found: $background_helper"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$background_helper/Contents/Info.plist" 2>/dev/null)" == "com.newtonlorenz.ClamAV-GUI.Background" ]] \
+        || fail "background login helper bundle identifier is invalid"
+    background_helper_lsui="$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$background_helper/Contents/Info.plist" 2>/dev/null || true)"
+    [[ "$background_helper_lsui" == "true" ]] || fail "background login helper must be an LSUIElement agent"
+    [[ ! -e "$background_helper/Contents/Frameworks/Sparkle.framework" ]] \
+        || fail "background login helper must not embed Sparkle"
+    verify_distribution_code "$background_helper" "$background_helper_executable" "$expected_team_id"
+
     verify_sparkle_configuration
 
     codesign --verify --deep --strict --verbose=2 "$mounted_app_path"
     info "mounted app and Finder extension share the Team-ID app group; Finder sandbox is enabled"
-    info "mounted app, Finder extension, and nested Sparkle code use Developer ID Team $expected_team_id, hardened runtime, secure timestamps, and universal architectures"
+    info "mounted app, Finder extension, background helper, and nested Sparkle code use Developer ID Team $expected_team_id, hardened runtime, secure timestamps, and universal architectures"
 }
 
 verify_appcast() {
