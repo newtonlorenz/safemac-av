@@ -97,10 +97,14 @@ struct ClamAVApp: App {
     init() {
         let arguments = CommandLine.arguments
         let launchMode = LaunchModeParser.parse(arguments: arguments)
+        let isAutomatedTestLaunch = arguments.contains("--ui-testing")
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         let appState = AppState(
             startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices
         )
-        let menuBarOwnership = BackgroundMenuBarOwnershipCoordinator()
+        let menuBarOwnership = BackgroundMenuBarOwnershipCoordinator(
+            startsRecoveryTimer: !isAutomatedTestLaunch
+        )
         menuBarOwnership.reconcile(helperEnabled: appState.launchAtLoginStatus == .enabled)
         _presentsMenuBarExtra = State(initialValue: menuBarOwnership.mainShouldPresentMenuBar)
         let menuBarManager = MenuBarManager()
@@ -110,8 +114,6 @@ struct ClamAVApp: App {
             wrappedValue: SoftwareUpdateManager(startsUpdater: launchMode.startsSoftwareUpdateSubsystem)
         )
         _menuBarOwnership = StateObject(wrappedValue: menuBarOwnership)
-        let isAutomatedTestLaunch = arguments.contains("--ui-testing")
-            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         let bundleURL = Bundle.main.bundleURL
         let preferredColorScheme = Self.uiTestColorScheme(arguments: arguments)
 
@@ -177,9 +179,6 @@ struct ClamAVApp: App {
                 }
                 .onReceive(menuBarOwnership.$mainShouldPresentMenuBar) { shouldPresent in
                     presentsMenuBarExtra = shouldPresent
-                }
-                .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-                    menuBarOwnership.recoverIfHelperIsAbsent()
                 }
         } label: {
             Image(systemName: menuBarIcon)

@@ -313,11 +313,13 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
     private var helperEnabled = false
     private var nextRecoveryAttempt = Date.distantFuture
     private var ownershipHintObserver: NSObjectProtocol?
+    private var recoveryTimer: DispatchSourceTimer?
 
     init(
         makeLease: @escaping () -> BackgroundWorkLease = { BackgroundWorkLease(name: "background-monitoring") },
         now: @escaping () -> Date = Date.init,
-        startupGrace: TimeInterval = 5
+        startupGrace: TimeInterval = 5,
+        startsRecoveryTimer: Bool = true
     ) {
         self.makeLease = makeLease
         self.now = now
@@ -329,12 +331,22 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.prepareForHelperOwnership() }
         }
+        if startsRecoveryTimer {
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + 1, repeating: 1)
+            timer.setEventHandler { [weak self] in
+                Task { @MainActor in self?.recoverIfHelperIsAbsent() }
+            }
+            recoveryTimer = timer
+            timer.resume()
+        }
     }
 
     deinit {
         if let ownershipHintObserver {
             DistributedNotificationCenter.default().removeObserver(ownershipHintObserver)
         }
+        recoveryTimer?.cancel()
     }
 
     func reconcile(helperEnabled: Bool) {
