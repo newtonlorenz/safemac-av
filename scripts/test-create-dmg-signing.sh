@@ -84,7 +84,18 @@ destination_path="$2"
 
     write_fake_tool codesign '
 if [[ " $* " == *" --sign "* ]]; then
-    printf "%s\t%s\n" "$*" "${!#}" >> "${SIGN_LOG:?}"
+    has_runtime=false
+    has_timestamp=false
+    has_identity=false
+    previous=""
+    for argument in "$@"; do
+        [[ "$previous" != "--options" || "$argument" != "runtime" ]] || has_runtime=true
+        [[ "$argument" != "--timestamp" ]] || has_timestamp=true
+        [[ "$previous" != "--sign" || "$argument" != "${TEST_IDENTITY:?}" ]] || has_identity=true
+        previous="$argument"
+    done
+    printf "%s\truntime=%s timestamp=%s identity=%s\n" \
+        "${!#}" "$has_runtime" "$has_timestamp" "$has_identity" >> "${SIGN_LOG:?}"
 fi
 if [[ " $* " == *" -dv "* ]]; then
     printf "%s\n" \
@@ -104,18 +115,18 @@ fi'
 
 line_for_target() {
     local target="$1"
-    awk -F '\t' -v target="$target" '$2 == target { print NR; exit }' "$SIGN_LOG"
+    awk -F '\t' -v target="$target" '$1 == target { print NR; exit }' "$SIGN_LOG"
 }
 
 assert_signed_with_distribution_options() {
     local target="$1"
     local line
 
-    line="$(awk -F '\t' -v target="$target" '$2 == target { print $1; exit }' "$SIGN_LOG")"
+    line="$(awk -F '\t' -v target="$target" '$1 == target { print $2; exit }' "$SIGN_LOG")"
     [[ -n "$line" ]] || fail "nested code was not signed: $target"
-    [[ " $line " == *" --options runtime "* ]] || fail "hardened runtime missing: $target"
-    [[ " $line " == *" --timestamp "* ]] || fail "secure timestamp missing: $target"
-    [[ " $line " == *" --sign $TEST_IDENTITY "* ]] || fail "resolved Developer ID identity missing: $target"
+    [[ "$line" == *"runtime=true"* ]] || fail "hardened runtime missing: $target"
+    [[ "$line" == *"timestamp=true"* ]] || fail "secure timestamp missing: $target"
+    [[ "$line" == *"identity=true"* ]] || fail "resolved Developer ID identity missing: $target"
 }
 
 assert_before() {

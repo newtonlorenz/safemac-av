@@ -57,6 +57,13 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "$1 not found. $2"
 }
 
+contains_arch() {
+    local archs="$1"
+    local expected="$2"
+
+    [[ " $archs " == *" $expected "* ]]
+}
+
 resolve_signing_identity() {
     local matches
     local match_count
@@ -123,6 +130,7 @@ check_requirements() {
 
     if [[ -n "$SIGNING_IDENTITY" ]]; then
         require_command codesign "Install the Xcode command-line tools."
+        require_command lipo "Install the Xcode command-line tools."
         require_command security "This script must run on macOS."
         [[ -f "$ENTITLEMENTS_PATH" ]] || fail "Entitlements file not found: $ENTITLEMENTS_PATH"
 
@@ -136,6 +144,166 @@ check_requirements() {
         xcrun --find stapler >/dev/null \
             || fail "stapler not found. Install a current version of Xcode."
     fi
+}
+
+sign_distribution_code() {
+    local target="$1"
+
+    codesign --force \
+        --sign "$RESOLVED_SIGNING_IDENTITY" \
+        --options runtime \
+        --timestamp \
+        --preserve-metadata=identifier,entitlements,requirements \
+        "$target"
+}
+
+resolve_sparkle_version_dir() {
+    local framework_path="$1"
+    local version_dir=""
+    local candidate
+
+    while IFS= read -r candidate; do
+        [[ -z "$version_dir" ]] || fail "Multiple Sparkle framework versions found in $framework_path"
+        version_dir="$candidate"
+    done < <(find "$framework_path/Versions" \
+        -mindepth 1 \
+        -maxdepth 1 \
+        -type d \
+        -print)
+
+    [[ -n "$version_dir" ]] || fail "Sparkle framework version directory not found in $framework_path"
+    printf '%s\n' "$version_dir"
+}
+
+sign_sparkle_framework() {
+    local framework_path="$1"
+    local version_dir
+    local updater_path
+    local downloader_path
+    local installer_path
+    local autoupdate_path
+
+    version_dir="$(resolve_sparkle_version_dir "$framework_path")"
+    updater_path="$version_dir/Updater.app"
+    downloader_path="$version_dir/XPCServices/Downloader.xpc"
+    installer_path="$version_dir/XPCServices/Installer.xpc"
+    autoupdate_path="$version_dir/Autoupdate"
+
+    [[ -d "$updater_path" ]] || fail "Sparkle Updater.app not found: $updater_path"
+    [[ -d "$downloader_path" ]] || fail "Sparkle Downloader.xpc not found: $downloader_path"
+    [[ -d "$installer_path" ]] || fail "Sparkle Installer.xpc not found: $installer_path"
+    [[ -f "$autoupdate_path" ]] || fail "Sparkle Autoupdate not found: $autoupdate_path"
+
+    # Sign from the deepest code outward so every enclosing signature seals the
+    # final Developer ID signatures of its nested components.
+    sign_distribution_code "$autoupdate_path"
+    sign_distribution_code "$downloader_path"
+    sign_distribution_code "$installer_path"
+    sign_distribution_code "$updater_path"
+    sign_distribution_code "$framework_path"
+}
+
+signature_details() {
+    codesign -dv --verbose=4 "$1" 2>&1 \
+        || fail "Unable to inspect code signature: $1"
+}
+
+verify_distribution_code() {
+    local target="$1"
+    local executable_path="$2"
+    local expected_team_id="$3"
+    local details
+    local archs
+
+    codesign --verify --strict --verbose=2 "$target" \
+        || fail "Code signature verification failed: $target"
+    details="$(signature_details "$target")"
+
+    grep -Fq 'Authority=Developer ID Application:' <<< "$details" \
+        || fail "Developer ID Application authority missing: $target"
+    grep -Fq "TeamIdentifier=$expected_team_id" <<< "$details" \
+        || fail "Developer ID Team mismatch: $target"
+    grep -Eq '^Timestamp=.+$' <<< "$details" \
+        || fail "Secure timestamp missing: $target"
+    if grep -Fq 'Timestamp=none' <<< "$details"; then
+        fail "Secure timestamp missing: $target"
+    fi
+    grep -Fq 'runtime' <<< "$details" \
+        || fail "Hardened runtime flag missing: $target"
+    if grep -Fq 'adhoc' <<< "$details"; then
+        fail "Ad-hoc signature found in distribution code: $target"
+    fi
+
+    archs="$(lipo -archs "$executable_path")" \
+        || fail "Unable to inspect executable architectures: $executable_path"
+    contains_arch "$archs" arm64 \
+        || fail "Executable is missing arm64 slice: $executable_path ($archs)"
+    contains_arch "$archs" x86_64 \
+        || fail "Executable is missing x86_64 slice: $executable_path ($archs)"
+}
+
+verify_signed_app_components() {
+    local app_executable="$APP_PATH/Contents/MacOS/$PROJECT_NAME"
+    local app_details
+    local expected_team_id
+    local framework_path
+    local version_dir
+    local extension_path
+    local extension_executable
+    local -a framework_paths=()
+    local -a extension_paths=()
+
+    app_details="$(signature_details "$APP_PATH")"
+    expected_team_id="$(sed -n 's/^TeamIdentifier=//p' <<< "$app_details" | head -1)"
+    [[ -n "$expected_team_id" && "$expected_team_id" != "not set" ]] \
+        || fail "Signed app has no Developer ID Team identifier."
+
+    verify_distribution_code "$APP_PATH" "$app_executable" "$expected_team_id"
+
+    if [[ -d "$APP_PATH/Contents/Frameworks" ]]; then
+        shopt -s nullglob
+        framework_paths=("$APP_PATH"/Contents/Frameworks/*.framework)
+        shopt -u nullglob
+    fi
+
+    for framework_path in "${framework_paths[@]}"; do
+        if [[ "$(basename "$framework_path")" == "Sparkle.framework" ]]; then
+            version_dir="$(resolve_sparkle_version_dir "$framework_path")"
+            verify_distribution_code \
+                "$version_dir/Updater.app" \
+                "$version_dir/Updater.app/Contents/MacOS/Updater" \
+                "$expected_team_id"
+            verify_distribution_code \
+                "$version_dir/XPCServices/Downloader.xpc" \
+                "$version_dir/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
+                "$expected_team_id"
+            verify_distribution_code \
+                "$version_dir/XPCServices/Installer.xpc" \
+                "$version_dir/XPCServices/Installer.xpc/Contents/MacOS/Installer" \
+                "$expected_team_id"
+            verify_distribution_code \
+                "$version_dir/Autoupdate" \
+                "$version_dir/Autoupdate" \
+                "$expected_team_id"
+            verify_distribution_code \
+                "$framework_path" \
+                "$version_dir/Sparkle" \
+                "$expected_team_id"
+        fi
+    done
+
+    if [[ -d "$APP_PATH/Contents/PlugIns" ]]; then
+        shopt -s nullglob
+        extension_paths=("$APP_PATH"/Contents/PlugIns/*.appex)
+        shopt -u nullglob
+    fi
+
+    for extension_path in "${extension_paths[@]}"; do
+        extension_executable="$extension_path/Contents/MacOS/$(basename "$extension_path" .appex)"
+        verify_distribution_code "$extension_path" "$extension_executable" "$expected_team_id"
+    done
+
+    codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 }
 
 notarization_enabled() {
@@ -197,19 +365,15 @@ sign_app() {
     fi
 
     for framework_path in "${framework_paths[@]}"; do
-        codesign --force \
-            --sign "$RESOLVED_SIGNING_IDENTITY" \
-            --options runtime \
-            --timestamp \
-            "$framework_path"
+        if [[ "$(basename "$framework_path")" == "Sparkle.framework" ]]; then
+            sign_sparkle_framework "$framework_path"
+        else
+            sign_distribution_code "$framework_path"
+        fi
     done
 
     for extension_path in "${extension_paths[@]}"; do
-        codesign --force \
-            --sign "$RESOLVED_SIGNING_IDENTITY" \
-            --options runtime \
-            --timestamp \
-            "$extension_path"
+        sign_distribution_code "$extension_path"
     done
 
     codesign --force \
@@ -219,7 +383,7 @@ sign_app() {
         --entitlements "$ENTITLEMENTS_PATH" \
         "$APP_PATH"
 
-    codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+    verify_signed_app_components
 }
 
 create_dmg() {

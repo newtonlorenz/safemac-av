@@ -96,11 +96,17 @@ if [[ " $* " == *" -dv "* ]]; then
             "Timestamp=none" \
             "CodeDirectory v=20500 flags=0x10002(adhoc,runtime)" >&2
     else
+        team_id="TESTTEAM01"
+        timestamp="Timestamp=Aug 22, 2026 at 02:00:00"
+        flags="CodeDirectory v=20500 flags=0x10000(runtime)"
+        [[ "$target" != "${WRONG_TEAM_CODESIGN_PATH:-}" ]] || team_id="OTHERTEAM2"
+        [[ "$target" != "${MISSING_TIMESTAMP_PATH:-}" ]] || timestamp="Timestamp=none"
+        [[ "$target" != "${MISSING_RUNTIME_PATH:-}" ]] || flags="CodeDirectory v=20500 flags=0x0(none)"
         printf "%s\n" \
             "Authority=Developer ID Application: SafeMac Test (TESTTEAM01)" \
-            "TeamIdentifier=${CODESIGN_TEAM_ID:-TESTTEAM01}" \
-            "Timestamp=Aug 22, 2026 at 02:00:00" \
-            "CodeDirectory v=20500 flags=0x10000(runtime)" >&2
+            "TeamIdentifier=$team_id" \
+            "$timestamp" \
+            "$flags" >&2
     fi
 fi
 exit 0'
@@ -148,7 +154,7 @@ run_nested_adhoc_failure_cases() {
         "$sparkle_dir/XPCServices/Downloader.xpc"
         "$sparkle_dir/XPCServices/Installer.xpc"
         "$sparkle_dir/Autoupdate"
-        "$sparkle_dir/Sparkle"
+        "$app_dir/Contents/Frameworks/Sparkle.framework"
     )
 
     for component in "${components[@]}"; do
@@ -172,6 +178,26 @@ run_nested_arch_failure_case() {
     fi
 }
 
+run_nested_signature_policy_failure_cases() {
+    local component="$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+    local variable
+    local -a variables=(
+        WRONG_TEAM_CODESIGN_PATH
+        MISSING_TIMESTAMP_PATH
+        MISSING_RUNTIME_PATH
+    )
+
+    for variable in "${variables[@]}"; do
+        if env \
+            PATH="$WORK_DIR/bin:$PATH" \
+            "$variable=$component" \
+            SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "invalid nested Sparkle signature policy was accepted: $variable"
+        fi
+    done
+}
+
 main() {
     make_fixture
     make_fake_tools
@@ -179,6 +205,7 @@ main() {
     run_arch_failure_case
     run_nested_adhoc_failure_cases
     run_nested_arch_failure_case
+    run_nested_signature_policy_failure_cases
     run_appcast_failure_case
     printf 'verify-release-package tests passed\n'
 }
