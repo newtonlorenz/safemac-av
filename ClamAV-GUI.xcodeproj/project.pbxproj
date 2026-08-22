@@ -40,6 +40,9 @@
 		A1000001200000000000008 /* ScanScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000008 /* ScanScheduler.swift */; };
 		C0DE00012000000000000078 /* SignatureUpdateScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000078 /* SignatureUpdateScheduler.swift */; };
 		BA9000010000000000000001 /* BackgroundHelperSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA9000020000000000000001 /* BackgroundHelperSupport.swift */; };
+		BA9000010000000000000002 /* SafeMacAVBackgroundApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA9000020000000000000002 /* SafeMacAVBackgroundApp.swift */; };
+		BA9000010000000000000003 /* BackgroundHelperSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA9000020000000000000001 /* BackgroundHelperSupport.swift */; };
+		BA9000010000000000000004 /* SafeMacAVBackground.app in Embed Login Items */ = {isa = PBXBuildFile; fileRef = BA9000020000000000000005 /* SafeMacAVBackground.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A1000001200000000000009 /* FileWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000009 /* FileWatcher.swift */; };
 		A1000001200000000000010 /* ScanModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000010 /* ScanModels.swift */; };
 		A1000001200000000000011 /* QuarantineModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000011 /* QuarantineModels.swift */; };
@@ -97,6 +100,13 @@
 			remoteGlobalIDString = A1000005200000000000001;
 			remoteInfo = "ClamAV-GUI";
 		};
+		BA9000030000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000004200000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BA9000050000000000000001;
+			remoteInfo = SafeMacAVBackground;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -109,6 +119,17 @@
 				A1000001200000000000058 /* ClamAV-GUI-Finder.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BA90000D0000000000000001 /* Embed Login Items */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "Contents/Library/LoginItems";
+			dstSubfolderSpec = 1;
+			files = (
+				BA9000010000000000000004 /* SafeMacAVBackground.app in Embed Login Items */,
+			);
+			name = "Embed Login Items";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -126,6 +147,10 @@
 		A1000002200000000000008 /* ScanScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanScheduler.swift; sourceTree = "<group>"; };
 		C0DE00022000000000000078 /* SignatureUpdateScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureUpdateScheduler.swift; sourceTree = "<group>"; };
 		BA9000020000000000000001 /* BackgroundHelperSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundHelperSupport.swift; sourceTree = "<group>"; };
+		BA9000020000000000000002 /* SafeMacAVBackgroundApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeMacAVBackgroundApp.swift; sourceTree = "<group>"; };
+		BA9000020000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		BA9000020000000000000004 /* SafeMacAVBackground.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SafeMacAVBackground.entitlements; sourceTree = "<group>"; };
+		BA9000020000000000000005 /* SafeMacAVBackground.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SafeMacAVBackground.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C0DE00022000000000000079 /* SoftwareUpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareUpdateManager.swift; sourceTree = "<group>"; };
 		C0DE00022000000000000081 /* SoftwareUpdateManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareUpdateManagerTests.swift; sourceTree = "<group>"; };
 		A1000002200000000000009 /* FileWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatcher.swift; sourceTree = "<group>"; };
@@ -216,6 +241,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BA9000060000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -226,6 +258,7 @@
 				A1000007200000000000021 /* ClamAV-GUI-Finder */,
 				A1000007200000000000020 /* ClamAV-GUITests */,
 				A1000007200000000000022 /* ClamAV-GUIUITests */,
+				BA9000070000000000000001 /* ClamAV-BackgroundHelper */,
 				A1000007200000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -251,6 +284,7 @@
 				A1000002200000000000059 /* ClamAV-GUI-Finder.appex */,
 				A1000002200000000000040 /* ClamAV-GUITests.xctest */,
 				A1000002200000000000071 /* ClamAV-GUIUITests.xctest */,
+				BA9000020000000000000005 /* SafeMacAVBackground.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -455,6 +489,16 @@
 			path = "ClamAV-GUIUITests";
 			sourceTree = "<group>";
 		};
+		BA9000070000000000000001 /* ClamAV-BackgroundHelper */ = {
+			isa = PBXGroup;
+			children = (
+				BA9000020000000000000002 /* SafeMacAVBackgroundApp.swift */,
+				BA9000020000000000000003 /* Info.plist */,
+				BA9000020000000000000004 /* SafeMacAVBackground.entitlements */,
+			);
+			path = "ClamAV-BackgroundHelper";
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -466,11 +510,13 @@
 				A1000006200000000000001 /* Frameworks */,
 				A100000A200000000000001 /* Resources */,
 				A100000D200000000000001 /* Embed App Extensions */,
+				BA90000D0000000000000001 /* Embed Login Items */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				A100000B200000000000002 /* PBXTargetDependency */,
+				BA90000B0000000000000001 /* PBXTargetDependency */,
 			);
 			name = "ClamAV-GUI";
 			packageProductDependencies = (
@@ -478,6 +524,23 @@
 			);
 			productName = "ClamAV-GUI";
 			productReference = A1000002200000000000030 /* ClamAV-GUI.app */;
+			productType = "com.apple.product-type.application";
+		};
+		BA9000050000000000000001 /* SafeMacAVBackground */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BA9000080000000000000001 /* Build configuration list for PBXNativeTarget "SafeMacAVBackground" */;
+			buildPhases = (
+				BA9000090000000000000001 /* Sources */,
+				BA9000060000000000000001 /* Frameworks */,
+				BA90000A0000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SafeMacAVBackground;
+			productName = SafeMacAVBackground;
+			productReference = BA9000020000000000000005 /* SafeMacAVBackground.app */;
 			productType = "com.apple.product-type.application";
 		};
 		A1000005200000000000003 /* ClamAV-GUI-Finder */ = {
@@ -557,6 +620,9 @@
 						CreatedOnToolsVersion = 15.0;
 						TestTargetID = A1000005200000000000001;
 					};
+					BA9000050000000000000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
 				};
 			};
 			buildConfigurationList = A1000008200000000000003 /* Build configuration list for PBXProject "ClamAV-GUI" */;
@@ -574,8 +640,9 @@
 			productRefGroup = A1000007200000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			targets = (
+				targets = (
 				A1000005200000000000001 /* ClamAV-GUI */,
+				BA9000050000000000000001 /* SafeMacAVBackground */,
 				A1000005200000000000003 /* ClamAV-GUI-Finder */,
 				A1000005200000000000002 /* ClamAV-GUITests */,
 				A1000005200000000000004 /* ClamAV-GUIUITests */,
@@ -607,6 +674,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A100000A200000000000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BA90000A0000000000000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -707,6 +781,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BA9000090000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BA9000010000000000000002 /* SafeMacAVBackgroundApp.swift in Sources */,
+				BA9000010000000000000003 /* BackgroundHelperSupport.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -724,6 +807,11 @@
 			isa = PBXTargetDependency;
 			target = A1000005200000000000001 /* ClamAV-GUI */;
 			targetProxy = A1000003200000000000003 /* PBXContainerItemProxy */;
+		};
+		BA90000B0000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BA9000050000000000000001 /* SafeMacAVBackground */;
+			targetProxy = BA9000030000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1010,6 +1098,46 @@
 			};
 			name = Release;
 		};
+		BA90000C0000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "ClamAV-BackgroundHelper/SafeMacAVBackground.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "ClamAV-BackgroundHelper/Info.plist";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI.Background";
+				PRODUCT_NAME = SafeMacAVBackground;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		BA90000C0000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "ClamAV-BackgroundHelper/SafeMacAVBackground.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "ClamAV-BackgroundHelper/Info.plist";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI.Background";
+				PRODUCT_NAME = SafeMacAVBackground;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1054,6 +1182,15 @@
 			buildConfigurations = (
 				A100000C200000000000001 /* Debug */,
 				A100000C200000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BA9000080000000000000001 /* Build configuration list for PBXNativeTarget "SafeMacAVBackground" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BA90000C0000000000000001 /* Debug */,
+				BA90000C0000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
