@@ -50,10 +50,12 @@ make_fixture() {
     local package_dir="$WORK_DIR/package"
     local app_dir="$WORK_DIR/SafeMac AV.app"
     local sparkle_dir="$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B"
+    local helper_dir="$app_dir/Contents/Library/LoginItems/SafeMacAVBackground.app"
 
     mkdir -p \
         "$package_dir/appcast" \
         "$app_dir/Contents/MacOS" \
+        "$helper_dir/Contents/MacOS" \
         "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS" \
         "$sparkle_dir/Updater.app/Contents/MacOS" \
         "$sparkle_dir/XPCServices/Downloader.xpc/Contents/MacOS" \
@@ -87,6 +89,17 @@ PLIST
     printf '#!/bin/bash\n' > "$app_dir/Contents/MacOS/ClamAV-GUI"
     printf 'finder\n' > "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
     chmod +x "$app_dir/Contents/MacOS/ClamAV-GUI"
+    printf '#!/bin/bash\n' > "$helper_dir/Contents/MacOS/SafeMacAVBackground"
+    chmod +x "$helper_dir/Contents/MacOS/SafeMacAVBackground"
+    cat > "$helper_dir/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.Background</string>
+    <key>CFBundleExecutable</key><string>SafeMacAVBackground</string>
+    <key>LSUIElement</key><true/>
+</dict></plist>
+PLIST
     chmod +x "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
 
     printf 'sparkle\n' > "$sparkle_dir/Sparkle"
@@ -633,6 +646,34 @@ run_nested_arch_failure_case() {
     fi
 }
 
+run_background_helper_presence_and_policy_failure_cases() {
+    local helper="$WORK_DIR/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app"
+    local executable="$helper/Contents/MacOS/SafeMacAVBackground"
+
+    mv "$helper" "$helper.missing"
+    if PATH="$WORK_DIR/bin:$PATH" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted a missing background helper"
+    fi
+    mv "$helper.missing" "$helper"
+
+    if PATH="$WORK_DIR/bin:$PATH" \
+       NON_UNIVERSAL_PATH="$executable" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted a non-universal background helper"
+    fi
+
+    /usr/libexec/PlistBuddy -c 'Set :LSUIElement false' "$helper/Contents/Info.plist"
+    if PATH="$WORK_DIR/bin:$PATH" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted a foreground-capable background helper"
+    fi
+    /usr/libexec/PlistBuddy -c 'Set :LSUIElement true' "$helper/Contents/Info.plist"
+}
+
 run_nested_signature_policy_failure_cases() {
     local component="$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
     local variable
@@ -698,6 +739,7 @@ main() {
     run_arch_failure_case
     run_nested_adhoc_failure_cases
     run_nested_arch_failure_case
+    run_background_helper_presence_and_policy_failure_cases
     run_nested_signature_policy_failure_cases
     run_missing_autoupdate_entitlement_case
     run_finder_entitlement_failure_cases
