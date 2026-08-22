@@ -418,6 +418,9 @@ case "extra-decoy-item":
       </item>
 """
     content = content.replacingOccurrences(of: "  </channel>", with: decoyItem + "  </channel>")
+case "wrapped-rss":
+    content = content.replacingOccurrences(of: "<rss ", with: "<wrapper><rss ")
+    content = content.replacingOccurrences(of: "</rss>", with: "</rss></wrapper>")
 case "wrong-length":
     content = content.replacingOccurrences(of: #"length="9""#, with: #"length="999""#)
 case "url-user":
@@ -470,6 +473,7 @@ run_exact_enclosure_metadata_failure_cases() {
         nested-item-version \
         nested-matching-item \
         extra-decoy-item \
+        wrapped-rss \
         wrong-length \
         url-user \
         url-password \

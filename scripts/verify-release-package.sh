@@ -471,6 +471,7 @@ final class AppcastItemCollector: NSObject, XMLParserDelegate {
     var isMalformed = false
     private var depth = 0
     private var elementStack: [String] = []
+    private var rootName: String?
     private var rssChannelDepth: Int?
     private var hasSeenRSSChannel = false
     private var itemDepth: Int?
@@ -494,7 +495,25 @@ final class AppcastItemCollector: NSObject, XMLParserDelegate {
         elementStack.append(name)
         depth += 1
 
-        if name == "channel", parentName == "rss" {
+        if depth == 1 {
+            guard name == "rss", rootName == nil else {
+                isMalformed = true
+                return
+            }
+            rootName = name
+            return
+        }
+
+        if name == "rss" {
+            isMalformed = true
+            return
+        }
+
+        if name == "channel" {
+            guard rootName == "rss", parentName == "rss", depth == 2 else {
+                isMalformed = true
+                return
+            }
             guard !hasSeenRSSChannel else {
                 isMalformed = true
                 return
