@@ -146,6 +146,17 @@ fi
 if [[ " $* " == *" --entitlements :- "* && "$target" != "${MISSING_AUTOUPDATE_ENTITLEMENT_PATH:-}" ]]; then
     printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
 fi
+if [[ " $* " == *" --entitlements - --xml "* ]]; then
+    app_path="${SAFEMAC_VERIFY_APP_PATH:?}"
+    if [[ "$target" == "$app_path" ]]; then
+        group="${APP_GROUP_ENTITLEMENT:-TESTTEAM01.com.newtonlorenz.ClamAV-GUI}"
+        sandbox="false"
+    else
+        group="${FINDER_GROUP_ENTITLEMENT:-TESTTEAM01.com.newtonlorenz.ClamAV-GUI}"
+        sandbox="${FINDER_SANDBOX_ENTITLEMENT:-true}"
+    fi
+    printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>$group</string></array><key>com.apple.security.app-sandbox</key><$sandbox/></dict></plist>"
+fi
 exit 0'
     write_fake_tool spctl 'exit 0'
     write_fake_tool xcrun '[[ "${1:-}" == "stapler" && "${2:-}" == "validate" ]] || exit 2'
@@ -314,6 +325,27 @@ run_missing_autoupdate_entitlement_case() {
     fi
 }
 
+run_finder_entitlement_failure_cases() {
+    local variable
+    local -a variables=(
+        APP_GROUP_ENTITLEMENT
+        FINDER_GROUP_ENTITLEMENT
+        FINDER_SANDBOX_ENTITLEMENT
+    )
+
+    for variable in "${variables[@]}"; do
+        local value="WRONGTEAM.com.newtonlorenz.ClamAV-GUI"
+        [[ "$variable" != "FINDER_SANDBOX_ENTITLEMENT" ]] || value="false"
+        if env \
+            PATH="$WORK_DIR/bin:$PATH" \
+            "$variable=$value" \
+            SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "invalid Finder handoff entitlement was accepted: $variable"
+        fi
+    done
+}
+
 main() {
     make_fixture
     make_fake_tools
@@ -323,6 +355,7 @@ main() {
     run_nested_arch_failure_case
     run_nested_signature_policy_failure_cases
     run_missing_autoupdate_entitlement_case
+    run_finder_entitlement_failure_cases
     run_appcast_failure_case
     run_missing_appcast_failure_case
     run_feed_signature_failure_case

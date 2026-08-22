@@ -647,10 +647,92 @@ final class AppStateTests: XCTestCase {
                 [URL(fileURLWithPath: "/tmp/finder-second")]
             ]
         )
-        XCTAssertTrue(try store.drainRequests().isEmpty)
+        XCTAssertTrue(try store.loadRequests().isEmpty)
+        XCTAssertTrue(try store.claimRequests().isEmpty)
     }
 
-    func testFinderAcknowledgementFailurePreventsReplayAfterAdmission() async throws {
+    func testInitialLaunchDrainConsumesFinderRequestQueuedBeforeAppStateExists() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+        let request = try store.enqueue(
+            paths: ["/tmp/finder-cold-start"],
+            source: ExternalScanRequestStore.finderSource
+        )
+        let runner = AppStateControlledRunner()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            externalScanRequestStore: store,
+            startsInteractiveBackgroundServices: false
+        )
+
+        let initialLaunch = Task { @MainActor in
+            await appState.drainExternalScanRequests()
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan()
+        let drainedRequestCount = await initialLaunch.value
+
+        XCTAssertEqual(drainedRequestCount, 1)
+        XCTAssertEqual(runner.scanPaths, [[URL(fileURLWithPath: "/tmp/finder-cold-start")]])
+        XCTAssertTrue(try store.claimRequests().isEmpty)
+        XCTAssertTrue(try store.loadRequest(id: request.id).isEmpty)
+    }
+
+    func testFinderRequestIsNotScannedWhenAcknowledgmentFails() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+        let request = try store.enqueue(
+            paths: ["/tmp/finder-pending"],
+            source: ExternalScanRequestStore.finderSource
+        )
+        let queueURL = tempDirectory.appendingPathComponent("external-scan-requests", isDirectory: true)
+        let runner = AppStateControlledRunner()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            externalScanRequestStore: store,
+            startsInteractiveBackgroundServices: false
+        )
+        let manualPath = URL(fileURLWithPath: "/tmp/manual")
+
+        let manualScan = Task {
+            await appState.startScan(paths: [manualPath], options: .default, source: .manual)
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        let finderWake = Task { @MainActor in
+            await appState.drainExternalScanRequest(id: request.id)
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: queueURL.path)
+        runner.resumeNextScan()
+        for _ in 0..<100 {
+            if runner.scanPaths.count > 1 {
+                runner.resumeNextScan()
+                break
+            }
+            await Task.yield()
+        }
+
+        _ = await (manualScan.value, finderWake.value)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: queueURL.path)
+
+        XCTAssertEqual(runner.scanPaths, [[manualPath]])
+        XCTAssertEqual(try store.claimRequest(id: request.id).map(\.id), [request.id])
+    }
+
+    func testFinderAcknowledgementRemovalFailureAbortsBeforeScan() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDirectory) }
@@ -675,8 +757,77 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(admittedCount, 0)
         XCTAssertTrue(runner.scanPaths.isEmpty)
-        XCTAssertEqual(appState.scanError, "Finder scan request storage is invalid.")
-        XCTAssertEqual(try store.loadRequest(id: request.id).map(\.id), [request.id])
+        XCTAssertEqual(appState.scanError, FinderScanRequestHandoff.genericFailureMessage)
+        XCTAssertEqual(try store.claimRequest(id: request.id).map(\.id), [request.id])
+    }
+
+    func testFinderRequestClaimSurvivesAgingWhileWaitingForActiveScan() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        var currentDate = Date()
+        let store = ExternalScanRequestStore(baseURL: tempDirectory, now: { currentDate })
+        let request = try store.enqueue(
+            paths: ["/tmp/finder-claimed"],
+            source: ExternalScanRequestStore.finderSource
+        )
+        let runner = AppStateControlledRunner()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            externalScanRequestStore: store,
+            startsInteractiveBackgroundServices: false
+        )
+        let manualPath = URL(fileURLWithPath: "/tmp/manual")
+        let finderPath = URL(fileURLWithPath: "/tmp/finder-claimed")
+
+        let manualScan = Task {
+            await appState.startScan(paths: [manualPath], options: .default, source: .manual)
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        let finderWake = Task { @MainActor in
+            await appState.drainExternalScanRequest(id: request.id)
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        currentDate = currentDate.addingTimeInterval(10 * 60)
+        _ = try store.enqueue(
+            paths: ["/tmp/new-finder-request"],
+            source: ExternalScanRequestStore.finderSource
+        )
+        runner.resumeNextScan()
+        if (try? await waitUntil({ runner.scanPaths.count > 1 })) != nil {
+            runner.resumeNextScan()
+        }
+
+        _ = await (manualScan.value, finderWake.value)
+
+        XCTAssertEqual(runner.scanPaths, [[manualPath], [finderPath]])
+    }
+
+    func testFinderHandoffFailureIgnoresUntrustedNotificationMessage() {
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            startsInteractiveBackgroundServices: false
+        )
+        let untrustedMessage = "/Users/alice/private.txt: raw filesystem failure"
+
+        appState.handleFinderHandoffFailure(
+            Notification(
+                name: ExternalScanRequestStore.scanRequestFailedNotificationName,
+                userInfo: ["message": untrustedMessage]
+            )
+        )
+
+        XCTAssertEqual(appState.selectedTab, .scan)
+        XCTAssertEqual(appState.scanError, FinderScanRequestHandoff.genericFailureMessage)
+        XCTAssertFalse(try XCTUnwrap(appState.scanError).contains("alice"))
+        XCTAssertFalse(try XCTUnwrap(appState.scanError).contains("raw filesystem failure"))
     }
 
     func testRequestNotificationPermissionPublishesManagerState() async {

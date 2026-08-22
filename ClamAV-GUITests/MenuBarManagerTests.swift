@@ -749,6 +749,35 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(activeCalls, 1)
     }
 
+    func testReopenRunsActiveMaintenanceWhenFinderWakeNotificationIsUnavailable() async {
+        let application = MenuBarApplicationMock()
+        let manager = MenuBarManager(application: application)
+        let initialRan = expectation(description: "initial launch ran")
+        let activeRan = expectation(description: "active maintenance ran")
+        var activeCalls = 0
+        let delegate = MenuBarApplicationDelegate(
+            manager: manager,
+            settingsProvider: { .default },
+            argumentsProvider: { [] },
+            nextMainRunLoopTurn: {},
+            mainWindowControllerFactory: { MainWindowControllerMock() },
+            runInitialApplicationLaunch: { _ in initialRan.fulfill() },
+            runActiveInteractiveMaintenance: { _ in
+                activeCalls += 1
+                activeRan.fulfill()
+            }
+        )
+
+        delegate.applicationWillFinishLaunching(.init(name: NSApplication.willFinishLaunchingNotification))
+        delegate.applicationDidFinishLaunching(.init(name: NSApplication.didFinishLaunchingNotification))
+        await fulfillment(of: [initialRan], timeout: 1)
+
+        XCTAssertTrue(delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true))
+        await fulfillment(of: [activeRan], timeout: 1)
+
+        XCTAssertEqual(activeCalls, 1)
+    }
+
     func testScheduledScanDelegatePresentsWindowThenRunsAppLifetimeScan() async {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)

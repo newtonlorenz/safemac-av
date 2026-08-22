@@ -10,6 +10,8 @@ struct ExternalScanRequest: Codable, Equatable, Identifiable {
 final class ExternalScanRequestStore {
     static let appGroupIdentifier = "CQPH8YR62A.com.newtonlorenz.ClamAV-GUI"
     static let finderSource = "finder"
+    static let scanRequestNotificationName = NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest")
+    static let scanRequestFailedNotificationName = NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequestFailed")
 
     private static let maxQueuedRequests = 25
     private static let maxPathsPerRequest = 64
@@ -21,17 +23,28 @@ final class ExternalScanRequestStore {
     private let queueURL: URL?
     private let fileManager: FileManager
     private let now: () -> Date
+    private let beforePublishingRequest: ((URL) throws -> Void)?
 
-    init(baseURL: URL? = nil, fileManager: FileManager = .default, now: @escaping () -> Date = Date.init) {
+    init(
+        baseURL: URL? = nil,
+        fileManager: FileManager = .default,
+        now: @escaping () -> Date = Date.init,
+        appGroupContainerResolver: ((String) -> URL?)? = nil,
+        beforePublishingRequest: ((URL) throws -> Void)? = nil
+    ) {
         self.fileManager = fileManager
         self.now = now
+        self.beforePublishingRequest = beforePublishingRequest
 
         if let baseURL {
             self.queueURL = baseURL.appendingPathComponent("external-scan-requests", isDirectory: true)
-        } else if let appGroupURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier) {
-            self.queueURL = appGroupURL.appendingPathComponent("external-scan-requests", isDirectory: true)
         } else {
-            self.queueURL = nil
+            let appGroupURL = if let appGroupContainerResolver {
+                appGroupContainerResolver(Self.appGroupIdentifier)
+            } else {
+                fileManager.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier)
+            }
+            self.queueURL = appGroupURL?.appendingPathComponent("external-scan-requests", isDirectory: true)
         }
     }
 
@@ -39,6 +52,7 @@ final class ExternalScanRequestStore {
     func enqueue(paths: [String], source: String) throws -> ExternalScanRequest {
         let queueURL = try resolvedQueueURL()
         try prepareQueueDirectory(at: queueURL)
+        _ = try load(files: queuedRequestFiles(at: queueURL))
         guard try queuedRequestFiles(at: queueURL).count < Self.maxQueuedRequests else {
             throw ExternalScanRequestStoreError.queueFull
         }
@@ -56,18 +70,18 @@ final class ExternalScanRequestStore {
             throw ExternalScanRequestStoreError.requestTooLarge
         }
 
+        let stagingURL = queueURL.appendingPathComponent(".\(request.id.uuidString).tmp")
         let requestURL = queueURL.appendingPathComponent("\(request.id.uuidString).json")
-        try data.write(to: requestURL, options: .atomic)
-        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: requestURL.path)
-        return request
-    }
-
-    func drainRequest(id: UUID) throws -> [ExternalScanRequest] {
-        let requests = try loadRequest(id: id)
-        for request in requests {
-            try acknowledgeRequest(id: request.id)
+        do {
+            try data.write(to: stagingURL, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stagingURL.path)
+            try beforePublishingRequest?(stagingURL)
+            try fileManager.moveItem(at: stagingURL, to: requestURL)
+        } catch {
+            try? fileManager.removeItem(at: stagingURL)
+            throw error
         }
-        return requests
+        return request
     }
 
     func loadRequest(id: UUID) throws -> [ExternalScanRequest] {
@@ -80,37 +94,77 @@ final class ExternalScanRequestStore {
         return try load(files: [file])
     }
 
-    func drainRequests() throws -> [ExternalScanRequest] {
-        let requests = try loadRequests()
-        for request in requests {
-            try acknowledgeRequest(id: request.id)
-        }
-        return requests
-    }
-
     func loadRequests() throws -> [ExternalScanRequest] {
         let queueURL = try resolvedQueueURL()
         guard fileManager.fileExists(atPath: queueURL.path) else { return [] }
         try validateQueueDirectory(at: queueURL)
 
-        let files = Array(try queuedRequestFiles(at: queueURL).prefix(Self.maxQueuedRequests))
+        let files = try queuedRequestFiles(at: queueURL)
         return try load(files: files)
     }
 
-    func acknowledgeRequest(id: UUID) throws {
+    func claimRequest(id: UUID) throws -> [ExternalScanRequest] {
         let queueURL = try resolvedQueueURL()
-        guard fileManager.fileExists(atPath: queueURL.path) else { return }
+        guard fileManager.fileExists(atPath: queueURL.path) else { return [] }
         try validateQueueDirectory(at: queueURL)
 
         let requestURL = queueURL.appendingPathComponent("\(id.uuidString).json")
-        guard fileManager.fileExists(atPath: requestURL.path) else { return }
+        let claimURL = queueURL.appendingPathComponent("\(id.uuidString).claim")
+        let isNewClaim = fileManager.fileExists(atPath: requestURL.path)
+        if isNewClaim {
+            try fileManager.moveItem(at: requestURL, to: claimURL)
+        }
+        guard fileManager.fileExists(atPath: claimURL.path) else { return [] }
+        return try load(files: [claimURL], requiresFreshness: isNewClaim)
+    }
+
+    func claimRequests() throws -> [ExternalScanRequest] {
+        let queueURL = try resolvedQueueURL()
+        guard fileManager.fileExists(atPath: queueURL.path) else { return [] }
+        try validateQueueDirectory(at: queueURL)
+
+        let recoveredClaims = try claimedRequestFiles(at: queueURL)
+        var newClaims: [URL] = []
+        for requestURL in try queuedRequestFiles(at: queueURL) {
+            let claimURL = requestURL.deletingPathExtension().appendingPathExtension("claim")
+            try fileManager.moveItem(at: requestURL, to: claimURL)
+            newClaims.append(claimURL)
+        }
+        return try (
+            load(files: recoveredClaims, requiresFreshness: false)
+                + load(files: newClaims, requiresFreshness: true)
+        ).sorted { $0.createdAt < $1.createdAt }
+    }
+
+    func acknowledgeRequest(id: UUID) throws {
+        try removeRequestFile(id: id, pathExtension: "json")
+    }
+
+    func acknowledgeClaim(id: UUID) throws {
+        try removeRequestFile(id: id, pathExtension: "claim")
+    }
+
+    private func removeRequestFile(id: UUID, pathExtension: String) throws {
+        let queueURL = try resolvedQueueURL()
+        guard fileManager.fileExists(atPath: queueURL.path) else {
+            throw ExternalScanRequestStoreError.invalidRequestFile
+        }
+        try validateQueueDirectory(at: queueURL)
+
+        let requestURL = queueURL.appendingPathComponent("\(id.uuidString).\(pathExtension)")
+        guard fileManager.fileExists(atPath: requestURL.path) else {
+            throw ExternalScanRequestStoreError.invalidRequestFile
+        }
         guard try isSafeRequestFile(requestURL) else {
             throw ExternalScanRequestStoreError.invalidRequestFile
         }
         try fileManager.removeItem(at: requestURL)
     }
 
-    private func load(files: [URL]) throws -> [ExternalScanRequest] {
+    private func load(
+        files: [URL],
+        requiresFreshness: Bool = true
+    ) throws -> [ExternalScanRequest] {
         var requests: [ExternalScanRequest] = []
         for file in files {
             do {
@@ -123,7 +177,7 @@ final class ExternalScanRequestStore {
                     throw ExternalScanRequestStoreError.requestTooLarge
                 }
                 let decodedRequest = try JSONDecoder().decode(ExternalScanRequest.self, from: data)
-                guard isFresh(decodedRequest.createdAt) else {
+                guard !requiresFreshness || isFresh(decodedRequest.createdAt) else {
                     throw ExternalScanRequestStoreError.staleRequest
                 }
                 guard file.deletingPathExtension().lastPathComponent == decodedRequest.id.uuidString else {
@@ -180,12 +234,20 @@ final class ExternalScanRequestStore {
     }
 
     private func queuedRequestFiles(at url: URL) throws -> [URL] {
+        try requestFiles(at: url, pathExtension: "json")
+    }
+
+    private func claimedRequestFiles(at url: URL) throws -> [URL] {
+        try requestFiles(at: url, pathExtension: "claim")
+    }
+
+    private func requestFiles(at url: URL, pathExtension: String) throws -> [URL] {
         try fileManager.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.creationDateKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         )
-        .filter { $0.pathExtension == "json" }
+        .filter { $0.pathExtension == pathExtension }
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
         .map { $0 }
     }
@@ -248,7 +310,7 @@ final class ExternalScanRequestStore {
 }
 
 struct FinderScanRequestHandoff {
-    static let genericFailureMessage = "SafeMac AV could not receive this scan request. Open SafeMac AV and try again."
+    static let genericFailureMessage = "SafeMac AV couldn’t receive this scan request. Open SafeMac AV and try again."
 
     let enqueue: ([String], String) throws -> ExternalScanRequest
     let postWake: (UUID) -> Void

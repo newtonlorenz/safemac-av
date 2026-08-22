@@ -302,6 +302,10 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
+        requestActiveInteractiveMaintenance()
+    }
+
+    private func requestActiveInteractiveMaintenance() {
         guard launchMode.isInteractive else { return }
         guard didCompleteInitialInteractiveLaunch else {
             pendingActiveMaintenance = true
@@ -376,7 +380,9 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        showMainWindow(selecting: nil)
+        let didShowMainWindow = showMainWindow(selecting: nil)
+        requestActiveInteractiveMaintenance()
+        return didShowMainWindow
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

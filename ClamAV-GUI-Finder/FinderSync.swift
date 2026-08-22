@@ -38,26 +38,55 @@ class FinderSync: FIFinderSync {
             enqueue: { try store.enqueue(paths: $0, source: $1) },
             postWake: { requestID in
                 DistributedNotificationCenter.default().postNotificationName(
-                    NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest"),
+                    ExternalScanRequestStore.scanRequestNotificationName,
                     object: nil,
                     userInfo: ["requestID": requestID.uuidString],
                     deliverImmediately: true
                 )
             },
-            presentFailure: { Self.presentHandoffFailure(message: $0) }
+            presentFailure: { _ in Self.presentHandoffFailure() }
         )
-        handoff.submit(paths: paths)
-
-        // Open main app
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.newtonlorenz.ClamAV-GUI") {
-            NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+        if handoff.submit(paths: paths) {
+            Self.openMainApp()
         }
     }
 
-    private static func presentHandoffFailure(message: String) {
+    private static func openMainApp() {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.newtonlorenz.ClamAV-GUI") else {
+            return
+        }
+        NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    private static func presentHandoffFailure() {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.newtonlorenz.ClamAV-GUI") else {
+            presentGenericFailureAlert()
+            return
+        }
+
+        NSWorkspace.shared.openApplication(
+            at: appURL,
+            configuration: NSWorkspace.OpenConfiguration()
+        ) { _, error in
+            guard error == nil else {
+                DispatchQueue.main.async {
+                    presentGenericFailureAlert()
+                }
+                return
+            }
+            DistributedNotificationCenter.default().postNotificationName(
+                ExternalScanRequestStore.scanRequestFailedNotificationName,
+                object: nil,
+                userInfo: nil,
+                deliverImmediately: true
+            )
+        }
+    }
+
+    private static func presentGenericFailureAlert() {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = message
+        alert.messageText = FinderScanRequestHandoff.genericFailureMessage
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }

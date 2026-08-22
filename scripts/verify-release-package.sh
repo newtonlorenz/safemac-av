@@ -116,14 +116,59 @@ verify_sparkle_autoupdate_entitlement() {
 
 mounted_app_path=""
 mount_point=""
+entitlements_dir=""
 sparkle_feed_url=""
 sparkle_public_ed_key=""
 
 cleanup() {
+    if [[ -n "$entitlements_dir" && -d "$entitlements_dir" ]]; then
+        rm -f "$entitlements_dir/app.plist" "$entitlements_dir/finder.plist"
+        rmdir "$entitlements_dir" >/dev/null 2>&1 || true
+    fi
     if [[ -n "$mount_point" && -d "$mount_point" ]]; then
         hdiutil detach "$mount_point" -quiet >/dev/null 2>&1 || true
         rmdir "$mount_point" >/dev/null 2>&1 || true
     fi
+}
+
+verify_finder_handoff_entitlements() {
+    local app_path="$1"
+    local finder_extension="$2"
+    local expected_team_id="$3"
+    local expected_group="$expected_team_id.com.newtonlorenz.ClamAV-GUI"
+    local app_entitlements
+    local finder_entitlements
+    local app_group
+    local finder_group
+    local finder_sandbox
+
+    [[ -x /usr/libexec/PlistBuddy ]] || fail "PlistBuddy is required"
+    entitlements_dir="$(mktemp -d "${TMPDIR:-/tmp}/safemac-entitlements.XXXXXX")"
+    app_entitlements="$entitlements_dir/app.plist"
+    finder_entitlements="$entitlements_dir/finder.plist"
+
+    codesign -d --entitlements - --xml "$app_path" >"$app_entitlements" 2>/dev/null \
+        || fail "unable to inspect app entitlements"
+    codesign -d --entitlements - --xml "$finder_extension" >"$finder_entitlements" 2>/dev/null \
+        || fail "unable to inspect Finder extension entitlements"
+
+    app_group="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$app_entitlements" 2>/dev/null)" \
+        || fail "app is missing the Finder handoff app group"
+    finder_group="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$finder_entitlements" 2>/dev/null)" \
+        || fail "Finder extension is missing the handoff app group"
+    finder_sandbox="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$finder_entitlements" 2>/dev/null)" \
+        || fail "Finder extension is missing its sandbox entitlement"
+
+    [[ "$app_group" == "$expected_group" ]] \
+        || fail "app Finder handoff group does not match its Developer ID Team"
+    [[ "$finder_group" == "$expected_group" ]] \
+        || fail "Finder extension handoff group does not match the app and Developer ID Team"
+    [[ "$finder_sandbox" == "true" ]] \
+        || fail "Finder extension sandbox entitlement is not enabled"
+
+    rm -f "$app_entitlements" "$finder_entitlements"
+    rmdir "$entitlements_dir"
+    entitlements_dir=""
 }
 
 trap cleanup EXIT
@@ -287,10 +332,12 @@ verify_app_bundle() {
     finder_extension="$mounted_app_path/Contents/PlugIns/ClamAV-GUI-Finder.appex"
     finder_executable="$finder_extension/Contents/MacOS/ClamAV-GUI-Finder"
     verify_distribution_code "$finder_extension" "$finder_executable" "$expected_team_id"
+    verify_finder_handoff_entitlements "$mounted_app_path" "$finder_extension" "$expected_team_id"
 
     verify_sparkle_configuration
 
     codesign --verify --deep --strict --verbose=2 "$mounted_app_path"
+    info "mounted app and Finder extension share the Team-ID app group; Finder sandbox is enabled"
     info "mounted app, Finder extension, and nested Sparkle code use Developer ID Team $expected_team_id, hardened runtime, secure timestamps, and universal architectures"
 }
 

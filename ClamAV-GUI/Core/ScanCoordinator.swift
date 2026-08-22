@@ -23,6 +23,7 @@ final class ScanCoordinator {
     func run(
         _ request: ScanRequest,
         onAdmitted: (() async throws -> Void)? = nil,
+        admissionFailureMessage: String = "SafeMac AV couldn’t start this scan. Try again.",
         progressHandler: @escaping (ScanProgress) -> Void
     ) async -> ScanOutcome {
         guard !isScanning else {
@@ -43,6 +44,11 @@ final class ScanCoordinator {
 
         do {
             try await onAdmitted?()
+        } catch {
+            return .failed(admissionFailureMessage)
+        }
+
+        do {
             let report = try await clamAVRunner.scan(
                 paths: request.paths,
                 options: request.options,

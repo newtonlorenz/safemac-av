@@ -15,16 +15,17 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    func testEnqueueAndDrainRequests() throws {
+    func testEnqueueLoadAndAcknowledgeRequests() throws {
         let store = ExternalScanRequestStore(baseURL: tempDirectory)
 
         try store.enqueue(paths: ["/tmp/b", "/tmp/a/../a", "/tmp/a", ""], source: ExternalScanRequestStore.finderSource)
-        let requests = try store.drainRequests()
+        let requests = try store.loadRequests()
 
         XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(requests[0].paths, ["/tmp/a", "/tmp/b"])
         XCTAssertEqual(requests[0].source, ExternalScanRequestStore.finderSource)
-        XCTAssertTrue(try store.drainRequests().isEmpty)
+        try store.acknowledgeRequest(id: requests[0].id)
+        XCTAssertTrue(try store.loadRequests().isEmpty)
     }
 
     func testEnqueueRejectsRelativePaths() throws {
@@ -33,7 +34,7 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         XCTAssertThrowsError(try store.enqueue(paths: ["relative/path"], source: "finder")) { error in
             XCTAssertEqual(error as? ExternalScanRequestStoreError, .invalidPaths)
         }
-        XCTAssertTrue(try store.drainRequests().isEmpty)
+        XCTAssertTrue(try store.loadRequests().isEmpty)
     }
 
     func testEnqueueUsesRestrictivePermissions() throws {
@@ -51,7 +52,51 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         XCTAssertEqual(requestPermissions, 0o600)
     }
 
-    func testDrainDropsStaleRequestsWithoutScanning() throws {
+    func testEnqueuePublishesOnlyAfterStagingFileHasRestrictivePermissions() throws {
+        var stagedPermissions: Int?
+        var publishedJSONFiles: [URL] = []
+        let store = ExternalScanRequestStore(
+            baseURL: tempDirectory,
+            beforePublishingRequest: { [self] stagingURL in
+                stagedPermissions = try permissions(at: stagingURL)
+                publishedJSONFiles = try queueFiles().filter { $0.pathExtension == "json" }
+            }
+        )
+
+        let request = try store.enqueue(
+            paths: ["/tmp/a"],
+            source: ExternalScanRequestStore.finderSource
+        )
+
+        XCTAssertEqual(stagedPermissions, 0o600)
+        XCTAssertTrue(publishedJSONFiles.isEmpty)
+        XCTAssertEqual(try queueFiles().filter { $0.pathExtension == "json" }.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: requestFileURL(id: request.id).path))
+    }
+
+    func testDefaultStoreFailsClosedWhenAppGroupContainerIsUnavailable() {
+        let store = ExternalScanRequestStore(appGroupContainerResolver: { _ in nil })
+
+        XCTAssertThrowsError(
+            try store.enqueue(paths: ["/tmp/a"], source: ExternalScanRequestStore.finderSource)
+        ) { error in
+            XCTAssertEqual(error as? ExternalScanRequestStoreError, .appGroupUnavailable)
+        }
+    }
+
+    func testDefaultStoreUsesExpectedAppGroupContainer() throws {
+        let containerURL = tempDirectory.appendingPathComponent("GroupContainer", isDirectory: true)
+        let store = ExternalScanRequestStore(appGroupContainerResolver: { identifier in
+            XCTAssertEqual(identifier, ExternalScanRequestStore.appGroupIdentifier)
+            return containerURL
+        })
+
+        try store.enqueue(paths: ["/tmp/a"], source: ExternalScanRequestStore.finderSource)
+
+        XCTAssertEqual(try store.loadRequests().first?.paths, ["/tmp/a"])
+    }
+
+    func testLoadDropsStaleRequestsWithoutScanning() throws {
         let currentDate = Date()
         let store = ExternalScanRequestStore(baseURL: tempDirectory, now: { currentDate })
         let staleRequest = ExternalScanRequest(
@@ -63,11 +108,11 @@ final class ExternalScanRequestStoreTests: XCTestCase {
 
         try writeRequest(staleRequest)
 
-        XCTAssertTrue(try store.drainRequests().isEmpty)
+        XCTAssertTrue(try store.loadRequests().isEmpty)
         XCTAssertTrue(try queueFiles().isEmpty)
     }
 
-    func testDrainDropsSymlinkedRequestFilesWithoutFollowingThem() throws {
+    func testLoadDropsSymlinkedRequestFilesWithoutFollowingThem() throws {
         let store = ExternalScanRequestStore(baseURL: tempDirectory)
         let queueURL = tempDirectory.appendingPathComponent("external-scan-requests", isDirectory: true)
         try FileManager.default.createDirectory(at: queueURL, withIntermediateDirectories: true)
@@ -77,7 +122,7 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         let linkURL = queueURL.appendingPathComponent("\(UUID().uuidString).json")
         try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: targetURL)
 
-        XCTAssertTrue(try store.drainRequests().isEmpty)
+        XCTAssertTrue(try store.loadRequests().isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: linkURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: targetURL.path))
     }
@@ -117,24 +162,31 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         }
     }
 
-    func testLoadRequestsCapsWorkToQueueBound() throws {
-        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+    func testEnqueuePrunesStaleRecordsBeforeCheckingQueueCapacity() throws {
+        let currentDate = Date()
+        let store = ExternalScanRequestStore(baseURL: tempDirectory, now: { currentDate })
 
-        for index in 0..<30 {
+        for index in 0..<25 {
             try writeRequest(
                 ExternalScanRequest(
                     id: UUID(),
-                    createdAt: Date().addingTimeInterval(TimeInterval(index)),
-                    paths: ["/tmp/\(index)"],
+                    createdAt: currentDate.addingTimeInterval(-10 * 60),
+                    paths: ["/tmp/stale-\(index)"],
                     source: ExternalScanRequestStore.finderSource
                 )
             )
         }
 
-        XCTAssertLessThanOrEqual(try store.loadRequests().count, 25)
+        let request = try store.enqueue(
+            paths: ["/tmp/fresh"],
+            source: ExternalScanRequestStore.finderSource
+        )
+
+        XCTAssertEqual(try store.loadRequests().map(\.id), [request.id])
+        XCTAssertEqual(try queueFiles().count, 1)
     }
 
-    func testDrainRejectsTamperedRequestWithRelativePath() throws {
+    func testLoadRejectsTamperedRequestWithRelativePath() throws {
         let store = ExternalScanRequestStore(baseURL: tempDirectory)
         try writeRequest(
             ExternalScanRequest(
@@ -145,7 +197,7 @@ final class ExternalScanRequestStoreTests: XCTestCase {
             )
         )
 
-        XCTAssertTrue(try store.drainRequests().isEmpty)
+        XCTAssertTrue(try store.loadRequests().isEmpty)
         XCTAssertTrue(try queueFiles().isEmpty)
     }
 
@@ -225,16 +277,16 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         }
     }
 
-    func testDrainRequestOnlyConsumesMatchingRequestID() throws {
+    func testLoadRequestOnlyReturnsMatchingRequestID() throws {
         let store = ExternalScanRequestStore(baseURL: tempDirectory)
         let first = try store.enqueue(paths: ["/tmp/a"], source: ExternalScanRequestStore.finderSource)
         let second = try store.enqueue(paths: ["/tmp/b"], source: ExternalScanRequestStore.finderSource)
 
-        let requests = try store.drainRequest(id: second.id)
+        let requests = try store.loadRequest(id: second.id)
 
         XCTAssertEqual(requests.map(\.id), [second.id])
         XCTAssertEqual(requests.first?.paths, ["/tmp/b"])
-        XCTAssertEqual(try store.drainRequests().map(\.id), [first.id])
+        XCTAssertEqual(Set(try store.loadRequests().map(\.id)), Set([first.id, second.id]))
     }
 
     func testLoadingRequestKeepsItQueuedUntilAcknowledged() throws {
@@ -250,6 +302,55 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         try store.acknowledgeRequest(id: request.id)
 
         XCTAssertTrue(try store.loadRequest(id: request.id).isEmpty)
+    }
+
+    func testAcknowledgingAnAlreadyRemovedRequestFails() throws {
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+        let request = try store.enqueue(
+            paths: ["/tmp/a"],
+            source: ExternalScanRequestStore.finderSource
+        )
+
+        XCTAssertEqual(try store.loadRequest(id: request.id).map(\.id), [request.id])
+        XCTAssertEqual(try store.loadRequest(id: request.id).map(\.id), [request.id])
+        try store.acknowledgeRequest(id: request.id)
+
+        XCTAssertThrowsError(try store.acknowledgeRequest(id: request.id)) { error in
+            XCTAssertEqual(error as? ExternalScanRequestStoreError, .invalidRequestFile)
+        }
+    }
+
+    func testClaimedRequestIsRecoveredAndAcknowledgedAfterRestart() throws {
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+        let request = try store.enqueue(
+            paths: ["/tmp/a"],
+            source: ExternalScanRequestStore.finderSource
+        )
+
+        XCTAssertEqual(try store.claimRequest(id: request.id).map(\.id), [request.id])
+
+        let restartedStore = ExternalScanRequestStore(baseURL: tempDirectory)
+        XCTAssertEqual(try restartedStore.claimRequests().map(\.id), [request.id])
+        try restartedStore.acknowledgeClaim(id: request.id)
+
+        XCTAssertTrue(try restartedStore.claimRequests().isEmpty)
+    }
+
+    func testClaimedRequestRemainsRecoverableAfterQueuedRequestAgeExpires() throws {
+        let claimedAt = Date()
+        let store = ExternalScanRequestStore(baseURL: tempDirectory, now: { claimedAt })
+        let request = try store.enqueue(
+            paths: ["/tmp/a"],
+            source: ExternalScanRequestStore.finderSource
+        )
+
+        XCTAssertEqual(try store.claimRequest(id: request.id).map(\.id), [request.id])
+
+        let restartedStore = ExternalScanRequestStore(
+            baseURL: tempDirectory,
+            now: { claimedAt.addingTimeInterval(10 * 60) }
+        )
+        XCTAssertEqual(try restartedStore.claimRequests().map(\.id), [request.id])
     }
 
     func testMalformedRecordDoesNotPreventValidRequestFromLoading() throws {
