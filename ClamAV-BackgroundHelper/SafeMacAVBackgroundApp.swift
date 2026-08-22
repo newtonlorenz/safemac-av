@@ -127,7 +127,7 @@ final class BackgroundSignatureUpdater {
 
     init(
         settingsURL: URL? = nil,
-        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = BackgroundSignatureUpdater.execute
+        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = BackgroundSignatureUpdater.executeProcess
     ) {
         settingsStore = BackgroundHelperSettingsStore(settingsURL: settingsURL ?? Self.defaultSettingsURL)
         self.execute = execute
@@ -135,7 +135,7 @@ final class BackgroundSignatureUpdater {
 
     init(
         settingsStore: BackgroundHelperSettingsStore,
-        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = BackgroundSignatureUpdater.execute
+        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = BackgroundSignatureUpdater.executeProcess
     ) {
         self.settingsStore = settingsStore
         self.execute = execute
@@ -161,7 +161,7 @@ final class BackgroundSignatureUpdater {
         execute(invocation, 300)
     }
 
-    private static func execute(_ invocation: FreshclamInvocation, timeout: TimeInterval) {
+    static func executeProcess(_ invocation: FreshclamInvocation, timeout: TimeInterval) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: invocation.executablePath)
         process.arguments = invocation.arguments
