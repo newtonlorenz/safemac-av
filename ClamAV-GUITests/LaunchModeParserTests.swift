@@ -78,4 +78,41 @@ final class LaunchModeParserTests: XCTestCase {
             XCTFail("Expected scheduled scan mode, not signature update mode")
         }
     }
+
+    func testBackgroundHelperParsesOnlyItsFixedScheduledSignatureFlag() {
+        XCTAssertEqual(
+            BackgroundHelperLaunchModeParser.parse(arguments: [
+                "SafeMacAVBackground",
+                "--scheduled-signature-update"
+            ]),
+            .scheduledSignatureUpdate
+        )
+        XCTAssertEqual(
+            BackgroundHelperLaunchModeParser.parse(arguments: ["SafeMacAVBackground"]),
+            .backgroundSession
+        )
+    }
+
+    func testBackgroundHelperRejectsMainApplicationFlags() {
+        XCTAssertEqual(
+            BackgroundHelperLaunchModeParser.parse(arguments: [
+                "SafeMacAVBackground",
+                "--scheduled-scan",
+                "--path", "/tmp/unsafe"
+            ]),
+            .invalid
+        )
+    }
+
+    func testBackgroundHelperNeverStartsUserInterfaceOrSparkle() {
+        for mode in [
+            BackgroundHelperLaunchMode.backgroundSession,
+            .scheduledSignatureUpdate,
+            .invalid
+        ] {
+            XCTAssertFalse(mode.presentsUserInterface)
+            XCTAssertFalse(mode.startsSoftwareUpdateSubsystem)
+            XCTAssertFalse(mode.consumesFinderRequests)
+        }
+    }
 }
