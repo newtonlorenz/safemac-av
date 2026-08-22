@@ -13,11 +13,11 @@ Use this checklist for a signed and notarized release. Publication is a separate
   - `NOTARY_KEY_BASE64`
   - `NOTARY_KEY_ID`
   - `NOTARY_ISSUER_ID`
-- [ ] If app updates are enabled, confirm repository variables and appcast secret:
+- [ ] Confirm repository variables and appcast secret for signed Sparkle updates:
   - `SPARKLE_FEED_URL`
   - `SPARKLE_PUBLIC_ED_KEY`
-  - optional `SPARKLE_DOWNLOAD_URL_PREFIX`
-  - optional `SPARKLE_PRIVATE_ED_KEY_BASE64`
+  - `SPARKLE_DOWNLOAD_URL_PREFIX`
+  - `SPARKLE_PRIVATE_ED_KEY_BASE64`
 
 ## Verify source
 
