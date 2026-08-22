@@ -64,12 +64,17 @@ make_fake_tools() {
     mkdir -p "$FAKE_BIN"
 
     write_fake_tool codesign '
+target="${!#}"
 if [[ " $* " == *" -dv "* ]]; then
+    flags="CodeDirectory v=20500 flags=0x10000(runtime)"
+    if [[ "${CANARY_COPY_MISSING_RUNTIME:-0}" == "1" && "$target" == *"safemac-sparkle-canary."* ]]; then
+        flags="CodeDirectory v=20500 flags=0x0(none)"
+    fi
     printf "%s\n" \
         "Authority=Developer ID Application: SafeMac Test (TESTTEAM01)" \
         "TeamIdentifier=TESTTEAM01" \
         "Timestamp=Aug 22, 2026 at 02:00:00" \
-        "CodeDirectory v=20500 flags=0x10000(runtime)" >&2
+        "$flags" >&2
 fi'
 
     write_fake_tool spctl 'exit 0'
@@ -138,6 +143,22 @@ test_install_mode_updates_temp_copy() {
         || fail "install mode did not pass an application bundle"
 }
 
+test_install_mode_verifies_updated_temp_copy_policy() {
+    : > "$SPARKLE_LOG"
+    write_info_plist "$APP_PATH" "https://updates.example.com/appcast.xml" 1
+
+    if PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+       SPARKLE_LOG="$SPARKLE_LOG" \
+       SPARKLE_CLI="$FAKE_BIN/sparkle" \
+       CANARY_COPY_MISSING_RUNTIME=1 \
+       SAFEMAC_CANARY_APP_PATH="$APP_PATH" \
+       SAFEMAC_CANARY_INSTALL=1 \
+       SAFEMAC_CANARY_KEEP_WORKDIR=0 \
+            "$PROJECT_DIR/scripts/run-installed-sparkle-canary.sh" >/dev/null 2>&1; then
+        fail "install mode accepted updated temporary app without hardened runtime"
+    fi
+}
+
 test_placeholder_feed_is_rejected() {
     write_info_plist "$APP_PATH" '$(SPARKLE_FEED_URL)' 1
 
@@ -164,6 +185,7 @@ main() {
     make_fake_tools
     test_probe_invokes_sparkle_cli_against_temp_copy
     test_install_mode_updates_temp_copy
+    test_install_mode_verifies_updated_temp_copy_policy
     test_placeholder_feed_is_rejected
     test_expected_update_fails_when_probe_reports_no_update
     printf 'run installed Sparkle canary tests passed\n'
