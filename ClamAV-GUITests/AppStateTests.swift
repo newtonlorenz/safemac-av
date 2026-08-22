@@ -70,6 +70,74 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(manager.status, .disabled)
     }
 
+    func testCanonicalLegacyLoginRegistrationMigratesToEmbeddedHelperTransactionally() throws {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        helper.statusAfterRegister = .enabled
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        try manager.migrateLegacyRegistrationIfNeeded()
+
+        XCTAssertEqual(helper.registerCalls, 1)
+        XCTAssertEqual(legacy.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .enabled)
+    }
+
+    func testNoncanonicalBundleNeverMigratesLegacyLoginRegistration() throws {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { false }
+        )
+
+        try manager.migrateLegacyRegistrationIfNeeded()
+
+        XCTAssertEqual(helper.registerCalls, 0)
+        XCTAssertEqual(legacy.unregisterCalls, 0)
+        XCTAssertEqual(manager.status, .disabled)
+    }
+
+    func testLegacyMigrationKeepsLegacyRegistrationWhileHelperAwaitsApproval() throws {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        helper.statusAfterRegister = .requiresApproval
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        try manager.migrateLegacyRegistrationIfNeeded()
+
+        XCTAssertEqual(helper.registerCalls, 1)
+        XCTAssertEqual(legacy.unregisterCalls, 0)
+        XCTAssertEqual(manager.status, .requiresApproval)
+    }
+
+    func testLegacyMigrationRollsBackHelperWhenLegacyRemovalFails() {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        helper.statusAfterRegister = .enabled
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        legacy.unregisterError = AppStateTestError.loginItemFailure
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        XCTAssertThrowsError(try manager.migrateLegacyRegistrationIfNeeded())
+        XCTAssertEqual(helper.registerCalls, 1)
+        XCTAssertEqual(helper.unregisterCalls, 1)
+        XCTAssertEqual(legacy.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .disabled)
+    }
+
     func testLaunchAtLoginStartupReconcilesSavedPreferenceWithSystemStatus() {
         var settings = AppSettings.default
         settings.launchAtLogin = true
