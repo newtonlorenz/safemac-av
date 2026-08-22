@@ -134,6 +134,12 @@ struct SchedulerView: View {
         do {
             scheduledJobs = try appState.scanScheduler.loadScheduledScans()
             loadState = .loaded
+            if appState.scheduledScanMigrationError != nil {
+                actionError = SchedulerActionError(
+                    title: "Schedules Need Attention",
+                    message: "SafeMac AV loaded your schedules but could not safely update their background agents. Your legacy schedule files were left unchanged."
+                )
+            }
             return true
         } catch {
             loadState = .failed

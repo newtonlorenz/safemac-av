@@ -80,6 +80,146 @@ final class ScanSchedulerTests: XCTestCase {
         XCTAssertEqual(launchctlCommands, [])
     }
 
+    func testNoncanonicalUpdateRejectsLegacyAgentBeforeAnyMutation() throws {
+        let fixture = try makeFixture()
+        let job = makeJob(name: "Legacy")
+        var disabledJob = job
+        disabledJob.isEnabled = false
+        let originalMetadata = try JSONEncoder().encode([job])
+        let legacyData = Data("legacy launch agent".utf8)
+        try originalMetadata.write(to: fixture.storageURL)
+        try legacyData.write(to: fixture.legacyPlistURL(for: job))
+        var operations: [(String, URL)] = []
+        var writes: [URL] = []
+        let scheduler = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            applicationBundlePath: "/private/tmp/translocated/SafeMac AV.app",
+            dataWriter: { data, url, options in
+                writes.append(url)
+                try data.write(to: url, options: options)
+            },
+            launchAgentLoadedStatusProvider: { _ in
+                XCTFail("Rejected noncanonical mutation must not inspect launchd state")
+                return false
+            },
+            launchctlRunner: { operations.append(($0, $1)) }
+        )
+
+        XCTAssertThrowsError(try scheduler.updateScheduledScan(disabledJob))
+
+        XCTAssertTrue(operations.isEmpty)
+        XCTAssertTrue(writes.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: fixture.storageURL), originalMetadata)
+        XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL(for: job)), legacyData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL(for: job).path))
+    }
+
+    func testNoncanonicalDeleteRejectsLegacyAgentBeforeAnyMutation() throws {
+        let fixture = try makeFixture()
+        let job = makeJob(name: "Legacy")
+        let originalMetadata = try JSONEncoder().encode([job])
+        let legacyData = Data("legacy launch agent".utf8)
+        try originalMetadata.write(to: fixture.storageURL)
+        try legacyData.write(to: fixture.legacyPlistURL(for: job))
+        var operations: [(String, URL)] = []
+        var writes: [URL] = []
+        let scheduler = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            applicationBundlePath: "/private/tmp/translocated/SafeMac AV.app",
+            dataWriter: { data, url, options in
+                writes.append(url)
+                try data.write(to: url, options: options)
+            },
+            launchAgentLoadedStatusProvider: { _ in
+                XCTFail("Rejected noncanonical mutation must not inspect launchd state")
+                return false
+            },
+            launchctlRunner: { operations.append(($0, $1)) }
+        )
+
+        XCTAssertThrowsError(try scheduler.removeScheduledScan(job))
+
+        XCTAssertTrue(operations.isEmpty)
+        XCTAssertTrue(writes.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: fixture.storageURL), originalMetadata)
+        XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL(for: job)), legacyData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL(for: job).path))
+    }
+
+    func testNoncanonicalUpdateRejectsLegacyAgentAppearingAfterPreflight() throws {
+        let fixture = try makeFixture()
+        let job = makeJob(name: "Legacy")
+        var updatedJob = job
+        updatedJob.name = "Updated"
+        let originalMetadata = try JSONEncoder().encode([job])
+        let legacyData = Data("racing legacy launch agent".utf8)
+        try originalMetadata.write(to: fixture.storageURL)
+        var operations: [(String, URL)] = []
+        var writes: [URL] = []
+        let scheduler = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            applicationBundlePath: "/private/tmp/translocated/SafeMac AV.app",
+            dataWriter: { data, url, options in
+                writes.append(url)
+                try data.write(to: url, options: options)
+            },
+            postLegacyMutationPreflightHook: {
+                try legacyData.write(to: fixture.legacyPlistURL(for: job))
+            },
+            launchAgentLoadedStatusProvider: { _ in
+                XCTFail("Racing legacy agent must be rejected before loaded-state inspection")
+                return false
+            },
+            launchctlRunner: { operations.append(($0, $1)) }
+        )
+
+        XCTAssertThrowsError(try scheduler.updateScheduledScan(updatedJob))
+
+        XCTAssertTrue(operations.isEmpty)
+        XCTAssertTrue(writes.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: fixture.storageURL), originalMetadata)
+        XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL(for: job)), legacyData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL(for: job).path))
+    }
+
+    func testNoncanonicalRemoveRejectsLegacyAgentAppearingAfterPreflight() throws {
+        let fixture = try makeFixture()
+        let job = makeJob(name: "Legacy")
+        let originalMetadata = try JSONEncoder().encode([job])
+        let legacyData = Data("racing legacy launch agent".utf8)
+        try originalMetadata.write(to: fixture.storageURL)
+        var operations: [(String, URL)] = []
+        var writes: [URL] = []
+        let scheduler = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            applicationBundlePath: "/private/tmp/translocated/SafeMac AV.app",
+            dataWriter: { data, url, options in
+                writes.append(url)
+                try data.write(to: url, options: options)
+            },
+            postLegacyMutationPreflightHook: {
+                try legacyData.write(to: fixture.legacyPlistURL(for: job))
+            },
+            launchAgentLoadedStatusProvider: { _ in
+                XCTFail("Racing legacy agent must be rejected before loaded-state inspection")
+                return false
+            },
+            launchctlRunner: { operations.append(($0, $1)) }
+        )
+
+        XCTAssertThrowsError(try scheduler.removeScheduledScan(job))
+
+        XCTAssertTrue(operations.isEmpty)
+        XCTAssertTrue(writes.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: fixture.storageURL), originalMetadata)
+        XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL(for: job)), legacyData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL(for: job).path))
+    }
+
     func testFailedMetadataWriteRollsBackUpdatedLaunchAgent() throws {
         let fixture = try makeFixture()
         let job = makeJob(name: "Existing")
@@ -179,6 +319,67 @@ final class ScanSchedulerTests: XCTestCase {
         XCTAssertEqual(launchctlCommands, ["unload", "load"])
     }
 
+    func testFailedUpdateKeepsOriginallyUnloadedLegacyAgentUnloaded() throws {
+        let fixture = try makeFixture()
+        let job = makeJob(name: "Legacy")
+        var updatedJob = job
+        updatedJob.name = "Updated"
+        let originalMetadata = try JSONEncoder().encode([job])
+        let legacyData = Data("legacy launch agent".utf8)
+        try originalMetadata.write(to: fixture.storageURL)
+        try legacyData.write(to: fixture.legacyPlistURL(for: job))
+        var operations: [(String, URL)] = []
+        let scheduler = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            dataWriter: { data, url, options in
+                if url.standardizedFileURL == fixture.storageURL.standardizedFileURL {
+                    throw TestError.intentionalWriteFailure
+                }
+                try data.write(to: url, options: options)
+            },
+            launchAgentLoadedStatusProvider: { _ in false },
+            launchctlRunner: { operations.append(($0, $1)) }
+        )
+
+        XCTAssertThrowsError(try scheduler.updateScheduledScan(updatedJob))
+
+        XCTAssertEqual(try Data(contentsOf: fixture.storageURL), originalMetadata)
+        XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL(for: job)), legacyData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL(for: job).path))
+        XCTAssertFalse(operations.contains { $0.1 == fixture.legacyPlistURL(for: job) })
+    }
+
+    func testFailedRemoveKeepsOriginallyUnloadedLegacyAgentUnloaded() throws {
+        let fixture = try makeFixture()
+        let job = makeJob(name: "Legacy")
+        let originalMetadata = try JSONEncoder().encode([job])
+        let legacyData = Data("legacy launch agent".utf8)
+        try originalMetadata.write(to: fixture.storageURL)
+        try legacyData.write(to: fixture.legacyPlistURL(for: job))
+        var operations: [(String, URL)] = []
+        let scheduler = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            dataWriter: { data, url, options in
+                if url.standardizedFileURL == fixture.storageURL.standardizedFileURL {
+                    throw TestError.intentionalWriteFailure
+                }
+                try data.write(to: url, options: options)
+            },
+            launchAgentLoadedStatusProvider: { _ in false },
+            launchctlRunner: { operations.append(($0, $1)) }
+        )
+
+        XCTAssertThrowsError(try scheduler.removeScheduledScan(job))
+
+        XCTAssertEqual(try Data(contentsOf: fixture.storageURL), originalMetadata)
+        XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL(for: job)), legacyData)
+        XCTAssertTrue(operations.isEmpty)
+    }
+
     func testNonZeroLaunchctlExitFailsCreateAndRemovesNewPlist() throws {
         let fixture = try makeFixture()
         let job = makeJob(name: "New")
@@ -230,10 +431,13 @@ final class ScanSchedulerTests: XCTestCase {
             launchAgentsDirectory: fixture.launchAgentsDirectory,
             jobsStorageURL: fixture.storageURL,
             legacyJobsStorageURL: fixture.legacyStorageURL,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            launchAgentLoadedStatusProvider: { $0.contains("ClamAV-GUI") },
             launchctlRunner: { operations.append(($0, $1)) }
         )
 
-        let migratedJobs = scheduler.listScheduledScans()
+        try scheduler.migrateLegacyState()
+        let migratedJobs = try scheduler.loadScheduledScans()
         XCTAssertEqual(migratedJobs.count, 1)
         XCTAssertEqual(migratedJobs.first?.id, job.id)
         XCTAssertEqual(migratedJobs.first?.name, job.name)
@@ -254,6 +458,8 @@ final class ScanSchedulerTests: XCTestCase {
             launchAgentsDirectory: fixture.launchAgentsDirectory,
             jobsStorageURL: fixture.storageURL,
             legacyJobsStorageURL: fixture.legacyStorageURL,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            launchAgentLoadedStatusProvider: { $0.contains("ClamAV-GUI") },
             launchctlRunner: { command, url in
                 if command == "load", url == fixture.plistURL(for: job) {
                     throw ScanSchedulerError.launchctlFailed(command: command, status: 5)
@@ -261,9 +467,64 @@ final class ScanSchedulerTests: XCTestCase {
             }
         )
 
-        XCTAssertTrue(scheduler.listScheduledScans().isEmpty)
+        XCTAssertThrowsError(try scheduler.migrateLegacyState())
+        XCTAssertEqual(try scheduler.loadScheduledScans().map(\.id), [job.id])
         XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL(for: job)), legacyData)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL(for: job).path))
+    }
+
+    func testNoncanonicalBundleLoadsJobsWithoutMigratingLegacyLaunchAgents() throws {
+        let fixture = try makeFixture()
+        let job = makeJob(name: "Legacy")
+        try JSONEncoder().encode([job]).write(to: fixture.storageURL)
+        let legacyData = Data("legacy plist".utf8)
+        try legacyData.write(to: fixture.legacyPlistURL(for: job))
+        var operations: [(String, URL)] = []
+        let scheduler = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            applicationBundlePath: "/private/tmp/translocated/SafeMac AV.app",
+            launchAgentLoadedStatusProvider: { _ in
+                XCTFail("Noncanonical metadata load must not inspect launchd state")
+                return false
+            },
+            launchctlRunner: { operations.append(($0, $1)) }
+        )
+
+        let jobs = try scheduler.loadScheduledScans()
+        try scheduler.migrateLegacyState()
+
+        XCTAssertEqual(jobs.map(\.id), [job.id])
+        XCTAssertTrue(operations.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL(for: job)), legacyData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL(for: job).path))
+    }
+
+    func testFailedMigrationKeepsOriginallyUnloadedLegacyAgentUnloadedAndUnchanged() throws {
+        let fixture = try makeFixture()
+        let job = makeJob(name: "Legacy")
+        try JSONEncoder().encode([job]).write(to: fixture.storageURL)
+        let legacyData = Data("legacy plist".utf8)
+        try legacyData.write(to: fixture.legacyPlistURL(for: job))
+        var operations: [(String, URL)] = []
+        let scheduler = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            launchAgentLoadedStatusProvider: { _ in false },
+            launchctlRunner: { command, url in
+                operations.append((command, url))
+                if command == "load", url == fixture.plistURL(for: job) {
+                    throw ScanSchedulerError.launchctlFailed(command: command, status: 5)
+                }
+            }
+        )
+
+        XCTAssertThrowsError(try scheduler.migrateLegacyState())
+
+        XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL(for: job)), legacyData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL(for: job).path))
+        XCTAssertFalse(operations.contains { $0.1 == fixture.legacyPlistURL(for: job) })
     }
 
     func testExistingUnloadedSafeMacAgentIsLoadedBeforeLegacyAgentIsDeleted() throws {
@@ -278,11 +539,12 @@ final class ScanSchedulerTests: XCTestCase {
             launchAgentsDirectory: fixture.launchAgentsDirectory,
             jobsStorageURL: fixture.storageURL,
             legacyJobsStorageURL: fixture.legacyStorageURL,
-            launchAgentLoadedStatusProvider: { _ in false },
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            launchAgentLoadedStatusProvider: { $0.contains("ClamAV-GUI") },
             launchctlRunner: { operations.append(($0, $1)) }
         )
 
-        _ = try scheduler.loadScheduledScans()
+        try scheduler.migrateLegacyState()
 
         XCTAssertEqual(operations.map(\.0), ["unload", "load"])
         XCTAssertEqual(operations.last?.1, fixture.plistURL(for: job))
@@ -303,7 +565,8 @@ final class ScanSchedulerTests: XCTestCase {
             launchAgentsDirectory: fixture.launchAgentsDirectory,
             jobsStorageURL: fixture.storageURL,
             legacyJobsStorageURL: fixture.legacyStorageURL,
-            launchAgentLoadedStatusProvider: { _ in false },
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            launchAgentLoadedStatusProvider: { $0.contains("ClamAV-GUI") },
             launchctlRunner: { command, url in
                 operations.append((command, url))
                 if command == "load", url == fixture.plistURL(for: job) {
@@ -312,7 +575,7 @@ final class ScanSchedulerTests: XCTestCase {
             }
         )
 
-        XCTAssertThrowsError(try scheduler.loadScheduledScans())
+        XCTAssertThrowsError(try scheduler.migrateLegacyState())
 
         XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL(for: job)), legacyData)
         XCTAssertEqual(try Data(contentsOf: fixture.plistURL(for: job)), replacementData)
@@ -329,6 +592,8 @@ final class ScanSchedulerTests: XCTestCase {
         let scheduler = ScanScheduler(
             launchAgentsDirectory: fixture.launchAgentsDirectory,
             jobsStorageURL: fixture.storageURL,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            launchAgentLoadedStatusProvider: { _ in true },
             launchctlRunner: { operations.append(($0, $1)) }
         )
 
@@ -351,6 +616,8 @@ final class ScanSchedulerTests: XCTestCase {
         let scheduler = ScanScheduler(
             launchAgentsDirectory: fixture.launchAgentsDirectory,
             jobsStorageURL: fixture.storageURL,
+            applicationBundlePath: "/Applications/SafeMac AV.app",
+            launchAgentLoadedStatusProvider: { _ in true },
             launchctlRunner: { command, url in
                 operations.append((command, url))
                 if command == "load", url == fixture.plistURL(for: job) {
