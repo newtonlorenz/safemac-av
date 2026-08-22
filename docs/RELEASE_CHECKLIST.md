@@ -61,6 +61,7 @@ shasum -a 256 -c SHA256SUMS.txt
 ```
 
 - [ ] Copy `SafeMac AV.app` to `/Applications`, launch it, and confirm the main window opens. Enable launch at login, approve it if macOS asks, then confirm the embedded helper owns one menu-bar item without prompting for notification permission.
+- [ ] From Settings › Notifications, choose **Allow Background Update Notifications** and confirm the dedicated helper authorization request is shown only after that explicit click (including while the regular login helper is already running). Confirm a denied or not-determined helper authorization suppresses scheduled-update notifications without another prompt.
 - [ ] Confirm `appcast.xml` is present, has valid feed and archive EdDSA signatures, and references the published DMG URL prefix.
 
 ## Publish boundary

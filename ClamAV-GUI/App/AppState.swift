@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Combine
 
@@ -25,6 +26,7 @@ final class AppState: ObservableObject {
     @Published private(set) var signatureUpdateScheduleState: SignatureUpdateScheduleState
     @Published private(set) var notificationPermissionStatus: NotificationPermissionStatus = .unknown
     @Published private(set) var notificationPermissionError: String?
+    @Published private(set) var backgroundHelperNotificationPermissionError: String?
     @Published var shouldOpenCustomScanPicker = false
     @Published private(set) var launchAtLoginStatus: LaunchAtLoginStatus
     @Published private(set) var protectionScore: ProtectionScore
@@ -44,6 +46,7 @@ final class AppState: ObservableObject {
     private let signatureUpdateScheduler: any SignatureUpdateScheduling
     private let allowsSignatureScheduleStartupReconciliation: Bool
     let notificationManager: NotificationManaging
+    private let backgroundHelperNotificationAuthorizationRequester: any BackgroundHelperNotificationAuthorizationRequesting
 
     private let logManager = LogManager()
     private var cancellables = Set<AnyCancellable>()
@@ -65,6 +68,7 @@ final class AppState: ObservableObject {
         scanHistoryManager: ScanHistoryManager = ScanHistoryManager(),
         launchAtLoginManager: any LaunchAtLoginManaging = LaunchAtLoginManager(),
         signatureUpdateScheduler: any SignatureUpdateScheduling = SignatureUpdateScheduler(),
+        backgroundHelperNotificationAuthorizationRequester: (any BackgroundHelperNotificationAuthorizationRequesting)? = nil,
         startsInteractiveBackgroundServices: Bool = true
     ) {
         var loadedSettings = configManager.loadSettings()
@@ -87,6 +91,8 @@ final class AppState: ObservableObject {
         self.clamAVRunner = runner
         self.freshclamRunner = freshclamRunner ?? FreshclamRunner(configManager: configManager)
         self.notificationManager = resolvedNotificationManager
+        self.backgroundHelperNotificationAuthorizationRequester = backgroundHelperNotificationAuthorizationRequester
+            ?? SystemBackgroundHelperNotificationAuthorizationRequester()
         self.quarantineManager = QuarantineManager(configManager: configManager)
         self.scanScheduler = scanScheduler
         self.fileWatcher = fileWatcher ?? FileWatcher(
@@ -816,6 +822,15 @@ final class AppState: ObservableObject {
         updateNotificationPermissionState()
     }
 
+    /// The login helper has a separate bundle notification identity. Request
+    /// it only from a deliberate foreground Settings tap.
+    func requestBackgroundHelperNotificationPermission() async {
+        let didLaunchRequest = await backgroundHelperNotificationAuthorizationRequester.requestAuthorization()
+        backgroundHelperNotificationPermissionError = didLaunchRequest
+            ? nil
+            : "SafeMac AV could not open its background helper to request notification permission."
+    }
+
     private func sendScanNotification(
         report: ScanReport,
         source: ScanSource,
@@ -839,6 +854,50 @@ final class AppState: ObservableObject {
     private func updateNotificationPermissionState() {
         notificationPermissionStatus = notificationManager.permissionStatus
         notificationPermissionError = notificationManager.permissionError
+    }
+}
+
+@MainActor
+protocol BackgroundHelperNotificationAuthorizationRequesting: AnyObject {
+    func requestAuthorization() async -> Bool
+}
+
+@MainActor
+final class SystemBackgroundHelperNotificationAuthorizationRequester: BackgroundHelperNotificationAuthorizationRequesting {
+    private let mainBundleURL: URL
+    private let isEmbeddedHelper: (URL, URL) -> Bool
+    private let openApplication: (URL, NSWorkspace.OpenConfiguration, @escaping (Error?) -> Void) -> Void
+
+    init(
+        mainBundleURL: URL = Bundle.main.bundleURL,
+        isEmbeddedHelper: @escaping (URL, URL) -> Bool = { executable, mainBundle in
+            BackgroundHelperBundle.isEmbeddedHelper(at: executable, in: mainBundle)
+        },
+        openApplication: @escaping (URL, NSWorkspace.OpenConfiguration, @escaping (Error?) -> Void) -> Void = { url, configuration, completion in
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
+                completion(error)
+            }
+        }
+    ) {
+        self.mainBundleURL = mainBundleURL
+        self.isEmbeddedHelper = isEmbeddedHelper
+        self.openApplication = openApplication
+    }
+
+    func requestAuthorization() async -> Bool {
+        let executable = BackgroundHelperBundle.executableURL(in: mainBundleURL)
+        guard isEmbeddedHelper(executable, mainBundleURL) else { return false }
+        let configuration = NSWorkspace.OpenConfiguration()
+        // The normal login helper can already be running and retains its own
+        // launch arguments. Permission therefore uses a dedicated one-shot
+        // helper instance, which exits after completing this fixed action.
+        configuration.createsNewApplicationInstance = true
+        configuration.arguments = ["--request-notification-authorization"]
+        return await withCheckedContinuation { continuation in
+            openApplication(BackgroundHelperBundle.bundleURL(in: mainBundleURL), configuration) { error in
+                continuation.resume(returning: error == nil)
+            }
+        }
     }
 }
 

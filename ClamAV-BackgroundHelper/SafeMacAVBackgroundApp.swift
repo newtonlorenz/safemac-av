@@ -33,6 +33,7 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
             installStatusItem: { [weak self] in self?.installStatusItem() },
             acquireMonitoringLease: { [weak self] in self?.lease.acquire() ?? false },
             runScheduledSignatureUpdate: { [weak self] completion in self?.runScheduledSignatureUpdate(completion: completion) },
+            requestNotificationAuthorization: { [weak self] completion in self?.requestNotificationAuthorization(completion: completion) },
             terminate: { NSApplication.shared.terminate(nil) }
         )
         coordinator?.start(arguments: arguments)
@@ -81,6 +82,13 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    private func requestNotificationAuthorization(completion: @escaping @MainActor @Sendable () -> Void) {
+        Task {
+            await notificationCoordinator.requestAuthorizationFromUserAction()
+            await MainActor.run { completion() }
+        }
+    }
 }
 
 enum BackgroundHelperNotificationAuthorization: Equatable {
@@ -91,6 +99,7 @@ enum BackgroundHelperNotificationAuthorization: Equatable {
 
 protocol BackgroundHelperNotificationDelivering: AnyObject {
     func authorizationStatus() async -> BackgroundHelperNotificationAuthorization
+    func requestAuthorization() async
     func deliver(title: String, body: String) async
 }
 
@@ -129,6 +138,12 @@ final class BackgroundHelperNotificationCoordinator {
         }
         await delivery.deliver(title: content.0, body: content.1)
     }
+
+    /// This is called only by the foreground app's explicit Settings action.
+    /// Login and scheduled-update launch modes never invoke it.
+    func requestAuthorizationFromUserAction() async {
+        await delivery.requestAuthorization()
+    }
 }
 
 #if !DEBUG
@@ -146,6 +161,10 @@ final class SystemBackgroundHelperNotificationDelivery: BackgroundHelperNotifica
         }
     }
 
+    func requestAuthorization() async {
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+    }
+
     func deliver(title: String, body: String) async {
         let content = UNMutableNotificationContent()
         content.title = title
@@ -159,10 +178,11 @@ final class SystemBackgroundHelperNotificationDelivery: BackgroundHelperNotifica
 
 private final class SuppressedBackgroundHelperNotificationDelivery: BackgroundHelperNotificationDelivering {
     func authorizationStatus() async -> BackgroundHelperNotificationAuthorization { .notDetermined }
+    func requestAuthorization() async {}
     func deliver(title: String, body: String) async {}
 }
 
-private enum MainAppHandoff {
+enum MainAppHandoff {
     private static let bundleURL = URL(fileURLWithPath: "/Applications/SafeMac AV.app", isDirectory: true)
     private static let mainBundleIdentifier = "com.newtonlorenz.ClamAV-GUI"
     private static let teamIdentifier = "CQPH8YR62A"
@@ -188,7 +208,7 @@ private enum MainAppHandoff {
         ).send(route)
     }
 
-    private static func canonicalMainApplicationIsTrusted() -> Bool {
+    static func canonicalMainApplicationIsTrusted() -> Bool {
         var attributes = stat()
         guard lstat(bundleURL.path, &attributes) == 0,
               (attributes.st_mode & S_IFMT) == S_IFDIR,
@@ -200,14 +220,18 @@ private enum MainAppHandoff {
               let code else {
             return false
         }
-        let requirementString = "identifier \(mainBundleIdentifier) and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
         var requirement: SecRequirement?
-        guard SecRequirementCreateWithString(requirementString as CFString, [], &requirement) == errSecSuccess,
+        guard SecRequirementCreateWithString(staticCodeRequirement as CFString, [], &requirement) == errSecSuccess,
               let requirement else {
             return false
         }
         return SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
+
+    static let staticCodeRequirement = TrustedCodeRequirement.developerIDApplication(
+        identifier: mainBundleIdentifier,
+        teamIdentifier: teamIdentifier
+    )
 }
 
 final class BackgroundSignatureUpdater {

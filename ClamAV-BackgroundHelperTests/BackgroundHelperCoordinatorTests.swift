@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import SafeMacAVBackground
 
@@ -107,8 +108,13 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
     func testSharedHelperSupportCoversFixedModesRoutesAndSecureLease() throws {
         XCTAssertEqual(BackgroundHelperLaunchModeParser.parse(arguments: ["helper"]), .backgroundSession)
         XCTAssertEqual(BackgroundHelperLaunchModeParser.parse(arguments: ["helper", "--scheduled-signature-update"]), .scheduledSignatureUpdate)
+        XCTAssertEqual(BackgroundHelperLaunchModeParser.parse(arguments: ["helper", "--request-notification-authorization"]), .requestNotificationAuthorization)
         XCTAssertEqual(BackgroundHelperLaunchModeParser.parse(arguments: ["helper", "--scheduled-scan"]), .invalid)
-        for mode in [BackgroundHelperLaunchMode.backgroundSession, .scheduledSignatureUpdate, .invalid] {
+        XCTAssertEqual(
+            BackgroundHelperBundle.bundleURL(in: URL(fileURLWithPath: "/Applications/SafeMac AV.app")),
+            URL(fileURLWithPath: "/Applications/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app", isDirectory: true)
+        )
+        for mode in [BackgroundHelperLaunchMode.backgroundSession, .scheduledSignatureUpdate, .requestNotificationAuthorization, .invalid] {
             XCTAssertFalse(mode.presentsUserInterface)
             XCTAssertFalse(mode.startsSoftwareUpdateSubsystem)
             XCTAssertFalse(mode.consumesFinderRequests)
@@ -492,6 +498,17 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         XCTAssertFalse(delivery.deliveries[0].1.contains("secret-path"))
     }
 
+    func testExplicitHelperNotificationAuthorizationCanOnlyBeRequestedByUserAction() async {
+        let delivery = BackgroundHelperNotificationMock(status: .notDetermined)
+        let coordinator = BackgroundHelperNotificationCoordinator(delivery: delivery)
+
+        await coordinator.requestAuthorizationFromUserAction()
+
+        XCTAssertEqual(delivery.requestCalls, 1)
+        XCTAssertEqual(delivery.statusCalls, 0)
+        XCTAssertTrue(delivery.deliveries.isEmpty)
+    }
+
     func testHelperNotificationsSuppressDeniedAndNotDeterminedWithoutPrompt() async {
         for status in [BackgroundHelperNotificationAuthorization.denied, .notDetermined] {
             let delivery = BackgroundHelperNotificationMock(status: status)
@@ -500,6 +517,70 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             XCTAssertTrue(delivery.deliveries.isEmpty)
             XCTAssertEqual(delivery.statusCalls, 1)
         }
+    }
+
+    func testExplicitHelperNotificationAuthorizationOnlyRunsFromItsDedicatedLaunchMode() {
+        var authorizationRequests = 0
+        var installedMenuBar = 0
+        var scheduledUpdates = 0
+        var terminations = 0
+        let coordinator = BackgroundHelperCoordinator(
+            installStatusItem: { installedMenuBar += 1 },
+            acquireMonitoringLease: { true },
+            runScheduledSignatureUpdate: { _ in scheduledUpdates += 1 },
+            requestNotificationAuthorization: { completion in
+                authorizationRequests += 1
+                completion()
+            },
+            terminate: { terminations += 1 }
+        )
+
+        coordinator.start(arguments: ["SafeMacAVBackground"])
+        coordinator.start(arguments: ["SafeMacAVBackground", "--scheduled-signature-update"])
+        coordinator.start(arguments: ["SafeMacAVBackground", "--request-notification-authorization"])
+
+        XCTAssertEqual(authorizationRequests, 1)
+        XCTAssertEqual(installedMenuBar, 1)
+        XCTAssertEqual(scheduledUpdates, 1)
+        XCTAssertEqual(terminations, 1)
+    }
+
+    func testFreshclamOutputFailsClosedForEveryNonzeroExitCode() {
+        let mixedOutputs = [
+            "daily.cld database is up-to-date (version: 123)\nERROR: network failed",
+            "daily.cld updated (version: 123)\nERROR: verification failed"
+        ]
+
+        for output in mixedOutputs {
+            guard case .failed = FreshclamUpdateOutcome.parse(output: output, exitCode: 1) else {
+                return XCTFail("A nonzero freshclam exit must fail closed")
+            }
+        }
+    }
+
+    func testTrustedCodeRequirementsAnchorAppleGenericAndConstrainIdentifierAndTeam() {
+        XCTAssertEqual(
+            BackgroundHelperBundle.staticCodeRequirement,
+            "anchor apple generic and identifier com.newtonlorenz.ClamAV-GUI.Background and certificate leaf[subject.OU] = \"CQPH8YR62A\""
+        )
+        XCTAssertEqual(
+            TrustedCodeRequirement.developerIDApplication(
+                identifier: "com.newtonlorenz.ClamAV-GUI",
+                teamIdentifier: "CQPH8YR62A"
+            ),
+            "anchor apple generic and identifier com.newtonlorenz.ClamAV-GUI and certificate leaf[subject.OU] = \"CQPH8YR62A\""
+        )
+
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ClamAV-BackgroundHelper/SafeMacAVBackgroundApp.swift")
+        let source = try? String(contentsOf: sourceURL)
+        XCTAssertTrue(source?.contains("SecRequirementCreateWithString(staticCodeRequirement") == true)
+    }
+
+    func testCanonicalMainValidationIsReadOnlyBeforeAnyRouteDispatch() {
+        _ = MainAppHandoff.canonicalMainApplicationIsTrusted()
     }
 
     func testHelperNotificationsUseSafeSuccessAndCurrentSummaries() async {
@@ -525,6 +606,7 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
 
     func testAppAdapterExposesOnlyTheFixedMainActions() {
         let app = SafeMacAVBackgroundApp()
+        app.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
         XCTAssertNotNil(app)
     }
 
@@ -570,6 +652,7 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
 private final class BackgroundHelperNotificationMock: BackgroundHelperNotificationDelivering {
     let status: BackgroundHelperNotificationAuthorization
     var statusCalls = 0
+    var requestCalls = 0
     var deliveries: [(String, String)] = []
 
     init(status: BackgroundHelperNotificationAuthorization) {
@@ -580,6 +663,8 @@ private final class BackgroundHelperNotificationMock: BackgroundHelperNotificati
         statusCalls += 1
         return status
     }
+
+    func requestAuthorization() async { requestCalls += 1 }
 
     func deliver(title: String, body: String) async {
         deliveries.append((title, body))

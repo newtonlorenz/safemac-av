@@ -990,6 +990,55 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(appState.notificationPermissionError)
     }
 
+    func testBackgroundHelperNotificationPermissionRequiresOnlyExplicitTap() async {
+        let requester = AppStateMockBackgroundHelperNotificationRequester()
+        let disabled = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: AppStateMockLoginItemService(status: .notRegistered)),
+            backgroundHelperNotificationAuthorizationRequester: requester,
+            startsInteractiveBackgroundServices: false
+        )
+
+        await disabled.requestBackgroundHelperNotificationPermission()
+        XCTAssertEqual(requester.requests, 1)
+        XCTAssertNil(disabled.backgroundHelperNotificationPermissionError)
+
+        let enabledRequester = AppStateMockBackgroundHelperNotificationRequester()
+        let enabled = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: AppStateMockLoginItemService(status: .enabled)),
+            backgroundHelperNotificationAuthorizationRequester: enabledRequester,
+            startsInteractiveBackgroundServices: false
+        )
+        XCTAssertEqual(enabledRequester.requests, 0)
+
+        await enabled.requestBackgroundHelperNotificationPermission()
+        XCTAssertEqual(enabledRequester.requests, 1)
+        XCTAssertNil(enabled.backgroundHelperNotificationPermissionError)
+    }
+
+    func testBackgroundHelperPermissionRequestStartsNewOneShotInstanceWhenLoginHelperAlreadyRuns() async {
+        let mainBundle = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        var receivedArguments: [String] = []
+        var createsNewInstance = false
+        let requester = SystemBackgroundHelperNotificationAuthorizationRequester(
+            mainBundleURL: mainBundle,
+            isEmbeddedHelper: { _, _ in true },
+            openApplication: { _, configuration, completion in
+                receivedArguments = configuration.arguments
+                createsNewInstance = configuration.createsNewApplicationInstance
+                completion(nil)
+            }
+        )
+
+        let didLaunch = await requester.requestAuthorization()
+        XCTAssertTrue(didLaunch)
+        XCTAssertEqual(receivedArguments, ["--request-notification-authorization"])
+        XCTAssertTrue(createsNewInstance)
+    }
+
     func testProtectionScoreIsCachedDuringScanProgressUpdates() {
         var settings = AppSettings.default
         settings.monitoringEnabled = false
@@ -1538,5 +1587,16 @@ private final class AppStateMockNotificationManager: NotificationManaging {
     func resumeScheduledNotification() {
         scheduledContinuation?.resume()
         scheduledContinuation = nil
+    }
+}
+
+@MainActor
+private final class AppStateMockBackgroundHelperNotificationRequester: BackgroundHelperNotificationAuthorizationRequesting {
+    private(set) var requests = 0
+    var result = true
+
+    func requestAuthorization() async -> Bool {
+        requests += 1
+        return result
     }
 }
