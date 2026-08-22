@@ -84,7 +84,10 @@ enum SignatureScheduleReconciliationPolicy {
         return normalized(bundleURL) == normalized(canonicalInstalledBundleURL)
     }
 
-    private static func normalized(_ url: URL) -> URL {
-        url.standardizedFileURL.resolvingSymlinksInPath()
+    private static func normalized(_ url: URL) -> String {
+        // URL equality includes the `isDirectory` hint. Bundle.main may not
+        // preserve that hint even when it identifies the canonical installed
+        // app, so compare the resolved filesystem path instead.
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 }

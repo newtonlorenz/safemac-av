@@ -998,6 +998,13 @@ final class MenuBarManagerTests: XCTestCase {
             bundleURL: URL(fileURLWithPath: "/Applications/SafeMac AV.app"),
             isAutomatedTest: false
         ))
+        // Bundle.main may carry a different `isDirectory` hint even when it
+        // names the same installed bundle. That hint must not suppress the
+        // security policy's canonical-path match.
+        XCTAssertTrue(SignatureScheduleReconciliationPolicy.shouldReconcile(
+            bundleURL: URL(fileURLWithPath: "/Applications/SafeMac AV.app", isDirectory: false),
+            isAutomatedTest: false
+        ))
 
         let unsafePaths = [
             "/Users/test/Library/Developer/Xcode/DerivedData/SafeMac/Build/Products/Debug/SafeMac AV.app",
