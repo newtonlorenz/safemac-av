@@ -69,6 +69,8 @@ make_fixture() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.newtonlorenz.ClamAV-GUI</string>
     <key>CFBundleShortVersionString</key>
     <string>1.2.0</string>
     <key>CFBundleVersion</key>
@@ -92,7 +94,7 @@ PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-    <key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.FinderSync</string>
+    <key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync</string>
 </dict></plist>
 PLIST
     chmod +x "$app_dir/Contents/MacOS/ClamAV-GUI"
@@ -205,10 +207,10 @@ if [[ " $* " == *" --entitlements :- "* && "$target" != "${MISSING_AUTOUPDATE_EN
 fi
 if [[ " $* " == *" --entitlements - --xml "* ]]; then
     if [[ "$target" == */SafeMac\ AV.app ]]; then
-        group="${APP_GROUP_ENTITLEMENT:-TESTTEAM01.com.newtonlorenz.ClamAV-GUI}"
+        group="${APP_GROUP_ENTITLEMENT:-TESTTEAM01.com.newtonlorenz.SafeMacAV}"
         sandbox="false"
     else
-        group="${FINDER_GROUP_ENTITLEMENT:-TESTTEAM01.com.newtonlorenz.ClamAV-GUI}"
+        group="${FINDER_GROUP_ENTITLEMENT:-TESTTEAM01.com.newtonlorenz.SafeMacAV}"
         sandbox="${FINDER_SANDBOX_ENTITLEMENT:-true}"
     fi
     printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>$group</string></array><key>com.apple.security.app-sandbox</key><$sandbox/></dict></plist>"
@@ -766,6 +768,27 @@ run_background_helper_presence_and_policy_failure_cases() {
     done
 }
 
+run_bundle_identity_failure_cases() {
+    local app_info="$WORK_DIR/SafeMac AV.app/Contents/Info.plist"
+    local finder_info="$WORK_DIR/SafeMac AV.app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/Info.plist"
+
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.newtonlorenz.SafeMacAV' "$app_info"
+    if PATH="$WORK_DIR/bin:$PATH" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted a changed main app bundle identifier"
+    fi
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.newtonlorenz.ClamAV-GUI' "$app_info"
+
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.newtonlorenz.ClamAV-GUI.FinderSync' "$finder_info"
+    if PATH="$WORK_DIR/bin:$PATH" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted the legacy Finder extension identifier"
+    fi
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync' "$finder_info"
+}
+
 run_nested_signature_policy_failure_cases() {
     local component="$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
     local variable
@@ -816,6 +839,17 @@ run_finder_entitlement_failure_cases() {
             fail "invalid Finder handoff entitlement was accepted: $variable"
         fi
     done
+
+
+    for variable in APP_GROUP_ENTITLEMENT FINDER_GROUP_ENTITLEMENT; do
+        if env \
+            PATH="$WORK_DIR/bin:$PATH" \
+            "$variable=TESTTEAM01.com.newtonlorenz.ClamAV-GUI" \
+            SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "release verifier accepted a mixed legacy app group: $variable"
+        fi
+    done
 }
 
 main() {
@@ -832,6 +866,7 @@ main() {
     run_nested_adhoc_failure_cases
     run_nested_arch_failure_case
     run_background_helper_presence_and_policy_failure_cases
+    run_bundle_identity_failure_cases
     run_nested_signature_policy_failure_cases
     run_missing_autoupdate_entitlement_case
     run_finder_entitlement_failure_cases

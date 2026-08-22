@@ -305,6 +305,8 @@ enum BackgroundRoute: String, CaseIterable {
 /// app. Distributed notifications are only a wake-up hint; the request file is
 /// the authority and is consumed exactly once by the main app.
 final class BackgroundRouteRequestStore {
+    static let applicationSupportDirectoryName = "SafeMac AV"
+
     private let requestURL: URL
     private let fileManager: FileManager
     private let removeRequest: (URL) throws -> Void
@@ -322,7 +324,7 @@ final class BackgroundRouteRequestStore {
             let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
                 ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
             requestURL = support
-                .appendingPathComponent("ClamAV-GUI", isDirectory: true)
+                .appendingPathComponent(Self.applicationSupportDirectoryName, isDirectory: true)
                 .appendingPathComponent("background-route.request", isDirectory: false)
         }
     }
@@ -452,6 +454,8 @@ final class BackgroundRouteRequestStore {
 /// executable and the embedded helper. The descriptor stays open for the
 /// duration of work so the kernel releases it if either process terminates.
 final class BackgroundWorkLease {
+    static let applicationSupportDirectoryName = "SafeMac AV"
+
     private let url: URL
     private let fileManager: FileManager
     private var descriptor: Int32 = -1
@@ -468,7 +472,7 @@ final class BackgroundWorkLease {
             let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
                 ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
             url = support
-                .appendingPathComponent("ClamAV-GUI", isDirectory: true)
+                .appendingPathComponent(Self.applicationSupportDirectoryName, isDirectory: true)
                 .appendingPathComponent("\(name).lock", isDirectory: false)
         }
     }

@@ -74,7 +74,7 @@ shasum -a 256 -c SHA256SUMS.txt
 
 Open the DMG and drag the included app into `Applications`. It is named `ClamAV-GUI` in v1.0.0 and `SafeMac AV` from v1.1.0.
 
-When upgrading from an older ClamAV GUI build, launch SafeMac AV and re-save any enabled schedules so their LaunchAgents point to the renamed app. Remove the old app after confirming the new build works.
+When upgrading from an older ClamAV GUI build, launch the canonical SafeMac AV app once. Its initial maintenance copies validated settings and scheduled-job metadata into the SafeMac AV support directory and replaces exact legacy scheduled-scan LaunchAgents. Legacy support files are retained as a rollback copy and are never overwritten or deleted by this migration. If schedule migration cannot complete safely, the Schedules screen reports the failure instead of presenting an empty list. Remove the old app after confirming the new build works.
 
 ## Quick start
 
@@ -204,15 +204,15 @@ The app sandbox is deliberately disabled. Scanning arbitrary user-selected folde
 
 Local state can contain sensitive path names and threat results:
 
-- Settings and scheduled-job metadata: `~/Library/Application Support/ClamAV-GUI/`
-- Per-user schedules: `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.scan.*.plist`
-- Automatic malware-signature schedule: `~/Library/LaunchAgents/com.newtonlorenz.ClamAV-GUI.signature-update.plist`
+- Settings and scheduled-job metadata: `~/Library/Application Support/SafeMac AV/`
+- Per-user schedules: `~/Library/LaunchAgents/com.newtonlorenz.SafeMacAV.scan.*.plist`
+- Automatic malware-signature schedule: `~/Library/LaunchAgents/com.newtonlorenz.SafeMacAV.signature-update.plist`
 - Quarantine by default: `~/.clamav-quarantine/`
 - Logs and scan history: held in application memory for the current run
 
 Local notifications deliberately omit file names, full paths, threat signatures, schedule names, and raw update errors. Open SafeMac AV to review those details. Notification permission and preferences, including threat sounds and clean-download alerts, are controlled in Settings; clean-download alerts are off by default.
 
-The existing `ClamAV-GUI` support paths, scheduled-job metadata and labels, bundle identifiers, target, and scheme remain unchanged for compatibility with installed settings, Finder integration, and existing build automation.
+The main app's `ClamAV-GUI` executable, target, scheme, and `com.newtonlorenz.ClamAV-GUI` bundle identifier remain unchanged to preserve the installed Sparkle update lineage. Child and test targets use SafeMac AV identities. Persisted settings, scheduled-job metadata, and LaunchAgent labels migrate to SafeMac AV names; validated legacy data is copied without deleting the original.
 
 See [SECURITY.md](SECURITY.md) for the supported reporting process.
 
@@ -222,7 +222,7 @@ See [SECURITY.md](SECURITY.md) for the supported reporting process.
 - Folder monitoring is application-level FSEvents monitoring. It only runs while SafeMac AV is running and is not a kernel or system on-access scanner.
 - Scheduled scans are per-user `launchd` jobs. The app must remain at the path captured by the job, and the user must be logged in.
 - Automatic signature updates are a separate per-user `launchd` job that launches SafeMac AV's embedded background helper, which runs the configured local `freshclam`. They do not update the SafeMac AV app or the externally managed Homebrew ClamAV engine. Opening an installed build reconciles the job to that app's embedded helper path.
-- The Finder extension must be signed with the app, use the same unprovisioned Team-ID app group (`CQPH8YR62A.com.newtonlorenz.ClamAV-GUI` upstream), and be enabled manually in System Settings. Opening or reopening the app drains the shared queue; the distributed notification is only a best-effort accelerator because macOS can suppress it from a sandboxed extension. The handoff fails closed if that shared container is unavailable. Forks must replace the Team ID and namespaced identifiers together.
+- The Finder extension must be signed with the app, use the host-prefixed bundle identifier `com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync` and the same unprovisioned Team-ID app group (`CQPH8YR62A.com.newtonlorenz.SafeMacAV` upstream), and be enabled manually in System Settings. Opening or reopening the app drains the shared queue; the distributed notification is only a best-effort accelerator because macOS can suppress it from a sandboxed extension. The handoff fails closed if that shared container is unavailable. Forks must replace the Team ID and namespaced identifiers together.
 - Launch at login uses the macOS 13+ Login Items service and the embedded `SafeMacAVBackground.app` helper. macOS may require the user to approve SafeMac AV in System Settings before it can open automatically. The helper has its own notification identity, so it never requests notification permission on login.
 - Scheduled helper notifications are a separate bundle authorization. The helper only checks its existing authorization after a scheduled update and suppresses notifications when it is denied or not determined. From the foreground app’s **Settings › Notifications** section, a user can explicitly start a dedicated one-shot helper instance to request that separate permission; it is never requested at login or during a scheduled update, and does not require launch at login to be enabled.
 - The embedded-helper migration is a one-release compatibility bridge. Before downgrading to a build that predates the helper, turn **Start protection with your Mac** off, install the older build, then turn it back on there. A downgrade cannot safely recreate the old main-app Login Item after the newer build has removed it; this explicit recovery avoids silently stranding login protection.

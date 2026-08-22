@@ -8,10 +8,10 @@ struct ExternalScanRequest: Codable, Equatable, Identifiable {
 }
 
 final class ExternalScanRequestStore {
-    static let appGroupIdentifier = "CQPH8YR62A.com.newtonlorenz.ClamAV-GUI"
+    static let appGroupIdentifier = "CQPH8YR62A.com.newtonlorenz.SafeMacAV"
     static let finderSource = "finder"
-    static let scanRequestNotificationName = NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequest")
-    static let scanRequestFailedNotificationName = NSNotification.Name("com.newtonlorenz.ClamAV-GUI.scanRequestFailed")
+    static let scanRequestNotificationName = NSNotification.Name("com.newtonlorenz.SafeMacAV.scanRequest")
+    static let scanRequestFailedNotificationName = NSNotification.Name("com.newtonlorenz.SafeMacAV.scanRequestFailed")
 
     private static let maxQueuedRequests = 25
     private static let maxPathsPerRequest = 64

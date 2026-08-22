@@ -3,6 +3,13 @@ import XCTest
 
 @MainActor
 final class SoftwareUpdateManagerTests: XCTestCase {
+    func testSafeMacSoftwareUpdateNotificationIdentity() {
+        XCTAssertEqual(
+            Notification.Name.checkForAppUpdates,
+            Notification.Name("com.newtonlorenz.SafeMacAV.checkForAppUpdates")
+        )
+    }
+
     private let validPublicKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
     func testRejectsMissingSparkleConfiguration() {

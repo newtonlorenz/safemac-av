@@ -1116,7 +1116,7 @@
 				INFOPLIST_FILE = "ClamAV-GUI-Finder/Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI.FinderSync";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1136,7 +1136,7 @@
 				INFOPLIST_FILE = "ClamAV-GUI-Finder/Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI.FinderSync";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;

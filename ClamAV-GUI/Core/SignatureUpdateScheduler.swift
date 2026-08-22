@@ -15,7 +15,8 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
     typealias LoadedStatusProvider = () throws -> Bool
     typealias LaunchctlRunner = (SignatureUpdateLaunchctlOperation) throws -> Void
 
-    static let label = "com.newtonlorenz.ClamAV-GUI.signature-update"
+    static let label = "com.newtonlorenz.SafeMacAV.signature-update"
+    static let legacyLabel = "com.newtonlorenz.ClamAV-GUI.signature-update"
 
     private struct Snapshot {
         let plistData: Data?
@@ -24,11 +25,13 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
 
     private struct MutationState {
         var previousJobBootedOut = false
+        var legacyJobBootedOut = false
         var replacementWritten = false
         var replacementBootstrapAttempted = false
 
         var requiresRollback: Bool {
-            previousJobBootedOut || replacementWritten || replacementBootstrapAttempted
+            previousJobBootedOut || legacyJobBootedOut || replacementWritten
+                || replacementBootstrapAttempted
         }
     }
 
@@ -39,8 +42,10 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
     private let backgroundHelperValidator: (URL) -> Bool
     private let domain: String
     private let serviceTarget: String
+    private let legacyServiceTarget: String
     private let dataWriter: DataWriter
     private let loadedStatusProvider: LoadedStatusProvider
+    private let legacyLoadedStatusProvider: LoadedStatusProvider
     private let launchctlRunner: LaunchctlRunner
 
     init(
@@ -55,10 +60,12 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
             try data.write(to: url, options: options)
         },
         loadedStatusProvider: LoadedStatusProvider? = nil,
+        legacyLoadedStatusProvider: LoadedStatusProvider? = nil,
         launchctlRunner: LaunchctlRunner? = nil
     ) {
         let domain = "gui/\(userID)"
         let serviceTarget = "\(domain)/\(Self.label)"
+        let legacyServiceTarget = "\(domain)/\(Self.legacyLabel)"
         self.fileManager = fileManager
         self.launchAgentsDirectory = launchAgentsDirectory
             ?? fileManager.homeDirectoryForCurrentUser
@@ -73,9 +80,16 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
         }
         self.domain = domain
         self.serviceTarget = serviceTarget
+        self.legacyServiceTarget = legacyServiceTarget
         self.dataWriter = dataWriter
         self.loadedStatusProvider = loadedStatusProvider ?? {
             try Self.isLoaded(serviceTarget: serviceTarget, executableURL: launchctlExecutableURL)
+        }
+        self.legacyLoadedStatusProvider = legacyLoadedStatusProvider ?? {
+            try Self.isLoaded(
+                serviceTarget: legacyServiceTarget,
+                executableURL: launchctlExecutableURL
+            )
         }
         self.launchctlRunner = launchctlRunner ?? { operation in
             try Self.runLaunchctl(operation, executableURL: launchctlExecutableURL)
@@ -88,12 +102,17 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
             throw SignatureUpdateSchedulerError.backgroundHelperUnavailable
         }
         let snapshot = try snapshot(at: plistURL)
+        let legacySnapshot = try legacySnapshot()
         let replacement = try enabled ? launchAgentData(for: schedule) : nil
         var mutation = MutationState()
 
         do {
+            if legacySnapshot.wasLoaded {
+                try bootout(serviceTarget: legacyServiceTarget)
+                mutation.legacyJobBootedOut = true
+            }
             if snapshot.wasLoaded {
-                try bootout()
+                try bootout(serviceTarget: serviceTarget)
                 mutation.previousJobBootedOut = true
             }
 
@@ -110,10 +129,18 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
             } else if snapshot.plistData != nil {
                 try fileManager.removeItem(at: plistURL)
             }
+            if legacySnapshot.plistData != nil {
+                try fileManager.removeItem(at: legacyLaunchAgentURL)
+            }
         } catch {
             guard mutation.requiresRollback else { throw error }
             do {
-                try restore(snapshot, at: plistURL, mutation: mutation)
+                try restore(
+                    snapshot,
+                    legacySnapshot: legacySnapshot,
+                    at: plistURL,
+                    mutation: mutation
+                )
             } catch let rollbackError {
                 throw SignatureUpdateSchedulerError.reconciliationAndRollbackFailed(
                     primaryDescription: Self.safeDescription(for: error),
@@ -126,6 +153,10 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
 
     private var launchAgentURL: URL {
         launchAgentsDirectory.appendingPathComponent("\(Self.label).plist")
+    }
+
+    private var legacyLaunchAgentURL: URL {
+        launchAgentsDirectory.appendingPathComponent("\(Self.legacyLabel).plist")
     }
 
     private func launchAgentData(for schedule: ScanSchedule) throws -> Data {
@@ -180,13 +211,24 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
         return Snapshot(plistData: plistData, wasLoaded: try loadedStatusProvider())
     }
 
+    private func legacySnapshot() throws -> Snapshot {
+        let plistData: Data?
+        if fileManager.fileExists(atPath: legacyLaunchAgentURL.path) {
+            plistData = try Data(contentsOf: legacyLaunchAgentURL)
+        } else {
+            plistData = nil
+        }
+        return Snapshot(plistData: plistData, wasLoaded: try legacyLoadedStatusProvider())
+    }
+
     private func restore(
         _ snapshot: Snapshot,
+        legacySnapshot: Snapshot,
         at url: URL,
         mutation: MutationState
     ) throws {
         if mutation.replacementBootstrapAttempted {
-            try bootout()
+            try bootout(serviceTarget: serviceTarget)
         }
 
         if let plistData = snapshot.plistData {
@@ -206,6 +248,24 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
             }
             try bootstrap(plistURL: url)
         }
+
+        if let legacyData = legacySnapshot.plistData {
+            try fileManager.createDirectory(
+                at: legacyLaunchAgentURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try dataWriter(legacyData, legacyLaunchAgentURL, .atomic)
+            try normalizePermissions(at: legacyLaunchAgentURL)
+        } else if fileManager.fileExists(atPath: legacyLaunchAgentURL.path) {
+            try fileManager.removeItem(at: legacyLaunchAgentURL)
+        }
+
+        if legacySnapshot.wasLoaded {
+            guard legacySnapshot.plistData != nil else {
+                throw SignatureUpdateSchedulerError.loadedJobMissingPropertyList
+            }
+            try bootstrap(plistURL: legacyLaunchAgentURL)
+        }
     }
 
     private func bootstrap(plistURL: URL) throws {
@@ -219,7 +279,7 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
         )
     }
 
-    private func bootout() throws {
+    private func bootout(serviceTarget: String) throws {
         try launchctlRunner(.bootout(serviceTarget: serviceTarget))
     }
 

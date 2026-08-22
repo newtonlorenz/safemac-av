@@ -7,7 +7,9 @@ import UserNotifications
 @main
 final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
     private let lease = BackgroundWorkLease(name: "background-monitoring")
-    private let settingsStore = BackgroundHelperSettingsStore(settingsURL: BackgroundSignatureUpdater.defaultSettingsURL)
+    private let settingsStore = BackgroundHelperSettingsStore(
+        settingsURL: BackgroundSignatureUpdater.resolvedSettingsURL()
+    )
     private var statusItem: NSStatusItem?
     private var coordinator: BackgroundHelperCoordinator?
     private let notificationCoordinator = BackgroundHelperNotificationCoordinator()
@@ -235,12 +237,38 @@ enum MainAppHandoff {
 }
 
 final class BackgroundSignatureUpdater {
-    static let defaultSettingsURL: URL = {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        return (support ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support"))
-            .appendingPathComponent("ClamAV-GUI", isDirectory: true)
+    private static var defaultApplicationSupportURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+    }
+
+    static var defaultSettingsURL: URL {
+        settingsURL(applicationSupportURL: defaultApplicationSupportURL, directoryName: "SafeMac AV")
+    }
+
+    static var legacySettingsURL: URL {
+        settingsURL(applicationSupportURL: defaultApplicationSupportURL, directoryName: "ClamAV-GUI")
+    }
+
+    static func resolvedSettingsURL(
+        applicationSupportURL: URL? = nil,
+        fileManager: FileManager = .default
+    ) -> URL {
+        let supportURL = applicationSupportURL ?? defaultApplicationSupportURL
+        let preferredURL = settingsURL(applicationSupportURL: supportURL, directoryName: "SafeMac AV")
+        if fileManager.fileExists(atPath: preferredURL.path) {
+            return preferredURL
+        }
+
+        let legacyURL = settingsURL(applicationSupportURL: supportURL, directoryName: "ClamAV-GUI")
+        return fileManager.fileExists(atPath: legacyURL.path) ? legacyURL : preferredURL
+    }
+
+    private static func settingsURL(applicationSupportURL: URL, directoryName: String) -> URL {
+        applicationSupportURL
+            .appendingPathComponent(directoryName, isDirectory: true)
             .appendingPathComponent("settings.json", isDirectory: false)
-    }()
+    }
 
     private let settingsStore: BackgroundHelperSettingsStore
     private let execute: (FreshclamInvocation, TimeInterval) -> FreshclamUpdateOutcome
@@ -251,7 +279,7 @@ final class BackgroundSignatureUpdater {
             BackgroundSignatureUpdater.executeProcess(invocation, timeout: timeout)
         }
     ) {
-        settingsStore = BackgroundHelperSettingsStore(settingsURL: settingsURL ?? Self.defaultSettingsURL)
+        settingsStore = BackgroundHelperSettingsStore(settingsURL: settingsURL ?? Self.resolvedSettingsURL())
         self.execute = execute
     }
 

@@ -164,7 +164,7 @@ verify_finder_handoff_entitlements() {
     local app_path="$1"
     local finder_extension="$2"
     local expected_team_id="$3"
-    local expected_group="$expected_team_id.com.newtonlorenz.ClamAV-GUI"
+    local expected_group="$expected_team_id.com.newtonlorenz.SafeMacAV"
     local app_entitlements
     local finder_entitlements
     local app_group
@@ -412,9 +412,12 @@ verify_app_bundle() {
         "$sparkle_version/Sparkle" \
         "$expected_team_id"
 
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$mounted_app_path/Contents/Info.plist" 2>/dev/null)" == "com.newtonlorenz.ClamAV-GUI" ]] \
+        || fail "main app bundle identifier is invalid"
+
     finder_extension="$mounted_app_path/Contents/PlugIns/ClamAV-GUI-Finder.appex"
     finder_executable="$finder_extension/Contents/MacOS/ClamAV-GUI-Finder"
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$finder_extension/Contents/Info.plist" 2>/dev/null)" == "com.newtonlorenz.ClamAV-GUI.FinderSync" ]] \
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$finder_extension/Contents/Info.plist" 2>/dev/null)" == "com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync" ]] \
         || fail "Finder extension bundle identifier is invalid"
     verify_distribution_code "$finder_extension" "$finder_executable" "$expected_team_id"
     verify_finder_handoff_entitlements "$mounted_app_path" "$finder_extension" "$expected_team_id"

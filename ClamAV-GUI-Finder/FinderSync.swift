@@ -2,6 +2,8 @@ import Cocoa
 import FinderSync
 
 class FinderSync: FIFinderSync {
+    static let mainAppBundleIdentifier = "com.newtonlorenz.ClamAV-GUI"
+
     override init() {
         super.init()
 
@@ -52,14 +54,14 @@ class FinderSync: FIFinderSync {
     }
 
     private static func openMainApp() {
-        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.newtonlorenz.ClamAV-GUI") else {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: mainAppBundleIdentifier) else {
             return
         }
         NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
     }
 
     private static func presentHandoffFailure() {
-        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.newtonlorenz.ClamAV-GUI") else {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: mainAppBundleIdentifier) else {
             presentGenericFailureAlert()
             return
         }

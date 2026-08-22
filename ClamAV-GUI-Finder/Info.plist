@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.newtonlorenz.ClamAV-GUI.FinderSync</string>
+    <string>com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync</string>
     <key>CFBundleName</key>
     <string>SafeMac AV Finder</string>
     <key>CFBundleDisplayName</key>

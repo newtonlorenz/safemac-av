@@ -24,8 +24,9 @@ BUILD_LOG="$BUILD_DIR/archive.log"
 ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME/ClamAV_GUI.entitlements"
 FINDER_ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME-Finder/ClamAV_GUI_Finder.entitlements"
 BACKGROUND_HELPER_ENTITLEMENTS_PATH="$PROJECT_DIR/ClamAV-BackgroundHelper/SafeMacAVBackground.entitlements"
-APP_GROUP_IDENTIFIER="CQPH8YR62A.com.newtonlorenz.ClamAV-GUI"
-FINDER_EXTENSION_BUNDLE_IDENTIFIER="com.newtonlorenz.ClamAV-GUI.FinderSync"
+APP_GROUP_IDENTIFIER="CQPH8YR62A.com.newtonlorenz.SafeMacAV"
+MAIN_APP_BUNDLE_IDENTIFIER="com.newtonlorenz.ClamAV-GUI"
+FINDER_EXTENSION_BUNDLE_IDENTIFIER="com.newtonlorenz.ClamAV-GUI.SafeMacAV.FinderSync"
 BACKGROUND_HELPER_BUNDLE_IDENTIFIER="com.newtonlorenz.SafeMacAV.Background"
 
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
@@ -347,6 +348,9 @@ verify_signed_app_components() {
         fi
         verify_distribution_code "$extension_path" "$extension_executable" "$expected_team_id"
     done
+
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Contents/Info.plist" 2>/dev/null)" == "$MAIN_APP_BUNDLE_IDENTIFIER" ]] \
+        || fail "Main app bundle identifier is invalid."
 
     background_helper="$APP_PATH/Contents/Library/LoginItems/SafeMacAVBackground.app"
     background_helper_executable="$background_helper/Contents/MacOS/SafeMacAVBackground"

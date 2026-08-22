@@ -25,6 +25,31 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         )
     }
 
+    func testDefaultHelperSupportPathsUseSafeMacWithLegacySettingsFallback() throws {
+        XCTAssertEqual(BackgroundRouteRequestStore.applicationSupportDirectoryName, "SafeMac AV")
+        XCTAssertEqual(BackgroundWorkLease.applicationSupportDirectoryName, "SafeMac AV")
+        XCTAssertTrue(BackgroundSignatureUpdater.defaultSettingsURL.path.hasSuffix("/SafeMac AV/settings.json"))
+        XCTAssertTrue(BackgroundSignatureUpdater.legacySettingsURL.path.hasSuffix("/ClamAV-GUI/settings.json"))
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacyURL = root.appendingPathComponent("ClamAV-GUI/settings.json")
+        try FileManager.default.createDirectory(at: legacyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: legacyURL)
+        XCTAssertEqual(
+            BackgroundSignatureUpdater.resolvedSettingsURL(applicationSupportURL: root),
+            legacyURL
+        )
+
+        let safeMacURL = root.appendingPathComponent("SafeMac AV/settings.json")
+        try FileManager.default.createDirectory(at: safeMacURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: safeMacURL)
+        XCTAssertEqual(
+            BackgroundSignatureUpdater.resolvedSettingsURL(applicationSupportURL: root),
+            safeMacURL
+        )
+    }
+
     func testLoginSessionIsVisibleAndDoesNotRunScheduledUpdate() {
         var installedMenuBar = 0
         var acquiredLease = 0

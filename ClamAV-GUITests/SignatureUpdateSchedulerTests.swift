@@ -118,6 +118,49 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         XCTAssertNotEqual(try Data(contentsOf: fixture.plistURL), oldData)
     }
 
+    func testLegacyLoadedAgentIsBootedOutBeforeSafeMacReplacementAndPlistRemoved() throws {
+        let fixture = try makeFixture()
+        try Data("legacy plist".utf8).write(to: fixture.legacyPlistURL)
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            legacyIsLoaded: true,
+            launchctlRunner: { operations.append($0) }
+        )
+
+        try scheduler.reconcile(enabled: true, schedule: .daily9am)
+
+        XCTAssertEqual(operations, [
+            .bootout(serviceTarget: legacyServiceTarget),
+            .bootstrap(domain: domain, plistURL: fixture.plistURL)
+        ])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.legacyPlistURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.plistURL.path))
+    }
+
+    func testFailedReplacementRestoresLegacyLoadedAgent() throws {
+        let fixture = try makeFixture()
+        let legacyData = Data("legacy plist".utf8)
+        try legacyData.write(to: fixture.legacyPlistURL)
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = makeScheduler(
+            fixture: fixture,
+            legacyIsLoaded: true,
+            launchctlRunner: { operation in
+                operations.append(operation)
+                if case .bootstrap(_, let url) = operation, url == fixture.plistURL {
+                    throw TestError.intentionalWriteFailure
+                }
+            }
+        )
+
+        XCTAssertThrowsError(try scheduler.reconcile(enabled: true, schedule: .daily9am))
+
+        XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL), legacyData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
+        XCTAssertEqual(operations.last, .bootstrap(domain: domain, plistURL: fixture.legacyPlistURL))
+    }
+
     func testPresentButUnloadedPlistConvergesWithoutSpuriousBootout() throws {
         let fixture = try makeFixture()
         try Data("stale plist".utf8).write(to: fixture.plistURL)
@@ -457,10 +500,12 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
 
     private var domain: String { "gui/\(userID)" }
     private var serviceTarget: String { "\(domain)/\(SignatureUpdateScheduler.label)" }
+    private var legacyServiceTarget: String { "\(domain)/\(SignatureUpdateScheduler.legacyLabel)" }
 
     private func makeScheduler(
         fixture: SignatureSchedulerFixture,
         isLoaded: Bool = false,
+        legacyIsLoaded: Bool = false,
         helperIsValid: Bool = true,
         dataWriter: @escaping SignatureUpdateScheduler.DataWriter = { data, url, options in
             try data.write(to: url, options: options)
@@ -474,6 +519,7 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
             userID: userID,
             dataWriter: dataWriter,
             loadedStatusProvider: { isLoaded },
+            legacyLoadedStatusProvider: { legacyIsLoaded },
             launchctlRunner: launchctlRunner
         )
     }
@@ -516,6 +562,12 @@ private struct SignatureSchedulerFixture {
     let launchAgentsDirectory: URL
 
     var plistURL: URL {
+        launchAgentsDirectory.appendingPathComponent(
+            "com.newtonlorenz.SafeMacAV.signature-update.plist"
+        )
+    }
+
+    var legacyPlistURL: URL {
         launchAgentsDirectory.appendingPathComponent(
             "com.newtonlorenz.ClamAV-GUI.signature-update.plist"
         )
