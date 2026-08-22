@@ -433,6 +433,7 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         let installer = SignatureUpdateScheduler(
             launchAgentsDirectory: fixture.launchAgentsDirectory,
             applicationBundlePath: "/Applications/SafeMac AV.app",
+            backgroundHelperValidator: { _ in true },
             userID: userID,
             launchctlExecutableURL: successfulLaunchctl,
             loadedStatusProvider: { false }
@@ -469,8 +470,8 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         SignatureUpdateScheduler(
             launchAgentsDirectory: fixture.launchAgentsDirectory,
             applicationBundlePath: "/Applications/SafeMac AV.app",
-            userID: userID,
             backgroundHelperValidator: { _ in helperIsValid },
+            userID: userID,
             dataWriter: dataWriter,
             loadedStatusProvider: { isLoaded },
             launchctlRunner: launchctlRunner
