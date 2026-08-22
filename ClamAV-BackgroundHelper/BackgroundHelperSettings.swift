@@ -6,12 +6,14 @@ struct BackgroundHelperSettings: Equatable {
     let freshclamPath: String?
     let configDirectory: String?
     let signatureDirectory: String?
+    let showNotifications: Bool
 
     static let safeDefaults = BackgroundHelperSettings(
         autoUpdateSignatures: false,
         freshclamPath: nil,
         configDirectory: nil,
-        signatureDirectory: nil
+        signatureDirectory: nil,
+        showNotifications: false
     )
 }
 
@@ -92,6 +94,7 @@ final class BackgroundHelperSettingsStore {
         let freshclamPath = object["freshclamPath"] as? String
         let configDirectory = object["configDirectory"] as? String
         let signatureDirectory = object["signatureDirectory"] as? String
+        let showNotifications = object["showNotifications"] as? Bool ?? false
         guard freshclamPath == nil || freshclamPath!.hasPrefix("/"),
               configDirectory == nil || configDirectory!.hasPrefix("/"),
               signatureDirectory == nil || signatureDirectory!.hasPrefix("/") else { return nil }
@@ -99,7 +102,8 @@ final class BackgroundHelperSettingsStore {
             autoUpdateSignatures: autoUpdateSignatures,
             freshclamPath: freshclamPath,
             configDirectory: configDirectory,
-            signatureDirectory: signatureDirectory
+            signatureDirectory: signatureDirectory,
+            showNotifications: showNotifications
         )
     }
 
@@ -113,7 +117,8 @@ final class BackgroundHelperSettingsStore {
             "autoUpdateSignatures": settings.autoUpdateSignatures,
             "freshclamPath": settings.freshclamPath as Any,
             "configDirectory": settings.configDirectory as Any,
-            "signatureDirectory": settings.signatureDirectory as Any
+            "signatureDirectory": settings.signatureDirectory as Any,
+            "showNotifications": settings.showNotifications
         ], options: [.sortedKeys]) else { return }
         do {
             try data.write(to: lastKnownGoodURL, options: .atomic)

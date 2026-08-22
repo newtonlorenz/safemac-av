@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import Security
+import UserNotifications
 
 @main
 final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
@@ -9,6 +10,7 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
     private let settingsStore = BackgroundHelperSettingsStore(settingsURL: BackgroundSignatureUpdater.defaultSettingsURL)
     private var statusItem: NSStatusItem?
     private var coordinator: BackgroundHelperCoordinator?
+    private let notificationCoordinator = BackgroundHelperNotificationCoordinator()
 
     static func main() {
         let application = NSApplication.shared
@@ -59,11 +61,79 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
 
     private func runScheduledSignatureUpdate(completion: @escaping () -> Void) {
         let settingsStore = settingsStore
+        let notificationCoordinator = notificationCoordinator
         DispatchQueue.global(qos: .utility).async {
             defer { DispatchQueue.main.async(execute: completion) }
             let updater = BackgroundSignatureUpdater(settingsStore: settingsStore)
-            updater.runIfAvailable()
+            guard let outcome = updater.runIfAvailable() else { return }
+            let notificationsEnabled = settingsStore.reload().showNotifications
+            Task {
+                await notificationCoordinator.deliverIfAuthorized(
+                    outcome: outcome,
+                    notificationsEnabled: notificationsEnabled
+                )
+            }
         }
+    }
+}
+
+enum BackgroundHelperNotificationAuthorization: Equatable {
+    case authorized
+    case denied
+    case notDetermined
+}
+
+protocol BackgroundHelperNotificationDelivering: AnyObject {
+    func authorizationStatus() async -> BackgroundHelperNotificationAuthorization
+    func deliver(title: String, body: String) async
+}
+
+final class BackgroundHelperNotificationCoordinator {
+    private let delivery: BackgroundHelperNotificationDelivering
+
+    init(delivery: BackgroundHelperNotificationDelivering = SystemBackgroundHelperNotificationDelivery()) {
+        self.delivery = delivery
+    }
+
+    /// The helper only reads its own bundle authorization. It never requests
+    /// permission, so login and scheduled work cannot cause a prompt.
+    func deliverIfAuthorized(outcome: FreshclamUpdateOutcome, notificationsEnabled: Bool) async {
+        guard notificationsEnabled,
+              await delivery.authorizationStatus() == .authorized else { return }
+        let content: (String, String)
+        switch outcome {
+        case .updated:
+            content = ("Signatures updated", "SafeMac AV updated its malware signatures.")
+        case .upToDate:
+            content = ("Signatures are current", "SafeMac AV malware signatures are already up to date.")
+        case .failed:
+            content = ("Signature update failed", "SafeMac AV could not update its malware signatures. Open the app for details.")
+        }
+        await delivery.deliver(title: content.0, body: content.1)
+    }
+}
+
+final class SystemBackgroundHelperNotificationDelivery: BackgroundHelperNotificationDelivering {
+    func authorizationStatus() async -> BackgroundHelperNotificationAuthorization {
+        switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return .authorized
+        case .denied:
+            return .denied
+        case .notDetermined:
+            return .notDetermined
+        @unknown default:
+            return .denied
+        }
+    }
+
+    func deliver(title: String, body: String) async {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.categoryIdentifier = "signature-update"
+        let request = UNNotificationRequest(identifier: "background-signature-update", content: content, trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
     }
 }
 
@@ -124,11 +194,11 @@ final class BackgroundSignatureUpdater {
     }()
 
     private let settingsStore: BackgroundHelperSettingsStore
-    private let execute: (FreshclamInvocation, TimeInterval) -> Void
+    private let execute: (FreshclamInvocation, TimeInterval) -> FreshclamUpdateOutcome
 
     init(
         settingsURL: URL? = nil,
-        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = { invocation, timeout in
+        execute: @escaping (FreshclamInvocation, TimeInterval) -> FreshclamUpdateOutcome = { invocation, timeout in
             BackgroundSignatureUpdater.executeProcess(invocation, timeout: timeout)
         }
     ) {
@@ -138,7 +208,7 @@ final class BackgroundSignatureUpdater {
 
     init(
         settingsStore: BackgroundHelperSettingsStore,
-        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = { invocation, timeout in
+        execute: @escaping (FreshclamInvocation, TimeInterval) -> FreshclamUpdateOutcome = { invocation, timeout in
             BackgroundSignatureUpdater.executeProcess(invocation, timeout: timeout)
         }
     ) {
@@ -146,9 +216,10 @@ final class BackgroundSignatureUpdater {
         self.execute = execute
     }
 
-    func runIfAvailable() {
+    @discardableResult
+    func runIfAvailable() -> FreshclamUpdateOutcome? {
         let lease = BackgroundWorkLease(name: "signature-update")
-        guard lease.acquire() else { return }
+        guard lease.acquire() else { return nil }
         defer { lease.release() }
 
         let settings = settingsStore.reload()
@@ -161,39 +232,75 @@ final class BackgroundSignatureUpdater {
                 configDirectory: configDirectory,
                 signatureDirectory: signatureDirectory
               ) else {
-            return
+            return nil
         }
-        execute(invocation, 300)
+        return execute(invocation, 300)
     }
 
     static func executeProcess(
         _ invocation: FreshclamInvocation,
         timeout: TimeInterval,
         terminationGrace: TimeInterval = 2
-    ) {
+    ) -> FreshclamUpdateOutcome {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: invocation.executablePath)
         process.arguments = invocation.arguments
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+        let output = BackgroundFreshclamOutputBuffer(limit: 65_536)
+        outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            output.append(handle.availableData)
+        }
         do {
             try process.run()
             let deadline = Date().addingTimeInterval(timeout)
             while process.isRunning, Date() < deadline {
                 Thread.sleep(forTimeInterval: 0.1)
             }
-            guard process.isRunning else { return }
-            process.terminate()
-            let terminationDeadline = Date().addingTimeInterval(terminationGrace)
-            while process.isRunning, Date() < terminationDeadline {
-                Thread.sleep(forTimeInterval: 0.05)
-            }
             if process.isRunning {
-                kill(process.processIdentifier, SIGKILL)
+                process.terminate()
+                let terminationDeadline = Date().addingTimeInterval(terminationGrace)
+                while process.isRunning, Date() < terminationDeadline {
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+                if process.isRunning {
+                    kill(process.processIdentifier, SIGKILL)
+                }
+                outputPipe.fileHandleForReading.readabilityHandler = nil
+                return .failed(message: "Signature update timed out")
             }
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            output.append(outputPipe.fileHandleForReading.readDataToEndOfFile())
+            return FreshclamUpdateOutcome.parse(
+                output: output.text,
+                exitCode: process.terminationStatus
+            )
         } catch {
-            return
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            return .failed(message: "Signature update could not start")
         }
     }
 
+}
+
+private final class BackgroundFreshclamOutputBuffer: @unchecked Sendable {
+    private let limit: Int
+    private let lock = NSLock()
+    private var data = Data()
+
+    init(limit: Int) { self.limit = limit }
+
+    var text: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    func append(_ more: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard data.count < limit else { return }
+        data.append(more.prefix(limit - data.count))
+    }
 }

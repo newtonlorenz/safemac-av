@@ -117,6 +117,58 @@ struct FreshclamInvocation: Equatable {
     }
 }
 
+/// A privacy-neutral interpretation of freshclam output shared by foreground
+/// and background launch modes. Callers never need to surface raw process
+/// output to logs or notifications.
+enum FreshclamUpdateOutcome: Equatable {
+    case updated(main: String?, daily: String?, bytecode: String?)
+    case upToDate
+    case failed(message: String)
+
+    static func parse(output: String, exitCode: Int32) -> FreshclamUpdateOutcome {
+        var mainVersion: String?
+        var dailyVersion: String?
+        var bytecodeVersion: String?
+        var isUpToDate = false
+        var didUpdate = false
+        var errorMessage: String?
+
+        for line in output.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lowercased = trimmed.lowercased()
+            if trimmed.contains("main.cvd") || trimmed.contains("main.cld") { mainVersion = version(in: trimmed) ?? mainVersion }
+            if trimmed.contains("daily.cvd") || trimmed.contains("daily.cld") { dailyVersion = version(in: trimmed) ?? dailyVersion }
+            if trimmed.contains("bytecode.cvd") || trimmed.contains("bytecode.cld") { bytecodeVersion = version(in: trimmed) ?? bytecodeVersion }
+            isUpToDate = isUpToDate || trimmed.contains("is up to date") || trimmed.contains("up-to-date")
+            didUpdate = didUpdate || lowercased.contains("updated") || lowercased.contains("downloaded")
+            if errorMessage == nil, lowercased.contains("error") || lowercased.contains("failed") { errorMessage = trimmed }
+        }
+        if exitCode != 0 && !isUpToDate && !didUpdate {
+            return .failed(message: errorMessage ?? "Update failed with exit code \(exitCode)")
+        }
+        if isUpToDate && !didUpdate { return .upToDate }
+        return .updated(main: mainVersion, daily: dailyVersion, bytecode: bytecodeVersion)
+    }
+
+    private static func version(in line: String) -> String? {
+        let patterns = [
+            #"version (\d+)"#,
+            #"updated \(version: (\d+)"#,
+            #"is up to date \(version: (\d+)"#,
+            #"bytecode\.cvd database is up-to-date \(version: (\d+)"#,
+            #"daily\.cld database is up-to-date \(version: (\d+)"#,
+            #"main\.cvd database is up-to-date \(version: (\d+)"#
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                  let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+                  let range = Range(match.range(at: 1), in: line) else { continue }
+            return String(line[range])
+        }
+        return nil
+    }
+}
+
 enum BackgroundRoute: String, CaseIterable {
     case open
     case settings
