@@ -47,9 +47,11 @@ extension ApplicationActivationPolicyApplying {
 extension NSApplication: ApplicationActivationPolicyApplying {
     @discardableResult
     func activateApplication() -> Bool {
-        NSRunningApplication.current.activate(
+        activate(ignoringOtherApps: true)
+        let didActivateRunningApplication = NSRunningApplication.current.activate(
             options: [.activateAllWindows, .activateIgnoringOtherApps]
         )
+        return isActive || didActivateRunningApplication
     }
 }
 
@@ -95,6 +97,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     private var runActiveInteractiveMaintenance: (LaunchMode) async -> Void
     private var runScheduledSignatureUpdate: () async -> Void
     private var finishScheduledLaunch: () -> Void
+    private var launchConfigurationRegistry: ApplicationLaunchConfigurationRegistry?
     private var mainWindowController: MainWindowControlling?
     private var isWaitingForMainWindowControllerFactory = false
     private var hasPendingMainWindowPresentation = false
@@ -108,6 +111,8 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     private var canRunScheduledSignatureUpdate = false
     private var shouldPresentMainWindowAtLaunch = false
     private var didHandleApplicationLaunch = false
+    private var didContinueApplicationLaunch = false
+    private var didScheduleApplicationSceneReadinessFallback = false
     private var didCompleteInitialInteractiveLaunch = false
     private var pendingActiveMaintenance = false
     private var applicationLaunchTask: Task<Void, Never>?
@@ -131,6 +136,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         finishScheduledLaunch = {
             NSApplication.shared.terminate(nil)
         }
+        launchConfigurationRegistry = ApplicationLaunchConfigurationRegistry.shared
         isConfiguredForLaunch = false
         super.init()
         subscribeToLaunchConfiguration(ApplicationLaunchConfigurationRegistry.shared)
@@ -162,6 +168,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         self.runActiveInteractiveMaintenance = runActiveInteractiveMaintenance
         self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
         self.finishScheduledLaunch = finishScheduledLaunch
+        self.launchConfigurationRegistry = launchConfigurationRegistry
         isConfiguredForLaunch = startsConfigured && launchConfigurationRegistry == nil
         super.init()
         if let launchConfigurationRegistry {
@@ -185,6 +192,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         runActiveInteractiveMaintenance = configuration.runActiveInteractiveMaintenance
         runScheduledSignatureUpdate = configuration.runScheduledSignatureUpdate
         isConfiguredForLaunch = true
+        scheduleApplicationSceneReadinessFallback()
         prepareApplicationLaunchIfReady()
     }
 
@@ -229,8 +237,33 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         continueApplicationLaunchIfReady()
     }
 
+    func applicationSceneDidBecomeReady() {
+        if !didReceiveWillFinishLaunching {
+            didReceiveWillFinishLaunching = true
+            prepareApplicationLaunchIfReady()
+        }
+        if !didHandleApplicationLaunch {
+            didHandleApplicationLaunch = true
+        }
+        continueApplicationLaunchIfReady()
+    }
+
+    func scheduleApplicationSceneReadinessFallback() {
+        guard !didScheduleApplicationSceneReadinessFallback else { return }
+        didScheduleApplicationSceneReadinessFallback = true
+        Task { [weak self] in
+            await Self.waitForNextMainRunLoopTurn()
+            self?.applicationSceneDidBecomeReady()
+        }
+    }
+
     private func continueApplicationLaunchIfReady() {
         guard didHandleApplicationLaunch, didPrepareApplicationLaunch else { return }
+        guard !didContinueApplicationLaunch else { return }
+        if let launchConfigurationRegistry {
+            guard launchConfigurationRegistry.claimLaunchContinuation(for: self) else { return }
+        }
+        didContinueApplicationLaunch = true
         if launchMode == .scheduledSignatureUpdate, !canRunScheduledSignatureUpdate {
             finishScheduledLaunch()
             return

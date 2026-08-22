@@ -144,6 +144,70 @@ final class ApplicationLaunchConfigurationTests: XCTestCase {
         XCTAssertEqual(application.events, ["show", "next-main-turn", "maintenance"])
     }
 
+    func testSceneReadinessPresentsVisibleLaunchWhenAppKitCallbacksDoNotArrive() async {
+        let configurationRegistry = ApplicationLaunchConfigurationRegistry()
+        let controllerRegistry = MainWindowControllerRegistry()
+        let application = LaunchConfigurationApplicationMock()
+        let manager = MenuBarManager(application: application)
+        let controller = LaunchConfigurationMainWindowControllerMock()
+        controller.onShow = { application.events.append("show") }
+        controllerRegistry.installFactory { controller }
+        let maintenanceRan = expectation(description: "maintenance ran")
+        configurationRegistry.install(makeConfiguration(
+            manager: manager,
+            runInitialApplicationLaunch: { _ in
+                application.events.append("maintenance")
+                maintenanceRan.fulfill()
+            }
+        ))
+
+        let delegate = makeUnconfiguredDelegate(
+            manager: manager,
+            configurationRegistry: configurationRegistry,
+            controllerRegistry: controllerRegistry,
+            application: application
+        )
+        delegate.applicationSceneDidBecomeReady()
+        delegate.applicationSceneDidBecomeReady()
+        await fulfillment(of: [maintenanceRan], timeout: 1)
+
+        XCTAssertEqual(application.requestedPolicies, [.regular])
+        XCTAssertEqual(controller.selections.count, 1)
+        XCTAssertEqual(application.events, ["show", "next-main-turn", "maintenance"])
+    }
+
+    func testConfigurationSchedulesReadinessFallbackWhenAppKitCallbacksDoNotArrive() async {
+        let configurationRegistry = ApplicationLaunchConfigurationRegistry()
+        let controllerRegistry = MainWindowControllerRegistry()
+        let application = LaunchConfigurationApplicationMock()
+        let manager = MenuBarManager(application: application)
+        let controller = LaunchConfigurationMainWindowControllerMock()
+        controller.onShow = { application.events.append("show") }
+        controllerRegistry.installFactory { controller }
+        let maintenanceRan = expectation(description: "maintenance ran")
+
+        let delegate = makeUnconfiguredDelegate(
+            manager: manager,
+            configurationRegistry: configurationRegistry,
+            controllerRegistry: controllerRegistry,
+            application: application
+        )
+        _ = delegate
+
+        configurationRegistry.install(makeConfiguration(
+            manager: manager,
+            runInitialApplicationLaunch: { _ in
+                application.events.append("maintenance")
+                maintenanceRan.fulfill()
+            }
+        ))
+        await fulfillment(of: [maintenanceRan], timeout: 1)
+
+        XCTAssertEqual(application.requestedPolicies, [.regular])
+        XCTAssertEqual(controller.selections.count, 1)
+        XCTAssertEqual(application.events, ["show", "next-main-turn", "maintenance"])
+    }
+
     func testHiddenInteractiveWaitsOnlyForConfigurationAndRunsMaintenanceOnce() async {
         let configurationRegistry = ApplicationLaunchConfigurationRegistry()
         let application = LaunchConfigurationApplicationMock()

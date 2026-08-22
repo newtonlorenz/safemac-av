@@ -35,6 +35,7 @@ final class ApplicationLaunchConfigurationRegistry {
 
     private var configuration: ApplicationLaunchConfiguration?
     private var subscriptions: [ObjectIdentifier: Subscription] = [:]
+    private var launchContinuationOwner: ObjectIdentifier?
 
     func install(_ configuration: ApplicationLaunchConfiguration) {
         self.configuration = configuration
@@ -64,6 +65,16 @@ final class ApplicationLaunchConfigurationRegistry {
     func resetForTesting() {
         configuration = nil
         subscriptions.removeAll()
+        launchContinuationOwner = nil
+    }
+
+    func claimLaunchContinuation<Owner: AnyObject>(for owner: Owner) -> Bool {
+        let identifier = ObjectIdentifier(owner)
+        if let launchContinuationOwner {
+            return launchContinuationOwner == identifier
+        }
+        launchContinuationOwner = identifier
+        return true
     }
 
     private func removeReleasedSubscriptions() {
