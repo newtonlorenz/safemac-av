@@ -194,6 +194,7 @@ SPARKLE_DOWNLOAD_URL_PREFIX='https://example.com/downloads/' \
 ```
 
 Release publication remains a separate, explicit step after downloading and verifying the workflow artifacts.
+See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) for the full release gate.
 
 ## Security and privacy model
 

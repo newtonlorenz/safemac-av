@@ -4,6 +4,8 @@ All notable project changes will be documented in this file. The format follows 
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-22
+
 ### Added
 
 - A native macOS login-item control with enabled, disabled, approval-required, and unavailable status feedback in Settings.
@@ -53,6 +55,7 @@ All notable project changes will be documented in this file. The format follows 
 
 - Public distribution guidance distinguishes unsigned source builds from signed and notarized artifacts.
 
-[Unreleased]: https://github.com/newtonlorenz/safemac-av/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/newtonlorenz/safemac-av/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/newtonlorenz/safemac-av/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/newtonlorenz/safemac-av/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/newtonlorenz/safemac-av/releases/tag/v1.0.0
