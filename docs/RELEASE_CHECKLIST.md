@@ -57,6 +57,12 @@ shasum -a 256 -c SHA256SUMS.txt
 ./scripts/verify-release-package.sh build
 ```
 
+- [ ] Before replacing the currently installed app, verify the signed appcast advertises exactly one newer update to that installed build:
+
+```bash
+./scripts/verify-installed-sparkle-canary.sh "/Applications/SafeMac AV.app" build/appcast/appcast.xml build/SafeMac-AV.dmg
+```
+
 - [ ] Copy `SafeMac AV.app` to `/Applications`, launch it, and confirm the main window and menu-bar item open.
 - [ ] If Sparkle is configured, confirm `appcast.xml` is present and references the published DMG URL prefix.
 
@@ -70,3 +76,9 @@ After final publication approval:
 - [ ] Upload `SafeMac-AV.dmg`, `SHA256SUMS.txt`, and `appcast.xml` if generated.
 - [ ] Re-download release assets and repeat checksum, stapler, and Gatekeeper verification.
 - [ ] Update any public download/appcast hosting that is not served from GitHub Releases.
+- [ ] Run the installed-app Sparkle canary against the published feed:
+
+```bash
+SPARKLE_CLI='/path/to/sparkle.app/Contents/MacOS/sparkle' \
+  ./scripts/run-installed-sparkle-canary.sh
+```
