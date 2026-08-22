@@ -163,9 +163,28 @@ SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 NOTARY_PROFILE='safemac-av-notary' \
   ./scripts/create-dmg.sh
+
+# Signed, submitted with an App Store Connect API key, and stapled
+SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+NOTARY_KEY_PATH='/path/to/AuthKey_ABC123DEFG.p8' \
+NOTARY_KEY_ID='ABC123DEFG' \
+NOTARY_ISSUER_ID='00000000-0000-0000-0000-000000000000' \
+  ./scripts/create-dmg.sh
 ```
 
-Create the Keychain profile separately with `xcrun notarytool store-credentials`. Credentials should stay in Keychain and must never be committed or passed as plain-text script arguments. The resulting DMG is written under the ignored `build/` directory. Only the third mode attempts notarization; always verify a release artifact before publishing it.
+Create the Keychain profile separately with `xcrun notarytool store-credentials`. Credentials should stay in Keychain or in an external `.p8` file outside the repository and must never be committed or passed as plain-text script arguments. The resulting DMG and `SHA256SUMS.txt` are written under the ignored `build/` directory. Only the notarization modes submit to Apple; always verify a release artifact before publishing it.
+If Keychain contains duplicate Developer ID certificate names, set `SIGNING_IDENTITY` to the SHA-1 hash shown by `security find-identity -v -p codesigning`.
+
+Maintainers can also run the manual **Release package** GitHub Actions workflow to build a signed, notarized, stapled DMG and checksum file without publishing a GitHub Release. It requires these repository secrets:
+
+- `DEVELOPER_ID_CERTIFICATE_BASE64`: base64-encoded Developer ID Application `.p12`
+- `DEVELOPER_ID_CERTIFICATE_PASSWORD`: password for that `.p12`
+- `RELEASE_KEYCHAIN_PASSWORD`: temporary CI keychain password
+- `NOTARY_KEY_BASE64`: base64-encoded App Store Connect API `.p8`
+- `NOTARY_KEY_ID`: App Store Connect API key ID
+- `NOTARY_ISSUER_ID`: App Store Connect issuer ID
+
+Release publication remains a separate, explicit step after downloading and verifying the workflow artifacts.
 
 ## Security and privacy model
 
