@@ -118,6 +118,19 @@ verify_sparkle_autoupdate_entitlement() {
         || fail "Sparkle Autoupdate application identifier entitlement changed unexpectedly"
 }
 
+verify_background_helper_entitlements() {
+    local helper_path="$1"
+    local entitlements
+    entitlements="$(codesign -d --entitlements :- "$helper_path" 2>/dev/null)" \
+        || fail "unable to inspect background helper entitlements"
+    command_path jq
+    jq -e '."com.apple.security.app-sandbox" == false' \
+        <<< "$(plutil -convert json -o - - <<< "$entitlements")" >/dev/null \
+        || fail "background helper sandbox entitlement must be exactly false"
+    ! grep -Fq 'com.apple.security.application-groups' <<< "$entitlements" \
+        || fail "background helper must not claim an unused app-group entitlement"
+}
+
 mounted_app_path=""
 mount_point=""
 entitlements_dir=""
@@ -341,6 +354,10 @@ verify_app_bundle() {
     local sparkle_version
     local finder_extension
     local finder_executable
+    local background_helper
+    local background_helper_executable
+    local background_helper_lsui
+    local main_lsui
 
     resolve_app_path
     executable_name="$(bundle_value CFBundleExecutable)"
@@ -366,6 +383,8 @@ verify_app_bundle() {
     [[ -n "$expected_team_id" && "$expected_team_id" != "not set" ]] \
         || fail "app signature has no Developer ID Team identifier"
     verify_distribution_code "$mounted_app_path" "$executable_path" "$expected_team_id"
+    main_lsui="$(optional_bundle_value LSUIElement)"
+    [[ "$main_lsui" != "true" ]] || fail "main app must not be an LSUIElement agent"
 
     sparkle_framework="$mounted_app_path/Contents/Frameworks/Sparkle.framework"
     [[ -d "$sparkle_framework" ]] || fail "Sparkle framework not found: $sparkle_framework"
@@ -395,14 +414,28 @@ verify_app_bundle() {
 
     finder_extension="$mounted_app_path/Contents/PlugIns/ClamAV-GUI-Finder.appex"
     finder_executable="$finder_extension/Contents/MacOS/ClamAV-GUI-Finder"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$finder_extension/Contents/Info.plist" 2>/dev/null)" == "com.newtonlorenz.ClamAV-GUI.FinderSync" ]] \
+        || fail "Finder extension bundle identifier is invalid"
     verify_distribution_code "$finder_extension" "$finder_executable" "$expected_team_id"
     verify_finder_handoff_entitlements "$mounted_app_path" "$finder_extension" "$expected_team_id"
+
+    background_helper="$mounted_app_path/Contents/Library/LoginItems/SafeMacAVBackground.app"
+    background_helper_executable="$background_helper/Contents/MacOS/SafeMacAVBackground"
+    [[ -d "$background_helper" ]] || fail "background login helper not found: $background_helper"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$background_helper/Contents/Info.plist" 2>/dev/null)" == "com.newtonlorenz.SafeMacAV.Background" ]] \
+        || fail "background login helper bundle identifier is invalid"
+    background_helper_lsui="$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$background_helper/Contents/Info.plist" 2>/dev/null || true)"
+    [[ "$background_helper_lsui" == "true" ]] || fail "background login helper must be an LSUIElement agent"
+    [[ ! -e "$background_helper/Contents/Frameworks/Sparkle.framework" ]] \
+        || fail "background login helper must not embed Sparkle"
+    verify_distribution_code "$background_helper" "$background_helper_executable" "$expected_team_id"
+    verify_background_helper_entitlements "$background_helper"
 
     verify_sparkle_configuration
 
     codesign --verify --deep --strict --verbose=2 "$mounted_app_path"
     info "mounted app and Finder extension share the Team-ID app group; Finder sandbox is enabled"
-    info "mounted app, Finder extension, and nested Sparkle code use Developer ID Team $expected_team_id, hardened runtime, secure timestamps, and universal architectures"
+    info "mounted app, Finder extension, background helper, and nested Sparkle code use Developer ID Team $expected_team_id, hardened runtime, secure timestamps, and universal architectures"
 }
 
 verify_appcast() {
@@ -434,9 +467,40 @@ func firstMatch(_ pattern: String, in value: String) -> String? {
     return String(value[swiftRange])
 }
 
-final class EnclosureCollector: NSObject, XMLParserDelegate {
-    var enclosures: [[String: String]] = []
+struct AppcastItem {
+    let version: String
+    let shortVersion: String
+    let enclosures: [[String: String]]
+}
+
+final class AppcastItemCollector: NSObject, XMLParserDelegate {
+    private enum ItemField {
+        case version
+        case shortVersion
+    }
+
+    private struct MutableItem {
+        var versions: [String] = []
+        var shortVersions: [String] = []
+        var enclosures: [[String: String]] = []
+    }
+
+    var items: [AppcastItem] = []
     var parseError: Error?
+    var isMalformed = false
+    private var depth = 0
+    private var elementStack: [String] = []
+    private var rootName: String?
+    private var rssChannelDepth: Int?
+    private var hasSeenRSSChannel = false
+    private var itemDepth: Int?
+    private var currentItem: MutableItem?
+    private var currentField: ItemField?
+    private var currentFieldText = ""
+
+    private func qualifiedName(_ elementName: String, _ qName: String?) -> String {
+        qName ?? elementName
+    }
 
     func parser(
         _ parser: XMLParser,
@@ -445,9 +509,138 @@ final class EnclosureCollector: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String]
     ) {
-        if elementName == "enclosure" || qName == "enclosure" {
-            enclosures.append(attributeDict)
+        let name = qualifiedName(elementName, qName)
+        let parentName = elementStack.last
+        elementStack.append(name)
+        depth += 1
+
+        if depth == 1 {
+            guard name == "rss", rootName == nil else {
+                isMalformed = true
+                return
+            }
+            rootName = name
+            return
         }
+
+        if name == "rss" {
+            isMalformed = true
+            return
+        }
+
+        if name == "channel" {
+            guard rootName == "rss", parentName == "rss", depth == 2 else {
+                isMalformed = true
+                return
+            }
+            guard !hasSeenRSSChannel else {
+                isMalformed = true
+                return
+            }
+            hasSeenRSSChannel = true
+            rssChannelDepth = depth
+            return
+        }
+
+        if name == "item" {
+            guard let rssChannelDepth,
+                  parentName == "channel",
+                  depth == rssChannelDepth + 1 else {
+                return
+            }
+            guard currentItem == nil else {
+                isMalformed = true
+                return
+            }
+            currentItem = MutableItem()
+            itemDepth = depth
+            return
+        }
+
+        guard let itemDepth, currentItem != nil else { return }
+        if currentField != nil, depth > itemDepth + 1 {
+            isMalformed = true
+        }
+        guard depth == itemDepth + 1 else { return }
+
+        switch name {
+        case "sparkle:version":
+            guard currentField == nil else {
+                isMalformed = true
+                return
+            }
+            currentField = .version
+            currentFieldText = ""
+        case "sparkle:shortVersionString":
+            guard currentField == nil else {
+                isMalformed = true
+                return
+            }
+            currentField = .shortVersion
+            currentFieldText = ""
+        case "enclosure":
+            currentItem?.enclosures.append(attributeDict)
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if currentField != nil {
+            currentFieldText.append(string)
+        }
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        let name = qualifiedName(elementName, qName)
+        if let itemDepth, depth == itemDepth + 1, let currentField {
+            let expectedName = currentField == .version
+                ? "sparkle:version"
+                : "sparkle:shortVersionString"
+            if name == expectedName {
+                let value = currentFieldText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if value.isEmpty {
+                    isMalformed = true
+                    self.currentField = nil
+                    currentFieldText = ""
+                } else {
+                    switch currentField {
+                    case .version:
+                        currentItem?.versions.append(value)
+                    case .shortVersion:
+                        currentItem?.shortVersions.append(value)
+                    }
+                    self.currentField = nil
+                    currentFieldText = ""
+                }
+            }
+        }
+
+        if name == "item", depth == itemDepth, let item = currentItem {
+            if item.versions.count == 1, item.shortVersions.count == 1 {
+                items.append(
+                    AppcastItem(
+                        version: item.versions[0],
+                        shortVersion: item.shortVersions[0],
+                        enclosures: item.enclosures
+                    )
+                )
+            } else {
+                isMalformed = true
+            }
+            currentItem = nil
+            self.itemDepth = nil
+        }
+        if name == "channel", depth == rssChannelDepth {
+            self.rssChannelDepth = nil
+        }
+        _ = elementStack.popLast()
+        depth -= 1
     }
 
     func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
@@ -519,22 +712,25 @@ guard let content = String(data: contentData, encoding: .utf8) else {
 guard !containsSingleQuotedCriticalAttribute(content) else {
     fail("critical enclosure attributes must use double quotes")
 }
-let collector = EnclosureCollector()
+let collector = AppcastItemCollector()
 let parser = XMLParser(data: Data(contentData))
 parser.delegate = collector
 parser.shouldProcessNamespaces = false
 parser.shouldResolveExternalEntities = false
-guard parser.parse(), collector.parseError == nil else {
+guard parser.parse(), collector.parseError == nil, !collector.isMalformed else {
     fail("appcast XML is invalid")
 }
-let matchingEnclosures = collector.enclosures.filter { attributes in
-    attributes["sparkle:version"] == bundleVersion &&
-    attributes["sparkle:shortVersionString"] == shortVersion
+guard collector.items.count == 1,
+      collector.items[0].version == bundleVersion,
+      collector.items[0].shortVersion == shortVersion,
+      collector.items[0].enclosures.count == 1 else {
+    fail("expected exactly one release appcast item and enclosure")
 }
-guard matchingEnclosures.count == 1 else {
-    fail("expected exactly one matching appcast enclosure")
+let enclosure = collector.items[0].enclosures[0]
+guard enclosure["sparkle:version"] == nil,
+      enclosure["sparkle:shortVersionString"] == nil else {
+    fail("version metadata must be direct item-level elements")
 }
-let enclosure = matchingEnclosures[0]
 guard let archiveSignatureBase64 = enclosure["sparkle:edSignature"],
       let archiveURLString = enclosure["url"],
       let archiveComponents = URLComponents(string: archiveURLString),

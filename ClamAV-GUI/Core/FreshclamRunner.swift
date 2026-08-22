@@ -19,25 +19,17 @@ final class FreshclamRunner: FreshclamRunnerProtocol {
     }
 
     func update(using settings: AppSettings) async throws -> UpdateResult {
-        guard FileManager.default.isExecutableFile(atPath: settings.freshclamPath) else {
+        let invocation: FreshclamInvocation
+        do {
+            invocation = try FreshclamInvocation.make(
+                executablePath: settings.freshclamPath,
+                configDirectory: settings.configDirectory,
+                signatureDirectory: settings.signatureDirectory
+            )
+        } catch {
             throw FreshclamError.executableNotFound(settings.freshclamPath)
         }
-
-        let signatureDirectory = URL(fileURLWithPath: settings.signatureDirectory)
-        if !FileManager.default.fileExists(atPath: signatureDirectory.path) {
-            try FileManager.default.createDirectory(at: signatureDirectory, withIntermediateDirectories: true)
-        }
-
-        var args: [String] = []
-        let configFile = URL(fileURLWithPath: settings.configDirectory).appendingPathComponent("freshclam.conf")
-        if FileManager.default.fileExists(atPath: configFile.path) {
-            args.append("--config-file=\(configFile.path)")
-        }
-        args.append("--stdout")
-        args.append("--datadir=\(settings.signatureDirectory)")
-        args.append("--verbose")
-
-        let completed = try await runFreshclam(executablePath: settings.freshclamPath, arguments: args)
+        let completed = try await runFreshclam(executablePath: invocation.executablePath, arguments: invocation.arguments)
         return Self.parseUpdateOutput(completed.output, exitCode: completed.exitCode)
     }
 
@@ -84,92 +76,14 @@ final class FreshclamRunner: FreshclamRunnerProtocol {
     }
 
     static func parseUpdateOutput(_ output: String, exitCode: Int32) -> UpdateResult {
-        let lines = output.components(separatedBy: "\n")
-
-        var mainVersion: String?
-        var dailyVersion: String?
-        var bytecodeVersion: String?
-        var isUpToDate = false
-        var didUpdate = false
-        var errorMessage: String?
-
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            let lowercased = trimmed.lowercased()
-
-            if trimmed.contains("main.cvd") || trimmed.contains("main.cld") {
-                if let version = extractVersion(from: trimmed) {
-                    mainVersion = version
-                }
-            }
-
-            if trimmed.contains("daily.cvd") || trimmed.contains("daily.cld") {
-                if let version = extractVersion(from: trimmed) {
-                    dailyVersion = version
-                }
-            }
-
-            if trimmed.contains("bytecode.cvd") || trimmed.contains("bytecode.cld") {
-                if let version = extractVersion(from: trimmed) {
-                    bytecodeVersion = version
-                }
-            }
-
-            if trimmed.contains("is up to date") || trimmed.contains("up-to-date") {
-                isUpToDate = true
-            }
-
-            if lowercased.contains("updated")
-                || lowercased.contains("downloaded")
-                || lowercased.contains("database updated")
-                || lowercased.contains("daily.cld updated")
-                || lowercased.contains("main.cld updated")
-                || lowercased.contains("bytecode.cld updated") {
-                didUpdate = true
-            }
-
-            if lowercased.contains("error") || lowercased.contains("failed") {
-                if errorMessage == nil {
-                    errorMessage = trimmed
-                }
-            }
-        }
-
-        if exitCode != 0 && errorMessage != nil {
-            return .failed(error: errorMessage ?? "Update failed with exit code \(exitCode)")
-        }
-
-        if exitCode != 0 && !isUpToDate && !didUpdate {
-            let message = errorMessage ?? "Update failed with exit code \(exitCode)"
+        switch FreshclamUpdateOutcome.parse(output: output, exitCode: exitCode) {
+        case .updated(let main, let daily, let bytecode):
+            return .success(main: main, daily: daily, bytecode: bytecode)
+        case .upToDate:
+            return .alreadyUpToDate()
+        case .failed(let message):
             return .failed(error: message)
         }
-
-        if isUpToDate && !didUpdate {
-            return .alreadyUpToDate()
-        }
-
-        return .success(main: mainVersion, daily: dailyVersion, bytecode: bytecodeVersion)
-    }
-
-    private static func extractVersion(from line: String) -> String? {
-        let patterns = [
-            #"version (\d+)"#,
-            #"updated \(version: (\d+)"#,
-            #"is up to date \(version: (\d+)"#,
-            #"bytecode\.cvd database is up-to-date \(version: (\d+)"#,
-            #"daily\.cld database is up-to-date \(version: (\d+)"#,
-            #"main\.cvd database is up-to-date \(version: (\d+)"#
-        ]
-
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-               let match = regex.firstMatch(in: line, options: [], range: NSRange(line.startIndex..., in: line)),
-               let range = Range(match.range(at: 1), in: line) {
-                return String(line[range])
-            }
-        }
-
-        return nil
     }
 }
 

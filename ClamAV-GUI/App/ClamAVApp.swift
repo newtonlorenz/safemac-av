@@ -91,24 +91,38 @@ struct ClamAVApp: App {
     @StateObject private var appState: AppState
     @StateObject private var menuBarManager: MenuBarManager
     @StateObject private var softwareUpdateManager: SoftwareUpdateManager
-    @State private var presentsMenuBarExtra: Bool
+    @StateObject private var menuBarOwnership: BackgroundMenuBarOwnershipCoordinator
 
     init() {
         let arguments = CommandLine.arguments
         let launchMode = LaunchModeParser.parse(arguments: arguments)
-        _presentsMenuBarExtra = State(initialValue: launchMode.presentsUserInterface)
-
+        let isAutomatedTestLaunch = arguments.contains("--ui-testing")
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+#if DEBUG
+        let startsMenuOwnershipRecovery = false
+#else
+        let startsMenuOwnershipRecovery = !isAutomatedTestLaunch
+#endif
         let appState = AppState(
             startsInteractiveBackgroundServices: launchMode.startsInteractiveBackgroundServices
         )
+        let menuBarOwnership = BackgroundMenuBarOwnershipCoordinator(
+            keepsMenuDuringInteractiveLaunch: launchMode.isInteractive && appState.settings.hideFromDock,
+            startsRecoveryTimer: startsMenuOwnershipRecovery
+        )
+        menuBarOwnership.reconcile(helperEnabled: appState.launchAtLoginStatus == .enabled)
+        menuBarOwnership.observe(
+            helperEnabled: appState.$launchAtLoginStatus
+                .map { $0 == .enabled }
+                .eraseToAnyPublisher()
+        )
         let menuBarManager = MenuBarManager()
+        let softwareUpdateManager = SoftwareUpdateManager(startsUpdater: false)
+        let softwareUpdateStartupCoordinator = SoftwareUpdateStartupCoordinator()
         _appState = StateObject(wrappedValue: appState)
         _menuBarManager = StateObject(wrappedValue: menuBarManager)
-        _softwareUpdateManager = StateObject(
-            wrappedValue: SoftwareUpdateManager(startsUpdater: launchMode.startsSoftwareUpdateSubsystem)
-        )
-        let isAutomatedTestLaunch = arguments.contains("--ui-testing")
-            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        _softwareUpdateManager = StateObject(wrappedValue: softwareUpdateManager)
+        _menuBarOwnership = StateObject(wrappedValue: menuBarOwnership)
         let bundleURL = Bundle.main.bundleURL
         let preferredColorScheme = Self.uiTestColorScheme(arguments: arguments)
 
@@ -126,13 +140,26 @@ struct ClamAVApp: App {
                 runInitialApplicationLaunch: { mode in
                     switch mode {
                     case .interactive:
-                        if SignatureScheduleReconciliationPolicy.shouldReconcile(
-                            bundleURL: bundleURL,
-                            isAutomatedTest: isAutomatedTestLaunch
-                        ) {
-                            appState.reconcileSignatureUpdateSchedule()
-                        }
-                        await appState.drainExternalScanRequests()
+                        await softwareUpdateStartupCoordinator.runInitialMaintenance(
+                            launchMode: mode,
+                            settingsProvider: { appState.settings },
+                            isUITesting: arguments.contains("--ui-testing"),
+                            maintenance: {
+                                if SignatureScheduleReconciliationPolicy.shouldReconcile(
+                                    bundleURL: bundleURL,
+                                    isAutomatedTest: isAutomatedTestLaunch
+                                ) {
+                                    appState.reconcileSignatureUpdateSchedule()
+                                }
+                                await appState.drainExternalScanRequests()
+                            },
+                            afterMaintenance: {
+                                menuBarOwnership.completeInteractiveLaunchAnchor()
+                            },
+                            startUpdater: {
+                                softwareUpdateManager.startUpdaterIfPossible()
+                            }
+                        )
                     case .scheduledScan(let jobID, let paths):
                         await appState.runScheduledScan(jobID: jobID, paths: paths)
                     case .scheduledSignatureUpdate:
@@ -143,6 +170,7 @@ struct ClamAVApp: App {
                     guard mode.isInteractive else { return }
                     appState.refreshProtectionScore()
                     appState.refreshLaunchAtLoginStatus()
+                    appState.drainBackgroundRouteRequests()
                     await appState.drainExternalScanRequests()
                 },
                 runScheduledSignatureUpdate: {
@@ -157,10 +185,16 @@ struct ClamAVApp: App {
                 preferredColorScheme: preferredColorScheme
             )
         }
+        MainWindowControllerRegistry.shared.whenRouterAvailable {
+            appState.drainBackgroundRouteRequests()
+        }
     }
 
     var body: some Scene {
-        MenuBarExtra(isInserted: $presentsMenuBarExtra) {
+        MenuBarExtra(isInserted: Binding(
+            get: { menuBarOwnership.mainShouldPresentMenuBar },
+            set: { _ in }
+        )) {
             MenuBarPopoverView()
                 .environmentObject(appState)
                 .environmentObject(softwareUpdateManager)
@@ -229,7 +263,7 @@ struct AppUpdateCommands: Commands {
             Button("Check for Updates...") {
                 updater.checkForUpdates()
             }
-            .disabled(!updater.canCheckForUpdates)
+            .disabled(!updater.isConfigured)
 
             if !updater.isConfigured {
                 Text("App update feed not configured")

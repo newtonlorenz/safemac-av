@@ -70,6 +70,137 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(manager.status, .disabled)
     }
 
+    func testCanonicalLegacyLoginRegistrationMigratesToEmbeddedHelperTransactionally() throws {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        helper.statusAfterRegister = .enabled
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        try manager.migrateLegacyRegistrationIfNeeded()
+
+        XCTAssertEqual(helper.registerCalls, 1)
+        XCTAssertEqual(legacy.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .enabled)
+    }
+
+    func testNoncanonicalBundleNeverMigratesLegacyLoginRegistration() throws {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { false }
+        )
+
+        try manager.migrateLegacyRegistrationIfNeeded()
+
+        XCTAssertEqual(helper.registerCalls, 0)
+        XCTAssertEqual(legacy.unregisterCalls, 0)
+        XCTAssertEqual(manager.status, .enabled)
+    }
+
+    func testLegacyMigrationKeepsLegacyRegistrationWhileHelperAwaitsApproval() throws {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        helper.statusAfterRegister = .requiresApproval
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        try manager.migrateLegacyRegistrationIfNeeded()
+
+        XCTAssertEqual(helper.registerCalls, 1)
+        XCTAssertEqual(legacy.unregisterCalls, 0)
+        XCTAssertEqual(manager.status, .requiresApproval)
+    }
+
+    func testLegacyMigrationRollsBackHelperWhenLegacyRemovalFails() {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        helper.statusAfterRegister = .enabled
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        legacy.unregisterError = AppStateTestError.loginItemFailure
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        XCTAssertThrowsError(try manager.migrateLegacyRegistrationIfNeeded())
+        XCTAssertEqual(helper.registerCalls, 1)
+        XCTAssertEqual(helper.unregisterCalls, 1)
+        XCTAssertEqual(legacy.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .enabled)
+    }
+
+    func testLegacyRegistrationKeepsCombinedStatusEnabledWhenHelperMigrationFails() {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        helper.registerError = AppStateTestError.loginItemFailure
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        XCTAssertThrowsError(try manager.migrateLegacyRegistrationIfNeeded())
+        XCTAssertEqual(manager.status, .enabled)
+    }
+
+    func testDisablingMigrationPendingApprovalUnregistersBothLoginItemServices() throws {
+        let helper = AppStateMockLoginItemService(status: .requiresApproval)
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        try manager.setEnabled(false)
+
+        XCTAssertEqual(helper.unregisterCalls, 1)
+        XCTAssertEqual(legacy.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .disabled)
+    }
+
+    func testDisablingLegacyOnlyMigrationStateUnregistersLegacyService() throws {
+        let helper = AppStateMockLoginItemService(status: .notRegistered)
+        let legacy = AppStateMockLoginItemService(status: .requiresApproval)
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        try manager.setEnabled(false)
+
+        XCTAssertEqual(helper.unregisterCalls, 0)
+        XCTAssertEqual(legacy.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .disabled)
+    }
+
+    func testDisablingBothServicesRollsHelperBackWhenLegacyUnregistrationFails() {
+        let helper = AppStateMockLoginItemService(status: .enabled)
+        let legacy = AppStateMockLoginItemService(status: .enabled)
+        legacy.unregisterError = AppStateTestError.loginItemFailure
+        let manager = LaunchAtLoginManager(
+            service: helper,
+            legacyService: legacy,
+            shouldMigrateLegacyRegistration: { true }
+        )
+
+        XCTAssertThrowsError(try manager.setEnabled(false))
+        XCTAssertEqual(helper.unregisterCalls, 1)
+        XCTAssertEqual(helper.registerCalls, 1)
+        XCTAssertEqual(legacy.unregisterCalls, 1)
+        XCTAssertEqual(manager.status, .enabled)
+    }
+
     func testLaunchAtLoginStartupReconcilesSavedPreferenceWithSystemStatus() {
         var settings = AppSettings.default
         settings.launchAtLogin = true
@@ -85,6 +216,19 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(appState.settings.launchAtLogin)
         XCTAssertFalse(mockConfig.settings.launchAtLogin)
         XCTAssertEqual(appState.launchAtLoginStatus, .disabled)
+    }
+
+    func testLaunchAtLoginStartupAttemptsHelperMigrationBeforePersistingStatus() {
+        let manager = AppStateMigrationTrackingLoginItemManager(status: .enabled)
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: manager,
+            startsInteractiveBackgroundServices: false
+        )
+
+        XCTAssertEqual(manager.migrationCalls, 1)
+        XCTAssertEqual(appState.launchAtLoginStatus, .enabled)
     }
 
     func testLaunchAtLoginStartupDoesNotPersistFallbackLoadedDefaults() {
@@ -846,6 +990,55 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(appState.notificationPermissionError)
     }
 
+    func testBackgroundHelperNotificationPermissionRequiresOnlyExplicitTap() async {
+        let requester = AppStateMockBackgroundHelperNotificationRequester()
+        let disabled = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: AppStateMockLoginItemService(status: .notRegistered)),
+            backgroundHelperNotificationAuthorizationRequester: requester,
+            startsInteractiveBackgroundServices: false
+        )
+
+        await disabled.requestBackgroundHelperNotificationPermission()
+        XCTAssertEqual(requester.requests, 1)
+        XCTAssertNil(disabled.backgroundHelperNotificationPermissionError)
+
+        let enabledRequester = AppStateMockBackgroundHelperNotificationRequester()
+        let enabled = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            launchAtLoginManager: LaunchAtLoginManager(service: AppStateMockLoginItemService(status: .enabled)),
+            backgroundHelperNotificationAuthorizationRequester: enabledRequester,
+            startsInteractiveBackgroundServices: false
+        )
+        XCTAssertEqual(enabledRequester.requests, 0)
+
+        await enabled.requestBackgroundHelperNotificationPermission()
+        XCTAssertEqual(enabledRequester.requests, 1)
+        XCTAssertNil(enabled.backgroundHelperNotificationPermissionError)
+    }
+
+    func testBackgroundHelperPermissionRequestStartsNewOneShotInstanceWhenLoginHelperAlreadyRuns() async {
+        let mainBundle = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        var receivedArguments: [String] = []
+        var createsNewInstance = false
+        let requester = SystemBackgroundHelperNotificationAuthorizationRequester(
+            mainBundleURL: mainBundle,
+            isEmbeddedHelper: { _, _ in true },
+            openApplication: { _, configuration, completion in
+                receivedArguments = configuration.arguments
+                createsNewInstance = configuration.createsNewApplicationInstance
+                completion(nil)
+            }
+        )
+
+        let didLaunch = await requester.requestAuthorization()
+        XCTAssertTrue(didLaunch)
+        XCTAssertEqual(receivedArguments, ["--request-notification-authorization"])
+        XCTAssertTrue(createsNewInstance)
+    }
+
     func testProtectionScoreIsCachedDuringScanProgressUpdates() {
         var settings = AppSettings.default
         settings.monitoringEnabled = false
@@ -1133,6 +1326,23 @@ private final class AppStateMockLoginItemService: LaunchAtLoginService {
     }
 }
 
+private final class AppStateMigrationTrackingLoginItemManager: LaunchAtLoginManaging {
+    var status: LaunchAtLoginStatus
+    private(set) var migrationCalls = 0
+
+    init(status: LaunchAtLoginStatus) {
+        self.status = status
+    }
+
+    func setEnabled(_ enabled: Bool) throws {
+        status = enabled ? .enabled : .disabled
+    }
+
+    func migrateLegacyRegistrationIfNeeded() throws {
+        migrationCalls += 1
+    }
+}
+
 private final class AppStateDelayedFreshclamRunner: FreshclamRunnerProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private var storedUpdateCalls = 0
@@ -1377,5 +1587,16 @@ private final class AppStateMockNotificationManager: NotificationManaging {
     func resumeScheduledNotification() {
         scheduledContinuation?.resume()
         scheduledContinuation = nil
+    }
+}
+
+@MainActor
+private final class AppStateMockBackgroundHelperNotificationRequester: BackgroundHelperNotificationAuthorizationRequesting {
+    private(set) var requests = 0
+    var result = true
+
+    func requestAuthorization() async -> Bool {
+        requests += 1
+        return result
     }
 }

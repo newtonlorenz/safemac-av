@@ -23,7 +23,10 @@ TEMP_DMG_DIR="$BUILD_DIR/dmg-contents"
 BUILD_LOG="$BUILD_DIR/archive.log"
 ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME/ClamAV_GUI.entitlements"
 FINDER_ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME-Finder/ClamAV_GUI_Finder.entitlements"
+BACKGROUND_HELPER_ENTITLEMENTS_PATH="$PROJECT_DIR/ClamAV-BackgroundHelper/SafeMacAVBackground.entitlements"
 APP_GROUP_IDENTIFIER="CQPH8YR62A.com.newtonlorenz.ClamAV-GUI"
+FINDER_EXTENSION_BUNDLE_IDENTIFIER="com.newtonlorenz.ClamAV-GUI.FinderSync"
+BACKGROUND_HELPER_BUNDLE_IDENTIFIER="com.newtonlorenz.SafeMacAV.Background"
 
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
@@ -155,6 +158,7 @@ check_requirements() {
         [[ -x /usr/libexec/PlistBuddy ]] || fail "PlistBuddy not found. Install the Xcode command-line tools."
         [[ -f "$ENTITLEMENTS_PATH" ]] || fail "Entitlements file not found: $ENTITLEMENTS_PATH"
         [[ -f "$FINDER_ENTITLEMENTS_PATH" ]] || fail "Finder entitlements file not found: $FINDER_ENTITLEMENTS_PATH"
+        [[ -f "$BACKGROUND_HELPER_ENTITLEMENTS_PATH" ]] || fail "Background helper entitlements file not found: $BACKGROUND_HELPER_ENTITLEMENTS_PATH"
 
         resolve_signing_identity
     fi
@@ -284,6 +288,8 @@ verify_signed_app_components() {
     local version_dir
     local extension_path
     local extension_executable
+    local background_helper
+    local background_helper_executable
     local -a framework_paths=()
     local -a extension_paths=()
 
@@ -335,8 +341,31 @@ verify_signed_app_components() {
 
     for extension_path in "${extension_paths[@]}"; do
         extension_executable="$extension_path/Contents/MacOS/$(basename "$extension_path" .appex)"
+        if [[ "$(basename "$extension_path")" == "$PROJECT_NAME-Finder.appex" ]]; then
+            [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$extension_path/Contents/Info.plist" 2>/dev/null)" == "$FINDER_EXTENSION_BUNDLE_IDENTIFIER" ]] \
+                || fail "Finder extension bundle identifier is invalid."
+        fi
         verify_distribution_code "$extension_path" "$extension_executable" "$expected_team_id"
     done
+
+    background_helper="$APP_PATH/Contents/Library/LoginItems/SafeMacAVBackground.app"
+    background_helper_executable="$background_helper/Contents/MacOS/SafeMacAVBackground"
+    [[ -d "$background_helper" ]] || fail "Signed background helper not found: $background_helper"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$background_helper/Contents/Info.plist" 2>/dev/null)" == "$BACKGROUND_HELPER_BUNDLE_IDENTIFIER" ]] \
+        || fail "Background helper bundle identifier is invalid."
+    verify_distribution_code "$background_helper" "$background_helper_executable" "$expected_team_id"
+    helper_entitlements="$(codesign -d --entitlements :- "$background_helper" 2>/dev/null)" \
+        || fail "Could not inspect background helper entitlements."
+    command -v jq >/dev/null 2>&1 || fail "jq is required to validate background helper entitlements."
+    jq -e '."com.apple.security.app-sandbox" == false' \
+        <<< "$(plutil -convert json -o - - <<< "$helper_entitlements")" >/dev/null \
+        || fail "Background helper sandbox entitlement must be exactly false."
+    ! grep -Fq 'com.apple.security.application-groups' <<< "$helper_entitlements" \
+        || fail "Background helper must not claim an unused app-group entitlement."
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$background_helper/Contents/Info.plist")" == "true" ]] \
+        || fail "Background helper must be an LSUIElement agent."
+    [[ ! -e "$background_helper/Contents/Frameworks/Sparkle.framework" ]] \
+        || fail "Background helper must not embed Sparkle."
 
     codesign --verify --deep --strict --verbose=2 "$APP_PATH"
     verify_signed_entitlements
@@ -383,6 +412,7 @@ export_app() {
 sign_app() {
     local extension_path
     local framework_path
+    local background_helper
     local -a extension_paths=()
     local -a framework_paths=()
 
@@ -420,6 +450,15 @@ sign_app() {
             "${extension_entitlements[@]}" \
             "$extension_path"
     done
+
+    background_helper="$APP_PATH/Contents/Library/LoginItems/SafeMacAVBackground.app"
+    [[ -d "$background_helper" ]] || fail "Background helper not found: $background_helper"
+    codesign --force \
+        --sign "$RESOLVED_SIGNING_IDENTITY" \
+        --options runtime \
+        --timestamp \
+        --entitlements "$BACKGROUND_HELPER_ENTITLEMENTS_PATH" \
+        "$background_helper"
 
     codesign --force \
         --sign "$RESOLVED_SIGNING_IDENTITY" \

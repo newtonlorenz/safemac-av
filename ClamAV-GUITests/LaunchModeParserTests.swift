@@ -2,6 +2,8 @@ import XCTest
 @testable import ClamAV_GUI
 
 final class LaunchModeParserTests: XCTestCase {
+    private enum RouteStoreTestError: Error { case acknowledgementFailed }
+
     func testParsesInteractiveModeByDefault() {
         let mode = LaunchModeParser.parse(arguments: ["ClamAV-GUI"])
         XCTAssertEqual(mode, .interactive)
@@ -77,5 +79,126 @@ final class LaunchModeParserTests: XCTestCase {
         case .scheduledSignatureUpdate:
             XCTFail("Expected scheduled scan mode, not signature update mode")
         }
+    }
+
+    func testBackgroundHelperParsesOnlyItsFixedScheduledSignatureFlag() {
+        XCTAssertEqual(
+            BackgroundHelperLaunchModeParser.parse(arguments: [
+                "SafeMacAVBackground",
+                "--scheduled-signature-update"
+            ]),
+            .scheduledSignatureUpdate
+        )
+        XCTAssertEqual(
+            BackgroundHelperLaunchModeParser.parse(arguments: ["SafeMacAVBackground"]),
+            .backgroundSession
+        )
+    }
+
+    func testBackgroundHelperRejectsMainApplicationFlags() {
+        XCTAssertEqual(
+            BackgroundHelperLaunchModeParser.parse(arguments: [
+                "SafeMacAVBackground",
+                "--scheduled-scan",
+                "--path", "/tmp/unsafe"
+            ]),
+            .invalid
+        )
+    }
+
+    func testBackgroundHelperNeverStartsUserInterfaceOrSparkle() {
+        for mode in [
+            BackgroundHelperLaunchMode.backgroundSession,
+            .scheduledSignatureUpdate,
+            .invalid
+        ] {
+            XCTAssertFalse(mode.presentsUserInterface)
+            XCTAssertFalse(mode.startsSoftwareUpdateSubsystem)
+            XCTAssertFalse(mode.consumesFinderRequests)
+        }
+    }
+
+    func testBackgroundWorkLeaseRejectsOverlappingAndSymlinkedLocks() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let first = BackgroundWorkLease(name: "signature-update", baseURL: root)
+        let second = BackgroundWorkLease(name: "signature-update", baseURL: root)
+        XCTAssertTrue(first.acquire())
+        XCTAssertFalse(second.acquire())
+        first.release()
+        XCTAssertTrue(second.acquire())
+        second.release()
+
+        let unsafe = root.appendingPathComponent("symlinked.lock")
+        try FileManager.default.createSymbolicLink(at: unsafe, withDestinationURL: URL(fileURLWithPath: "/tmp"))
+        let symlinked = BackgroundWorkLease(name: "symlinked", baseURL: root)
+        XCTAssertFalse(symlinked.acquire())
+
+        let unsafeDirectory = root.appendingPathComponent("unsafe-directory")
+        try FileManager.default.createSymbolicLink(at: unsafeDirectory, withDestinationURL: URL(fileURLWithPath: "/tmp"))
+        XCTAssertFalse(BackgroundWorkLease(name: "directory", baseURL: unsafeDirectory).acquire())
+    }
+
+    func testBackgroundRoutesPersistOnlyFixedEnumValuesAndDrainOnce() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BackgroundRouteRequestStore(baseURL: root)
+
+        XCTAssertTrue(store.enqueue(.settings))
+        XCTAssertEqual(store.peek(), .settings)
+        XCTAssertTrue(store.acknowledge(.settings))
+        XCTAssertNil(store.consume())
+
+        try "--finder-request".data(using: .utf8)?.write(to: root.appendingPathComponent("background-route.request"))
+        XCTAssertNil(store.consume())
+    }
+
+    func testBackgroundRouteIsNotDispatchedWhenDurableAcknowledgementFails() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BackgroundRouteRequestStore(
+            baseURL: root,
+            removeRequest: { _ in throw RouteStoreTestError.acknowledgementFailed }
+        )
+
+        XCTAssertTrue(store.enqueue(.settings))
+        XCTAssertNil(store.consume())
+        XCTAssertEqual(store.peek(), .settings)
+    }
+
+    func testBackgroundRouteAcknowledgementDoesNotDeleteNewerAtomicReplacement() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let requestURL = root.appendingPathComponent("background-route.request")
+        var store: BackgroundRouteRequestStore!
+        store = BackgroundRouteRequestStore(
+            baseURL: root,
+            removeRequest: { acknowledgedURL in
+                XCTAssertNotEqual(acknowledgedURL, requestURL)
+                XCTAssertTrue(store.enqueue(.open))
+                try FileManager.default.removeItem(at: acknowledgedURL)
+            }
+        )
+
+        XCTAssertTrue(store.enqueue(.settings))
+        XCTAssertTrue(store.acknowledge(.settings))
+        XCTAssertEqual(store.peek(), .open)
+    }
+
+    func testBackgroundRouteStoreRejectsSymlinkedRequestFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let request = root.appendingPathComponent("background-route.request")
+        try FileManager.default.createSymbolicLink(at: request, withDestinationURL: URL(fileURLWithPath: "/tmp"))
+
+        let store = BackgroundRouteRequestStore(baseURL: root)
+        XCTAssertFalse(store.enqueue(.settings))
+        XCTAssertNil(store.consume())
     }
 }

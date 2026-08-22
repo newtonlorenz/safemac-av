@@ -56,14 +56,19 @@ done
 [[ -n "$archive_path" ]]
 app="$archive_path/Products/Applications/ClamAV-GUI.app"
 sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
+helper="$app/Contents/Library/LoginItems/SafeMacAVBackground.app"
 mkdir -p \
     "$app/Contents/MacOS" \
     "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS" \
+    "$helper/Contents/MacOS" \
     "$sparkle/Updater.app/Contents/MacOS" \
     "$sparkle/XPCServices/Downloader.xpc/Contents/MacOS" \
     "$sparkle/XPCServices/Installer.xpc/Contents/MacOS"
 printf app > "$app/Contents/MacOS/ClamAV-GUI"
 printf finder > "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
+printf "%s\\n" "<plist><dict><key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.FinderSync</string></dict></plist>" > "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/Info.plist"
+printf helper > "$helper/Contents/MacOS/SafeMacAVBackground"
+printf "%s\\n" "<plist><dict><key>CFBundleIdentifier</key><string>com.newtonlorenz.SafeMacAV.Background</string><key>LSUIElement</key><true/></dict></plist>" > "$helper/Contents/Info.plist"
 printf sparkle > "$sparkle/Sparkle"
 printf autoupdate > "$sparkle/Autoupdate"
 printf updater > "$sparkle/Updater.app/Contents/MacOS/Updater"
@@ -72,6 +77,7 @@ printf installer > "$sparkle/XPCServices/Installer.xpc/Contents/MacOS/Installer"
 chmod +x \
     "$app/Contents/MacOS/ClamAV-GUI" \
     "$app/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder" \
+    "$helper/Contents/MacOS/SafeMacAVBackground" \
     "$sparkle/Sparkle" \
     "$sparkle/Autoupdate" \
     "$sparkle/Updater.app/Contents/MacOS/Updater" \
@@ -114,6 +120,8 @@ elif [[ " $* " == *" --entitlements "* ]]; then
     target="${!#}"
     if [[ "$target" == *"/Sparkle.framework/Versions/B/Autoupdate" ]]; then
         printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
+    elif [[ "$target" == *"/SafeMacAVBackground.app" ]]; then
+        printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><false/></dict></plist>"
     elif [[ "$target" == *"/SafeMac AV.app" ]]; then
         printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>CQPH8YR62A.com.newtonlorenz.ClamAV-GUI</string></array></dict></plist>"
     elif [[ "$target" == *"/ClamAV-GUI-Finder.appex" ]]; then
@@ -199,8 +207,10 @@ verify_build_products_unregistered() {
     local actual="$WORK_DIR/actual-unregister-targets.txt"
 
     printf '%s\n' \
+        "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app/Contents/Library/LoginItems/SafeMacAVBackground.app" \
         "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
         "$PROJECT_DIR/build/ClamAV-GUI.xcarchive/Products/Applications/ClamAV-GUI.app" \
+        "$PROJECT_DIR/build/export/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app" \
         "$PROJECT_DIR/build/export/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
         "$PROJECT_DIR/build/export/SafeMac AV.app" \
         | sort > "$expected"
@@ -232,6 +242,7 @@ verify_signing_order() {
     local installer="$version/XPCServices/Installer.xpc"
     local autoupdate="$version/Autoupdate"
     local appex="$app/Contents/PlugIns/ClamAV-GUI-Finder.appex"
+    local helper="$app/Contents/Library/LoginItems/SafeMacAVBackground.app"
 
     assert_signed_with_distribution_options "$updater"
     assert_signed_with_distribution_options "$downloader"
@@ -239,6 +250,7 @@ verify_signing_order() {
     assert_signed_with_distribution_options "$autoupdate"
     assert_signed_with_distribution_options "$sparkle"
     assert_signed_with_distribution_options "$appex" false "$PROJECT_DIR/ClamAV-GUI-Finder/ClamAV_GUI_Finder.entitlements"
+    assert_signed_with_distribution_options "$helper" false "$PROJECT_DIR/ClamAV-BackgroundHelper/SafeMacAVBackground.entitlements"
     assert_signed_with_distribution_options "$app" false
 
     assert_before "$autoupdate" "$sparkle"
@@ -247,9 +259,30 @@ verify_signing_order() {
     assert_before "$updater" "$sparkle"
     assert_before "$sparkle" "$app"
     assert_before "$appex" "$app"
+    assert_before "$sparkle" "$helper"
+    assert_before "$appex" "$helper"
+    assert_before "$helper" "$app"
+}
+
+verify_project_child_bundle_identifiers() {
+    local project_file="$PROJECT_DIR/ClamAV-GUI.xcodeproj/project.pbxproj"
+
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.Background";' "$project_file" \
+        || fail "background helper does not use the final SafeMac child identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.BackgroundTests";' "$project_file" \
+        || fail "background helper tests do not use the final SafeMac child identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI.FinderSync";' "$project_file" \
+        || fail "Finder extension no longer uses the required app-prefixed compatibility identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.Tests";' "$project_file" \
+        || fail "unit test bundle does not use the final SafeMac child identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.SafeMacAV.UITests";' "$project_file" \
+        || fail "UI test bundle does not use the final SafeMac child identifier"
+    grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = "com.newtonlorenz.ClamAV-GUI";' "$project_file" \
+        || fail "main app compatibility identifier changed"
 }
 
 main() {
+    verify_project_child_bundle_identifiers
     make_fake_tools
     : > "$LSREGISTER_LOG"
     run_packaging

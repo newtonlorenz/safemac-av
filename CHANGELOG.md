@@ -4,6 +4,19 @@ All notable project changes will be documented in this file. The format follows 
 
 ## [Unreleased]
 
+### Added
+
+- An embedded, hardened macOS 13+ background login-item helper for launch at login, the persistent menu bar, and automatic signature-update launches.
+- Transactional migration from the legacy main-app login item, shared symlink-resistant background-work leases, and release verification for the embedded helper.
+- Documented one-release launch-at-login downgrade recovery: disable the helper login item before installing a pre-helper build, then re-enable the legacy login item from that build.
+- A user-initiated Settings flow for the background helper’s separate notification permission, using a dedicated one-shot helper instance so it remains reliable while the login helper is already running.
+
+### Changed
+
+- New automatic signature schedules invoke only the embedded helper with a fixed flag; the foreground app keeps the legacy scheduled-update handler for one compatibility release.
+- Freshclam success parsing now fails closed for every nonzero exit, and helper/main handoff code requirements require the Apple generic anchor, exact bundle identifier, and Team ID.
+- Sparkle now defers its first-run consent until visible interactive launch maintenance completes; hidden and scheduled modes start it only through an explicit Check for Updates action.
+
 ## [1.2.0] - 2026-08-22
 
 ### Added

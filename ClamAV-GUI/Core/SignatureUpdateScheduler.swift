@@ -35,6 +35,8 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
     private let fileManager: FileManager
     private let launchAgentsDirectory: URL
     private let applicationBundlePath: String
+    private let backgroundHelperExecutableURL: URL
+    private let backgroundHelperValidator: (URL) -> Bool
     private let domain: String
     private let serviceTarget: String
     private let dataWriter: DataWriter
@@ -45,6 +47,8 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
         fileManager: FileManager = .default,
         launchAgentsDirectory: URL? = nil,
         applicationBundlePath: String = Bundle.main.bundlePath,
+        backgroundHelperExecutableURL: URL? = nil,
+        backgroundHelperValidator: ((URL) -> Bool)? = nil,
         userID: uid_t = getuid(),
         launchctlExecutableURL: URL = URL(fileURLWithPath: "/bin/launchctl"),
         dataWriter: @escaping DataWriter = { data, url, options in
@@ -60,6 +64,13 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
             ?? fileManager.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
         self.applicationBundlePath = applicationBundlePath
+        let bundleURL = URL(fileURLWithPath: applicationBundlePath, isDirectory: true)
+        let helperExecutableURL = backgroundHelperExecutableURL
+            ?? BackgroundHelperBundle.executableURL(in: bundleURL)
+        self.backgroundHelperExecutableURL = helperExecutableURL
+        self.backgroundHelperValidator = backgroundHelperValidator ?? { url in
+            BackgroundHelperBundle.isEmbeddedHelper(at: url, in: bundleURL)
+        }
         self.domain = domain
         self.serviceTarget = serviceTarget
         self.dataWriter = dataWriter
@@ -73,6 +84,9 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
 
     func reconcile(enabled: Bool, schedule: ScanSchedule) throws {
         let plistURL = launchAgentURL
+        if enabled, !backgroundHelperValidator(backgroundHelperExecutableURL) {
+            throw SignatureUpdateSchedulerError.backgroundHelperUnavailable
+        }
         let snapshot = try snapshot(at: plistURL)
         let replacement = try enabled ? launchAgentData(for: schedule) : nil
         var mutation = MutationState()
@@ -115,12 +129,12 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
     }
 
     private func launchAgentData(for schedule: ScanSchedule) throws -> Data {
-        let executablePath = URL(fileURLWithPath: applicationBundlePath)
-            .appendingPathComponent("Contents/MacOS/ClamAV-GUI")
-            .path
         let plist: [String: Any] = [
             "Label": Self.label,
-            "ProgramArguments": [executablePath, "--scheduled-signature-update"],
+            "ProgramArguments": [
+                backgroundHelperExecutableURL.path,
+                "--scheduled-signature-update"
+            ],
             "StartCalendarInterval": try calendarInterval(for: schedule),
             "RunAtLoad": false
         ]
@@ -288,8 +302,9 @@ private extension SignatureUpdateLaunchctlOperation {
     }
 }
 
-enum SignatureUpdateSchedulerError: LocalizedError {
+enum SignatureUpdateSchedulerError: LocalizedError, Equatable {
     case invalidSchedule
+    case backgroundHelperUnavailable
     case launchctlFailed(command: String, status: Int32)
     case loadedJobMissingPropertyList
     case reconciliationAndRollbackFailed(
@@ -301,6 +316,8 @@ enum SignatureUpdateSchedulerError: LocalizedError {
         switch self {
         case .invalidSchedule:
             return "The automatic signature update schedule is invalid."
+        case .backgroundHelperUnavailable:
+            return "SafeMac AV could not find its background helper. Reinstall the app before enabling automatic signature updates."
         case .launchctlFailed(let command, let status):
             return "launchctl \(command) failed with exit status \(status)."
         case .loadedJobMissingPropertyList:

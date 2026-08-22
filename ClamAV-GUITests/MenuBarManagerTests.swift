@@ -13,6 +13,81 @@ final class MenuBarManagerTests: XCTestCase {
         )
     }
 
+    func testAppLifetimeOwnershipObservationRecoversFallbackMenuAfterHelperExit() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var now = Date()
+        let ownership = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) },
+            now: { now },
+            startupGrace: 1,
+            startsRecoveryTimer: false
+        )
+        let helperEnabled = CurrentValueSubject<Bool, Never>(true)
+        ownership.observe(helperEnabled: helperEnabled.eraseToAnyPublisher())
+
+        XCTAssertFalse(ownership.mainShouldPresentMenuBar)
+        now = now.addingTimeInterval(2)
+        ownership.recoverIfHelperIsAbsent()
+
+        XCTAssertTrue(ownership.mainShouldPresentMenuBar)
+    }
+
+    func testHiddenInteractiveLaunchAnchorKeepsMainMenuWhileHelperOwnsLease() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helperLease = BackgroundWorkLease(name: "background-monitoring", baseURL: root)
+        XCTAssertTrue(helperLease.acquire())
+        defer { helperLease.release() }
+        let ownership = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) },
+            keepsMenuDuringInteractiveLaunch: true,
+            startsRecoveryTimer: false
+        )
+
+        ownership.reconcile(helperEnabled: true)
+        ownership.prepareForHelperOwnership()
+
+        XCTAssertTrue(ownership.mainShouldPresentMenuBar)
+    }
+
+    func testCompletingHiddenInteractiveLaunchAnchorReturnsOwnershipToHelper() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helperLease = BackgroundWorkLease(name: "background-monitoring", baseURL: root)
+        XCTAssertTrue(helperLease.acquire())
+        defer { helperLease.release() }
+        let ownership = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) },
+            keepsMenuDuringInteractiveLaunch: true,
+            startsRecoveryTimer: false
+        )
+        ownership.reconcile(helperEnabled: true)
+
+        ownership.completeInteractiveLaunchAnchor()
+
+        XCTAssertFalse(ownership.mainShouldPresentMenuBar)
+    }
+
+    func testCompletingHiddenInteractiveLaunchAnchorClaimsFallbackWhenHelperIsAbsent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ownership = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) },
+            keepsMenuDuringInteractiveLaunch: true,
+            startsRecoveryTimer: false
+        )
+        ownership.reconcile(helperEnabled: true)
+
+        ownership.completeInteractiveLaunchAnchor()
+
+        XCTAssertTrue(ownership.mainShouldPresentMenuBar)
+    }
+
     func testMainWindowRegistryFactoryIsLazyAndResettable() {
         let registry = MainWindowControllerRegistry()
         let first = MainWindowControllerMock()
@@ -65,6 +140,22 @@ final class MenuBarManagerTests: XCTestCase {
 
         registry.whenFactoryAvailable { waiterCalls += 1 }
         XCTAssertEqual(waiterCalls, 2)
+    }
+
+    func testMainWindowRegistryDefersColdRouteUntilRouterIsInstalled() {
+        let registry = MainWindowControllerRegistry()
+        var readyCalls = 0
+        registry.whenRouterAvailable { readyCalls += 1 }
+
+        XCTAssertFalse(registry.isRouterAvailable)
+        XCTAssertFalse(registry.showMainWindow(selecting: .settings))
+        XCTAssertEqual(readyCalls, 0)
+
+        registry.installRouter { _ in }
+
+        XCTAssertTrue(registry.isRouterAvailable)
+        XCTAssertEqual(readyCalls, 1)
+        XCTAssertTrue(registry.showMainWindow(selecting: .settings))
     }
 
     func testConcreteMainWindowControllerRetainsOneWindowAndExactSharedState() throws {
@@ -288,11 +379,8 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertTrue(source.contains("MenuBarExtra"))
         XCTAssertFalse(source.contains("@StateObject private var initialLaunchHandler"))
         XCTAssertFalse(source.contains("applicationDelegate.configure"))
-        XCTAssertTrue(
-            source.contains(
-                "SoftwareUpdateManager(startsUpdater: launchMode.startsSoftwareUpdateSubsystem)"
-            )
-        )
+        XCTAssertTrue(source.contains("SoftwareUpdateManager(startsUpdater: false)"))
+        XCTAssertTrue(source.contains("softwareUpdateManager.startUpdaterIfPossible()"))
         let installConfiguration = try XCTUnwrap(
             source.range(of: "ApplicationLaunchConfigurationRegistry.shared.install")
         )
@@ -910,6 +998,13 @@ final class MenuBarManagerTests: XCTestCase {
             bundleURL: URL(fileURLWithPath: "/Applications/SafeMac AV.app"),
             isAutomatedTest: false
         ))
+        // Bundle.main may carry a different `isDirectory` hint even when it
+        // names the same installed bundle. That hint must not suppress the
+        // security policy's canonical-path match.
+        XCTAssertTrue(SignatureScheduleReconciliationPolicy.shouldReconcile(
+            bundleURL: URL(fileURLWithPath: "/Applications/SafeMac AV.app", isDirectory: false),
+            isAutomatedTest: false
+        ))
 
         let unsafePaths = [
             "/Users/test/Library/Developer/Xcode/DerivedData/SafeMac/Build/Products/Debug/SafeMac AV.app",
@@ -927,6 +1022,13 @@ final class MenuBarManagerTests: XCTestCase {
             bundleURL: URL(fileURLWithPath: "/Applications/SafeMac AV.app"),
             isAutomatedTest: true
         ))
+    }
+
+    func testNonDirectoryURLHintStillQualifiesForLegacyLoginMigration() {
+        let installedURL = URL(fileURLWithPath: "/Applications/SafeMac AV.app", isDirectory: false)
+
+        XCTAssertEqual(installedURL.path, "/Applications/SafeMac AV.app")
+        XCTAssertTrue(LaunchAtLoginManager.isCanonicalInstalledBundle(at: installedURL))
     }
 }
 

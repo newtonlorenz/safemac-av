@@ -37,6 +37,8 @@ final class ConfigManager: ConfigManagerProtocol {
         do {
             let data = try Data(contentsOf: settingsURL)
             let settings = try JSONDecoder().decode(AppSettings.self, from: data)
+            try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: appDirectoryURL.path)
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settingsURL.path)
             lastSettingsLoadState = .loaded
             return settings
         } catch {
@@ -48,8 +50,10 @@ final class ConfigManager: ConfigManagerProtocol {
     func saveSettings(_ settings: AppSettings) throws {
         do {
             try fileManager.createDirectory(at: appDirectoryURL, withIntermediateDirectories: true)
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: appDirectoryURL.path)
             let data = try JSONEncoder().encode(settings)
             try data.write(to: settingsURL, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settingsURL.path)
         } catch {
             throw ConfigManagerError.settingsSaveFailed(
                 path: settingsURL.path,

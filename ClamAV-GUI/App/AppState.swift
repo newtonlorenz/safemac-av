@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Combine
 
@@ -25,6 +26,7 @@ final class AppState: ObservableObject {
     @Published private(set) var signatureUpdateScheduleState: SignatureUpdateScheduleState
     @Published private(set) var notificationPermissionStatus: NotificationPermissionStatus = .unknown
     @Published private(set) var notificationPermissionError: String?
+    @Published private(set) var backgroundHelperNotificationPermissionError: String?
     @Published var shouldOpenCustomScanPicker = false
     @Published private(set) var launchAtLoginStatus: LaunchAtLoginStatus
     @Published private(set) var protectionScore: ProtectionScore
@@ -37,12 +39,14 @@ final class AppState: ObservableObject {
     let fileWatcher: FileWatcherProtocol
     let scanCoordinator: ScanCoordinator
     let externalScanRequestStore: ExternalScanRequestStore
+    let backgroundRouteRequestStore: BackgroundRouteRequestStore
     let scanHistoryManager: ScanHistoryManager
     let protectionScoreManager: ProtectionScoreManager
     private let launchAtLoginManager: any LaunchAtLoginManaging
     private let signatureUpdateScheduler: any SignatureUpdateScheduling
     private let allowsSignatureScheduleStartupReconciliation: Bool
     let notificationManager: NotificationManaging
+    private let backgroundHelperNotificationAuthorizationRequester: any BackgroundHelperNotificationAuthorizationRequesting
 
     private let logManager = LogManager()
     private var cancellables = Set<AnyCancellable>()
@@ -60,13 +64,22 @@ final class AppState: ObservableObject {
         freshclamRunner: FreshclamRunnerProtocol? = nil,
         notificationManager: NotificationManaging? = nil,
         externalScanRequestStore: ExternalScanRequestStore = ExternalScanRequestStore(),
+        backgroundRouteRequestStore: BackgroundRouteRequestStore = BackgroundRouteRequestStore(),
         scanHistoryManager: ScanHistoryManager = ScanHistoryManager(),
         launchAtLoginManager: any LaunchAtLoginManaging = LaunchAtLoginManager(),
         signatureUpdateScheduler: any SignatureUpdateScheduling = SignatureUpdateScheduler(),
+        backgroundHelperNotificationAuthorizationRequester: (any BackgroundHelperNotificationAuthorizationRequesting)? = nil,
         startsInteractiveBackgroundServices: Bool = true
     ) {
         var loadedSettings = configManager.loadSettings()
         let settingsLoadState = configManager.lastSettingsLoadState
+        let loginItemMigrationError: String?
+        do {
+            try launchAtLoginManager.migrateLegacyRegistrationIfNeeded()
+            loginItemMigrationError = nil
+        } catch {
+            loginItemMigrationError = "SafeMac AV could not finish moving your login item to its background helper. Check Login Items in System Settings."
+        }
         let initialLaunchAtLoginStatus = launchAtLoginManager.status
         let shouldPersistLaunchAtLoginStatus = loadedSettings.launchAtLogin != initialLaunchAtLoginStatus.isRequested
         loadedSettings.launchAtLogin = initialLaunchAtLoginStatus.isRequested
@@ -78,6 +91,8 @@ final class AppState: ObservableObject {
         self.clamAVRunner = runner
         self.freshclamRunner = freshclamRunner ?? FreshclamRunner(configManager: configManager)
         self.notificationManager = resolvedNotificationManager
+        self.backgroundHelperNotificationAuthorizationRequester = backgroundHelperNotificationAuthorizationRequester
+            ?? SystemBackgroundHelperNotificationAuthorizationRequester()
         self.quarantineManager = QuarantineManager(configManager: configManager)
         self.scanScheduler = scanScheduler
         self.fileWatcher = fileWatcher ?? FileWatcher(
@@ -86,6 +101,7 @@ final class AppState: ObservableObject {
         )
         self.scanCoordinator = scanCoordinator ?? ScanCoordinator(clamAVRunner: runner)
         self.externalScanRequestStore = externalScanRequestStore
+        self.backgroundRouteRequestStore = backgroundRouteRequestStore
         self.scanHistoryManager = scanHistoryManager
         self.launchAtLoginManager = launchAtLoginManager
         self.signatureUpdateScheduler = signatureUpdateScheduler
@@ -101,6 +117,11 @@ final class AppState: ObservableObject {
         )
         self.notificationPermissionStatus = resolvedNotificationManager.permissionStatus
         self.notificationPermissionError = resolvedNotificationManager.permissionError
+
+        if let loginItemMigrationError {
+            launchAtLoginError = loginItemMigrationError
+            addLog(.warning, loginItemMigrationError)
+        }
 
         loadQuarantinedFiles()
         resolvedNotificationManager.setupNotificationCategories()
@@ -167,6 +188,44 @@ final class AppState: ObservableObject {
                 self?.handleFinderHandoffFailure(notification)
             }
         }
+
+        for route in BackgroundRoute.allCases {
+            DistributedNotificationCenter.default().addObserver(
+                forName: route.distributedNotificationName,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.drainBackgroundRouteRequests()
+                }
+            }
+        }
+    }
+
+    private func handleBackgroundRoute(_ route: BackgroundRoute) -> Bool {
+        switch route {
+        case .open:
+            return MainWindowControllerRegistry.shared.showMainWindow(selecting: .dashboard)
+        case .settings:
+            return MainWindowControllerRegistry.shared.showMainWindow(selecting: .settings)
+        case .checkForUpdates:
+            NotificationCenter.default.post(name: .checkForAppUpdates, object: nil)
+            return true
+        }
+    }
+
+    @discardableResult
+    func drainBackgroundRouteRequests() -> Int {
+        guard MainWindowControllerRegistry.shared.isRouterAvailable else { return 0 }
+        var count = 0
+        while let route = backgroundRouteRequestStore.consume() {
+            guard handleBackgroundRoute(route) else {
+                _ = backgroundRouteRequestStore.enqueue(route)
+                break
+            }
+            count += 1
+        }
+        return count
     }
 
     func handleFinderHandoffFailure(_: Notification) {
@@ -443,6 +502,12 @@ final class AppState: ObservableObject {
             addLog(.info, "Skipped scheduled signature update because automatic updates are disabled")
             return
         }
+        let lease = BackgroundWorkLease(name: "signature-update")
+        guard lease.acquire() else {
+            addLog(.info, "Skipped scheduled signature update because another SafeMac AV process is already updating signatures")
+            return
+        }
+        defer { lease.release() }
         await updateSignatures(using: settings)
     }
 
@@ -757,6 +822,15 @@ final class AppState: ObservableObject {
         updateNotificationPermissionState()
     }
 
+    /// The login helper has a separate bundle notification identity. Request
+    /// it only from a deliberate foreground Settings tap.
+    func requestBackgroundHelperNotificationPermission() async {
+        let didLaunchRequest = await backgroundHelperNotificationAuthorizationRequester.requestAuthorization()
+        backgroundHelperNotificationPermissionError = didLaunchRequest
+            ? nil
+            : "SafeMac AV could not open its background helper to request notification permission."
+    }
+
     private func sendScanNotification(
         report: ScanReport,
         source: ScanSource,
@@ -780,6 +854,50 @@ final class AppState: ObservableObject {
     private func updateNotificationPermissionState() {
         notificationPermissionStatus = notificationManager.permissionStatus
         notificationPermissionError = notificationManager.permissionError
+    }
+}
+
+@MainActor
+protocol BackgroundHelperNotificationAuthorizationRequesting: AnyObject {
+    func requestAuthorization() async -> Bool
+}
+
+@MainActor
+final class SystemBackgroundHelperNotificationAuthorizationRequester: BackgroundHelperNotificationAuthorizationRequesting {
+    private let mainBundleURL: URL
+    private let isEmbeddedHelper: (URL, URL) -> Bool
+    private let openApplication: (URL, NSWorkspace.OpenConfiguration, @escaping (Error?) -> Void) -> Void
+
+    init(
+        mainBundleURL: URL = Bundle.main.bundleURL,
+        isEmbeddedHelper: @escaping (URL, URL) -> Bool = { executable, mainBundle in
+            BackgroundHelperBundle.isEmbeddedHelper(at: executable, in: mainBundle)
+        },
+        openApplication: @escaping (URL, NSWorkspace.OpenConfiguration, @escaping (Error?) -> Void) -> Void = { url, configuration, completion in
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
+                completion(error)
+            }
+        }
+    ) {
+        self.mainBundleURL = mainBundleURL
+        self.isEmbeddedHelper = isEmbeddedHelper
+        self.openApplication = openApplication
+    }
+
+    func requestAuthorization() async -> Bool {
+        let executable = BackgroundHelperBundle.executableURL(in: mainBundleURL)
+        guard isEmbeddedHelper(executable, mainBundleURL) else { return false }
+        let configuration = NSWorkspace.OpenConfiguration()
+        // The normal login helper can already be running and retains its own
+        // launch arguments. Permission therefore uses a dedicated one-shot
+        // helper instance, which exits after completing this fixed action.
+        configuration.createsNewApplicationInstance = true
+        configuration.arguments = ["--request-notification-authorization"]
+        return await withCheckedContinuation { continuation in
+            openApplication(BackgroundHelperBundle.bundleURL(in: mainBundleURL), configuration) { error in
+                continuation.resume(returning: error == nil)
+            }
+        }
     }
 }
 

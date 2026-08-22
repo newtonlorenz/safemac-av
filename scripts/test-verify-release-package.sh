@@ -50,10 +50,12 @@ make_fixture() {
     local package_dir="$WORK_DIR/package"
     local app_dir="$WORK_DIR/SafeMac AV.app"
     local sparkle_dir="$app_dir/Contents/Frameworks/Sparkle.framework/Versions/B"
+    local helper_dir="$app_dir/Contents/Library/LoginItems/SafeMacAVBackground.app"
 
     mkdir -p \
         "$package_dir/appcast" \
         "$app_dir/Contents/MacOS" \
+        "$helper_dir/Contents/MacOS" \
         "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS" \
         "$sparkle_dir/Updater.app/Contents/MacOS" \
         "$sparkle_dir/XPCServices/Downloader.xpc/Contents/MacOS" \
@@ -86,7 +88,25 @@ make_fixture() {
 PLIST
     printf '#!/bin/bash\n' > "$app_dir/Contents/MacOS/ClamAV-GUI"
     printf 'finder\n' > "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
+    cat > "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleIdentifier</key><string>com.newtonlorenz.ClamAV-GUI.FinderSync</string>
+</dict></plist>
+PLIST
     chmod +x "$app_dir/Contents/MacOS/ClamAV-GUI"
+    printf '#!/bin/bash\n' > "$helper_dir/Contents/MacOS/SafeMacAVBackground"
+    chmod +x "$helper_dir/Contents/MacOS/SafeMacAVBackground"
+    cat > "$helper_dir/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleIdentifier</key><string>com.newtonlorenz.SafeMacAV.Background</string>
+    <key>CFBundleExecutable</key><string>SafeMacAVBackground</string>
+    <key>LSUIElement</key><true/>
+</dict></plist>
+PLIST
     chmod +x "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
 
     printf 'sparkle\n' > "$sparkle_dir/Sparkle"
@@ -120,7 +140,9 @@ let content = """
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
     <item>
-      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(try Data(contentsOf: URL(fileURLWithPath: dmgPath)).count)" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="\(archiveSignature)" />
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(try Data(contentsOf: URL(fileURLWithPath: dmgPath)).count)" sparkle:edSignature="\(archiveSignature)" />
     </item>
   </channel>
 </rss>
@@ -169,7 +191,17 @@ if [[ " $* " == *" -dv "* ]]; then
     fi
 fi
 if [[ " $* " == *" --entitlements :- "* && "$target" != "${MISSING_AUTOUPDATE_ENTITLEMENT_PATH:-}" ]]; then
-    printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
+    if [[ "$target" == */SafeMacAVBackground.app ]]; then
+        if [[ "${BACKGROUND_HELPER_ENTITLEMENT_MODE:-valid}" == "valid" ]]; then
+            printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><false/></dict></plist>"
+        elif [[ "${BACKGROUND_HELPER_ENTITLEMENT_MODE:-}" == "sandbox-true-with-unrelated-false" ]]; then
+            printf "%s\n" "<plist><dict><key>com.apple.security.app-sandbox</key><true/><key>com.apple.security.get-task-allow</key><false/></dict></plist>"
+        else
+            printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>unexpected</string></array></dict></plist>"
+        fi
+    else
+        printf "%s\n" "<plist><dict><key>com.apple.application-identifier</key><string>org.sparkle-project.Sparkle.Autoupdate</string></dict></plist>"
+    fi
 fi
 if [[ " $* " == *" --entitlements - --xml "* ]]; then
     if [[ "$target" == */SafeMac\ AV.app ]]; then
@@ -237,7 +269,8 @@ assert_mounted_cleanup_events() {
 
     mount_root="$(sed -n 's/^detach://p' "$WORK_DIR/mounted-cleanup-events.log")"
     [[ -n "$mount_root" ]] || fail "temporary DMG mount was not detached"
-    expected="unregister:$mount_root/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+    expected="unregister:$mount_root/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app
+unregister:$mount_root/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
 unregister:$mount_root/SafeMac AV.app
 detach:$mount_root"
     actual="$(cat "$WORK_DIR/mounted-cleanup-events.log")"
@@ -311,8 +344,10 @@ run_fixture_root_cleanup_case() {
         "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$WORK_DIR"
     LSREGISTER_BIN="$TEST_LSREGISTER_BIN" \
         "$PROJECT_DIR/scripts/clean-build-registrations.sh" "$OUTSIDE_WORK_DIR"
-    expected="unregister:$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+    expected="unregister:$WORK_DIR/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app
+unregister:$WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
 unregister:$WORK_DIR/SafeMac AV.app
+unregister:$OUTSIDE_WORK_DIR/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app
 unregister:$OUTSIDE_WORK_DIR/SafeMac AV.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
 unregister:$OUTSIDE_WORK_DIR/SafeMac AV.app"
     actual="$(cat "$CLEANUP_EVENT_LOG")"
@@ -348,13 +383,13 @@ run_embedded_feed_url_failure_cases() {
 }
 
 run_appcast_failure_case() {
-    perl -0pi -e 's/sparkle:version="3"/sparkle:version="4"/' "$WORK_DIR/package/appcast/appcast.xml"
+    perl -0pi -e 's|<sparkle:version>3</sparkle:version>|<sparkle:version>4</sparkle:version>|' "$WORK_DIR/package/appcast/appcast.xml"
     if PATH="$WORK_DIR/bin:$PATH" \
        SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
         "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
         fail "mismatched appcast version was accepted"
     fi
-    perl -0pi -e 's/sparkle:version="4"/sparkle:version="3"/' "$WORK_DIR/package/appcast/appcast.xml"
+    perl -0pi -e 's|<sparkle:version>4</sparkle:version>|<sparkle:version>3</sparkle:version>|' "$WORK_DIR/package/appcast/appcast.xml"
 }
 
 run_missing_appcast_failure_case() {
@@ -445,16 +480,57 @@ guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]),
 switch mode {
 case "misleading-version":
     content = content.replacingOccurrences(
-        of: #"sparkle:version="3""#,
-        with: #"data-sparkle:version="3" sparkle:version="999""#
+        of: "<sparkle:version>3</sparkle:version>",
+        with: "<data-sparkle:version>3</data-sparkle:version><sparkle:version>999</sparkle:version>"
     )
 case "misleading-short-version":
     content = content.replacingOccurrences(
-        of: #"sparkle:shortVersionString="1.2.0""#,
-        with: #"data-sparkle:shortVersionString="1.2.0" sparkle:shortVersionString="9.9.9""#
+        of: "<sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>",
+        with: "<data-sparkle:shortVersionString>1.2.0</data-sparkle:shortVersionString><sparkle:shortVersionString>9.9.9</sparkle:shortVersionString>"
     )
-case "single-quoted-version":
-    content = content.replacingOccurrences(of: #"sparkle:version="3""#, with: "sparkle:version='3'")
+case "version-on-enclosure":
+    content = content.replacingOccurrences(of: "<sparkle:version>3</sparkle:version>\n", with: "")
+    content = content.replacingOccurrences(of: "<enclosure ", with: "<enclosure sparkle:version=\"3\" ")
+case "duplicate-item-version":
+    content = content.replacingOccurrences(
+        of: "<sparkle:version>3</sparkle:version>",
+        with: "<sparkle:version>3</sparkle:version><sparkle:version>3</sparkle:version>"
+    )
+case "nested-item-version":
+    content = content.replacingOccurrences(
+        of: "<sparkle:version>3</sparkle:version>",
+        with: "<description><sparkle:version>3</sparkle:version></description>"
+    )
+case "nested-matching-item":
+    content = content.replacingOccurrences(
+        of: "<sparkle:version>3</sparkle:version>",
+        with: "<sparkle:version>999</sparkle:version>"
+    )
+    let expression = try NSRegularExpression(pattern: #"<enclosure\b[^>]*>"#)
+    let range = NSRange(content.startIndex..<content.endIndex, in: content)
+    guard let match = expression.firstMatch(in: content, range: range),
+          let swiftRange = Range(match.range, in: content) else { exit(2) }
+    let enclosure = String(content[swiftRange])
+    let nestedItem = """
+      <description><item>
+        <sparkle:version>3</sparkle:version>
+        <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+        \(enclosure)
+      </item></description>
+"""
+    content = content.replacingOccurrences(of: "  </channel>", with: nestedItem + "  </channel>")
+case "extra-decoy-item":
+    let decoyItem = """
+      <item>
+        <sparkle:version>4</sparkle:version>
+        <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+        <enclosure url="https://outside.example/decoy.dmg" length="0" sparkle:edSignature="invalid" />
+      </item>
+"""
+    content = content.replacingOccurrences(of: "  </channel>", with: decoyItem + "  </channel>")
+case "wrapped-rss":
+    content = content.replacingOccurrences(of: "<rss ", with: "<wrapper><rss ")
+    content = content.replacingOccurrences(of: "</rss>", with: "</rss></wrapper>")
 case "wrong-length":
     content = content.replacingOccurrences(of: #"length="9""#, with: #"length="999""#)
 case "url-user":
@@ -478,19 +554,12 @@ case "url-fragment":
         with: "https://downloads.example.com/SafeMac-AV.dmg#fragment"
     )
 case "commented-valid-invalid-real", "cdata-valid-invalid-real":
-    let expression = try NSRegularExpression(pattern: #"<enclosure\b[^>]*>"#)
-    let range = NSRange(content.startIndex..<content.endIndex, in: content)
-    guard let match = expression.firstMatch(in: content, range: range),
-          let swiftRange = Range(match.range, in: content) else { exit(2) }
-    let validEnclosure = String(content[swiftRange])
-    let invalidRealEnclosure = validEnclosure.replacingOccurrences(
-        of: #"sparkle:version="3""#,
-        with: #"sparkle:version="999""#
-    )
+    let validVersion = "<sparkle:version>3</sparkle:version>"
+    let invalidVersion = "<sparkle:version>999</sparkle:version>"
     let hiddenValidEnclosure = mode == "commented-valid-invalid-real"
-        ? "<!-- \(validEnclosure) -->"
-        : "<![CDATA[\(validEnclosure)]]>"
-    content.replaceSubrange(swiftRange, with: "\(hiddenValidEnclosure)\n      \(invalidRealEnclosure)")
+        ? "<!-- \(validVersion) -->"
+        : "<![CDATA[\(validVersion)]]>"
+    content = content.replacingOccurrences(of: validVersion, with: "\(hiddenValidEnclosure)\n      \(invalidVersion)")
 default:
     exit(2)
 }
@@ -509,7 +578,12 @@ run_exact_enclosure_metadata_failure_cases() {
     for mode in \
         misleading-version \
         misleading-short-version \
-        single-quoted-version \
+        version-on-enclosure \
+        duplicate-item-version \
+        nested-item-version \
+        nested-matching-item \
+        extra-decoy-item \
+        wrapped-rss \
         wrong-length \
         url-user \
         url-password \
@@ -583,7 +657,7 @@ let appcastData = try Data(contentsOf: appcastURL)
 let prefix = Data("<!-- sparkle-signatures:\n".utf8)
 guard let prefixRange = appcastData.range(of: prefix, options: [.backwards]) else { exit(1) }
 guard var content = String(data: appcastData[..<prefixRange.lowerBound], encoding: .utf8) else { exit(1) }
-let duplicate = #"      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" sparkle:version="3" sparkle:shortVersionString="1.2.0" sparkle:edSignature="duplicate" />"#
+    let duplicate = #"      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" sparkle:edSignature="duplicate" />"#
 content = content.replacingOccurrences(of: "    </item>", with: duplicate + "\n    </item>")
 let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
 let signedContent = Data(content.utf8)
@@ -631,6 +705,65 @@ run_nested_arch_failure_case() {
         "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
         fail "non-universal nested Sparkle component was accepted"
     fi
+}
+
+run_background_helper_presence_and_policy_failure_cases() {
+    local helper="$WORK_DIR/SafeMac AV.app/Contents/Library/LoginItems/SafeMacAVBackground.app"
+    local executable="$helper/Contents/MacOS/SafeMacAVBackground"
+
+    mv "$helper" "$helper.missing"
+    if PATH="$WORK_DIR/bin:$PATH" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted a missing background helper"
+    fi
+    mv "$helper.missing" "$helper"
+
+    if PATH="$WORK_DIR/bin:$PATH" \
+       NON_UNIVERSAL_PATH="$executable" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted a non-universal background helper"
+    fi
+
+    /usr/libexec/PlistBuddy -c 'Set :LSUIElement false' "$helper/Contents/Info.plist"
+    if PATH="$WORK_DIR/bin:$PATH" \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted a foreground-capable background helper"
+    fi
+    /usr/libexec/PlistBuddy -c 'Set :LSUIElement true' "$helper/Contents/Info.plist"
+
+    if PATH="$WORK_DIR/bin:$PATH" \
+       BACKGROUND_HELPER_ENTITLEMENT_MODE=invalid \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted invalid background helper entitlements"
+    fi
+
+    if PATH="$WORK_DIR/bin:$PATH" \
+       BACKGROUND_HELPER_ENTITLEMENT_MODE=sandbox-true-with-unrelated-false \
+       SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+        "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+        fail "release verifier accepted an enabled helper sandbox with an unrelated false entitlement"
+    fi
+
+    local signature_failure_variable
+    local -a signature_failure_variables=(
+        WRONG_TEAM_CODESIGN_PATH
+        ADHOC_CODESIGN_PATH
+        MISSING_TIMESTAMP_PATH
+        MISSING_RUNTIME_PATH
+    )
+    for signature_failure_variable in "${signature_failure_variables[@]}"; do
+        if env \
+            PATH="$WORK_DIR/bin:$PATH" \
+            "$signature_failure_variable=$helper" \
+            SAFEMAC_VERIFY_APP_PATH="$WORK_DIR/SafeMac AV.app" \
+            "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
+            fail "release verifier accepted invalid background helper signature policy: $signature_failure_variable"
+        fi
+    done
 }
 
 run_nested_signature_policy_failure_cases() {
@@ -698,6 +831,7 @@ main() {
     run_arch_failure_case
     run_nested_adhoc_failure_cases
     run_nested_arch_failure_case
+    run_background_helper_presence_and_policy_failure_cases
     run_nested_signature_policy_failure_cases
     run_missing_autoupdate_entitlement_case
     run_finder_entitlement_failure_cases

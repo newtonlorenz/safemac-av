@@ -6,43 +6,123 @@ import Sparkle
 
 @MainActor
 final class SoftwareUpdateManager: ObservableObject {
-    @Published private(set) var canCheckForUpdates = false
-
     let isConfigured: Bool
+    private(set) var hasStartedUpdater = false
+    private var hasPendingUpdateCheck = false
 
 #if canImport(Sparkle)
     private var updaterController: SPUStandardUpdaterController?
+    private var canCheckForUpdates = false
     private var canCheckObservation: NSKeyValueObservation?
 #endif
+    private var routeObserver: NSObjectProtocol?
+    private let isAutomatedTest: Bool
+    private let updaterStartHandler: (() -> Void)?
+    private let updateCheckHandler: (() -> Void)?
+    private let updateCheckReadinessHandler: (() -> Bool)?
 
     init(
         bundle: Bundle = .main,
-        startsUpdater: Bool = true,
-        isAutomatedTest: Bool = SoftwareUpdateManager.defaultIsAutomatedTest()
+        startsUpdater: Bool = false,
+        isAutomatedTest: Bool = SoftwareUpdateManager.defaultIsAutomatedTest(),
+        isConfiguredOverride: Bool? = nil,
+        updaterStartHandler: (() -> Void)? = nil,
+        updateCheckHandler: (() -> Void)? = nil,
+        updateCheckReadinessHandler: (() -> Bool)? = nil
     ) {
-        isConfigured = Self.hasRequiredSparkleConfiguration(bundle: bundle)
+        isConfigured = isConfiguredOverride ?? Self.hasRequiredSparkleConfiguration(bundle: bundle)
+        self.isAutomatedTest = isAutomatedTest
+        self.updaterStartHandler = updaterStartHandler
+        self.updateCheckHandler = updateCheckHandler
+        self.updateCheckReadinessHandler = updateCheckReadinessHandler
+            ?? (updateCheckHandler == nil ? nil : { true })
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: .checkForAppUpdates,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.checkForUpdates() }
+        }
 
 #if canImport(Sparkle)
-        guard isConfigured, startsUpdater, !isAutomatedTest else { return }
-
-        let controller = SPUStandardUpdaterController(
-            startingUpdater: true,
-            updaterDelegate: nil,
-            userDriverDelegate: nil
-        )
-        updaterController = controller
-        canCheckObservation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
-            Task { @MainActor in
-                self?.canCheckForUpdates = updater.canCheckForUpdates
+        if isConfigured, !isAutomatedTest, updaterStartHandler == nil {
+            let controller = SPUStandardUpdaterController(
+                startingUpdater: false,
+                updaterDelegate: nil,
+                userDriverDelegate: nil
+            )
+            updaterController = controller
+            canCheckObservation = controller.updater.observe(
+                \.canCheckForUpdates,
+                options: [.initial, .new]
+            ) { [weak self] updater, _ in
+                Task { @MainActor in
+                    self?.canCheckForUpdates = updater.canCheckForUpdates
+                    self?.updaterReadinessDidChange()
+                }
             }
         }
+#endif
+
+        if startsUpdater {
+            startUpdaterIfPossible()
+        }
+    }
+
+    func startUpdaterIfPossible() {
+        guard isConfigured, !isAutomatedTest, !hasStartedUpdater else { return }
+        hasStartedUpdater = true
+        if let updaterStartHandler {
+            updaterStartHandler()
+            return
+        }
+#if canImport(Sparkle)
+        updaterController?.startUpdater()
 #endif
     }
 
     func checkForUpdates() {
+        startUpdaterIfPossible()
+        guard hasStartedUpdater else { return }
+        guard isReadyForUpdateCheck else {
+            hasPendingUpdateCheck = true
+            return
+        }
+        performUpdateCheck()
+    }
+
+    /// Drains a user-initiated update check only after Sparkle reports it is ready.
+    func updaterReadinessDidChange() {
+        guard hasStartedUpdater, hasPendingUpdateCheck, isReadyForUpdateCheck else { return }
+        performUpdateCheck()
+    }
+
+    private var isReadyForUpdateCheck: Bool {
+        if let updateCheckReadinessHandler {
+            return updateCheckReadinessHandler()
+        }
+#if canImport(Sparkle)
+        return canCheckForUpdates
+#else
+        return false
+#endif
+    }
+
+    private func performUpdateCheck() {
+        hasPendingUpdateCheck = false
+        if let updateCheckHandler {
+            updateCheckHandler()
+            return
+        }
 #if canImport(Sparkle)
         updaterController?.checkForUpdates(nil)
 #endif
+    }
+
+    deinit {
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+        }
     }
 
     nonisolated static func hasRequiredSparkleConfiguration(bundle: Bundle) -> Bool {
@@ -88,4 +168,34 @@ final class SoftwareUpdateManager: ObservableObject {
     nonisolated private static func defaultIsAutomatedTest() -> Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
+}
+
+/// Coordinates the initial foreground launch so Sparkle cannot present its
+/// first-run consent sheet before required maintenance has completed.
+@MainActor
+final class SoftwareUpdateStartupCoordinator {
+    private var hasRunInitialMaintenance = false
+
+    func runInitialMaintenance(
+        launchMode: LaunchMode,
+        settingsProvider: () -> AppSettings,
+        isUITesting: Bool,
+        maintenance: () async -> Void,
+        afterMaintenance: () -> Void = {},
+        startUpdater: () -> Void
+    ) async {
+        guard !hasRunInitialMaintenance else { return }
+        hasRunInitialMaintenance = true
+        await maintenance()
+        afterMaintenance()
+        guard launchMode.isInteractive,
+              !launchMode.hidesDock(settings: settingsProvider(), isUITesting: isUITesting) else {
+            return
+        }
+        startUpdater()
+    }
+}
+
+extension Notification.Name {
+    static let checkForAppUpdates = Notification.Name("com.newtonlorenz.ClamAV-GUI.checkForAppUpdates")
 }
