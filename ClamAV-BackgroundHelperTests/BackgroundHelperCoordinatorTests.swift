@@ -162,19 +162,47 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+        let helperInfoPlist = helperBundle
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Info.plist", isDirectory: false)
         try PropertyListSerialization.data(
             fromPropertyList: ["CFBundleIdentifier": BackgroundHelperBundle.bundleIdentifier],
             format: .xml,
             options: 0
-        ).write(to: helperBundle.appendingPathComponent("Info.plist"))
-        XCTAssertFalse(BackgroundHelperBundle.isEmbeddedHelper(at: helperExecutable, in: root))
+        ).write(to: helperInfoPlist)
+        XCTAssertTrue(BackgroundHelperBundle.isEmbeddedHelper(
+            at: helperExecutable,
+            in: root,
+            staticCodeValidator: { _ in true }
+        ))
+        XCTAssertFalse(BackgroundHelperBundle.isEmbeddedHelper(
+            at: helperExecutable,
+            in: root,
+            staticCodeValidator: { _ in false }
+        ))
 
         try PropertyListSerialization.data(
             fromPropertyList: ["CFBundleIdentifier": "com.example.impostor"],
             format: .xml,
             options: 0
-        ).write(to: helperBundle.appendingPathComponent("Info.plist"))
-        XCTAssertFalse(BackgroundHelperBundle.isEmbeddedHelper(at: helperExecutable, in: root))
+        ).write(to: helperInfoPlist)
+        XCTAssertFalse(BackgroundHelperBundle.isEmbeddedHelper(
+            at: helperExecutable,
+            in: root,
+            staticCodeValidator: { _ in true }
+        ))
+
+        try FileManager.default.removeItem(at: helperInfoPlist)
+        try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": BackgroundHelperBundle.bundleIdentifier],
+            format: .xml,
+            options: 0
+        ).write(to: helperBundle.appendingPathComponent("Info.plist", isDirectory: false))
+        XCTAssertFalse(BackgroundHelperBundle.isEmbeddedHelper(
+            at: helperExecutable,
+            in: root,
+            staticCodeValidator: { _ in true }
+        ))
 
         let lookalikeRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: lookalikeRoot) }
