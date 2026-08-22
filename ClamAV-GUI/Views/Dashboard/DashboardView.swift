@@ -37,8 +37,8 @@ enum DashboardScoreActionHandler {
             appState.selectedTab = .settings
         case .updateSignatures:
             Task { await appState.updateSignatures() }
-        case .runQuickScan:
-            Task { await appState.startQuickScan() }
+        case .reviewScan:
+            appState.selectedTab = .scan
         case .enableMonitoring:
             appState.settings.monitoringEnabled = true
             appState.saveSettings()
