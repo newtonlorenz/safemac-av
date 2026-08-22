@@ -491,6 +491,33 @@ case "nested-item-version":
         of: "<sparkle:version>3</sparkle:version>",
         with: "<description><sparkle:version>3</sparkle:version></description>"
     )
+case "nested-matching-item":
+    content = content.replacingOccurrences(
+        of: "<sparkle:version>3</sparkle:version>",
+        with: "<sparkle:version>999</sparkle:version>"
+    )
+    let expression = try NSRegularExpression(pattern: #"<enclosure\b[^>]*>"#)
+    let range = NSRange(content.startIndex..<content.endIndex, in: content)
+    guard let match = expression.firstMatch(in: content, range: range),
+          let swiftRange = Range(match.range, in: content) else { exit(2) }
+    let enclosure = String(content[swiftRange])
+    let nestedItem = """
+      <description><item>
+        <sparkle:version>3</sparkle:version>
+        <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+        \(enclosure)
+      </item></description>
+"""
+    content = content.replacingOccurrences(of: "  </channel>", with: nestedItem + "  </channel>")
+case "extra-decoy-item":
+    let decoyItem = """
+      <item>
+        <sparkle:version>4</sparkle:version>
+        <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+        <enclosure url="https://outside.example/decoy.dmg" length="0" sparkle:edSignature="invalid" />
+      </item>
+"""
+    content = content.replacingOccurrences(of: "  </channel>", with: decoyItem + "  </channel>")
 case "wrong-length":
     content = content.replacingOccurrences(of: #"length="9""#, with: #"length="999""#)
 case "url-user":
@@ -541,6 +568,8 @@ run_exact_enclosure_metadata_failure_cases() {
         version-on-enclosure \
         duplicate-item-version \
         nested-item-version \
+        nested-matching-item \
+        extra-decoy-item \
         wrong-length \
         url-user \
         url-password \
