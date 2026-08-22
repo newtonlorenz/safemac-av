@@ -465,9 +465,36 @@ func firstMatch(_ pattern: String, in value: String) -> String? {
     return String(value[swiftRange])
 }
 
-final class EnclosureCollector: NSObject, XMLParserDelegate {
-    var enclosures: [[String: String]] = []
+struct AppcastItem {
+    let version: String
+    let shortVersion: String
+    let enclosures: [[String: String]]
+}
+
+final class AppcastItemCollector: NSObject, XMLParserDelegate {
+    private enum ItemField {
+        case version
+        case shortVersion
+    }
+
+    private struct MutableItem {
+        var versions: [String] = []
+        var shortVersions: [String] = []
+        var enclosures: [[String: String]] = []
+    }
+
+    var items: [AppcastItem] = []
     var parseError: Error?
+    var isMalformed = false
+    private var depth = 0
+    private var itemDepth: Int?
+    private var currentItem: MutableItem?
+    private var currentField: ItemField?
+    private var currentFieldText = ""
+
+    private func qualifiedName(_ elementName: String, _ qName: String?) -> String {
+        qName ?? elementName
+    }
 
     func parser(
         _ parser: XMLParser,
@@ -476,9 +503,103 @@ final class EnclosureCollector: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String]
     ) {
-        if elementName == "enclosure" || qName == "enclosure" {
-            enclosures.append(attributeDict)
+        depth += 1
+        let name = qualifiedName(elementName, qName)
+
+        if name == "item" {
+            guard currentItem == nil else {
+                isMalformed = true
+                return
+            }
+            currentItem = MutableItem()
+            itemDepth = depth
+            return
         }
+
+        guard let itemDepth, currentItem != nil else { return }
+        if currentField != nil, depth > itemDepth + 1 {
+            isMalformed = true
+        }
+        guard depth == itemDepth + 1 else { return }
+
+        switch name {
+        case "sparkle:version":
+            guard currentField == nil else {
+                isMalformed = true
+                return
+            }
+            currentField = .version
+            currentFieldText = ""
+        case "sparkle:shortVersionString":
+            guard currentField == nil else {
+                isMalformed = true
+                return
+            }
+            currentField = .shortVersion
+            currentFieldText = ""
+        case "enclosure":
+            currentItem?.enclosures.append(attributeDict)
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if currentField != nil {
+            currentFieldText.append(string)
+        }
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        let name = qualifiedName(elementName, qName)
+        if let itemDepth, depth == itemDepth + 1, let currentField {
+            let expectedName = currentField == .version
+                ? "sparkle:version"
+                : "sparkle:shortVersionString"
+            if name == expectedName {
+                let value = currentFieldText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !value.isEmpty else {
+                    isMalformed = true
+                    self.currentField = nil
+                    currentFieldText = ""
+                    depth -= 1
+                    return
+                }
+                switch currentField {
+                case .version:
+                    currentItem?.versions.append(value)
+                case .shortVersion:
+                    currentItem?.shortVersions.append(value)
+                }
+                self.currentField = nil
+                currentFieldText = ""
+            }
+        }
+
+        if name == "item", depth == itemDepth, let item = currentItem {
+            guard item.versions.count == 1, item.shortVersions.count == 1 else {
+                isMalformed = true
+                currentItem = nil
+                self.itemDepth = nil
+                depth -= 1
+                return
+            }
+            items.append(
+                AppcastItem(
+                    version: item.versions[0],
+                    shortVersion: item.shortVersions[0],
+                    enclosures: item.enclosures
+                )
+            )
+            currentItem = nil
+            self.itemDepth = nil
+        }
+        depth -= 1
     }
 
     func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
@@ -550,22 +671,25 @@ guard let content = String(data: contentData, encoding: .utf8) else {
 guard !containsSingleQuotedCriticalAttribute(content) else {
     fail("critical enclosure attributes must use double quotes")
 }
-let collector = EnclosureCollector()
+let collector = AppcastItemCollector()
 let parser = XMLParser(data: Data(contentData))
 parser.delegate = collector
 parser.shouldProcessNamespaces = false
 parser.shouldResolveExternalEntities = false
-guard parser.parse(), collector.parseError == nil else {
+guard parser.parse(), collector.parseError == nil, !collector.isMalformed else {
     fail("appcast XML is invalid")
 }
-let matchingEnclosures = collector.enclosures.filter { attributes in
-    attributes["sparkle:version"] == bundleVersion &&
-    attributes["sparkle:shortVersionString"] == shortVersion
+let matchingItems = collector.items.filter { item in
+    item.version == bundleVersion && item.shortVersion == shortVersion
 }
-guard matchingEnclosures.count == 1 else {
-    fail("expected exactly one matching appcast enclosure")
+guard matchingItems.count == 1, matchingItems[0].enclosures.count == 1 else {
+    fail("expected exactly one matching appcast item and enclosure")
 }
-let enclosure = matchingEnclosures[0]
+let enclosure = matchingItems[0].enclosures[0]
+guard enclosure["sparkle:version"] == nil,
+      enclosure["sparkle:shortVersionString"] == nil else {
+    fail("version metadata must be direct item-level elements")
+}
 guard let archiveSignatureBase64 = enclosure["sparkle:edSignature"],
       let archiveURLString = enclosure["url"],
       let archiveComponents = URLComponents(string: archiveURLString),
