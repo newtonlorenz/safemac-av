@@ -21,6 +21,11 @@ Use this checklist for a signed and notarized release. Publication is a separate
   - `SPARKLE_DOWNLOAD_URL_PREFIX`: credential-free HTTPS URL ending in `/`, without a query or fragment
   - `SPARKLE_PRIVATE_ED_KEY_BASE64`: base64 encoding of a modern Sparkle exported key file whose decoded seed is exactly 32 bytes
 - [ ] Confirm the Sparkle public key belongs to that private key. The workflow independently derives and compares it before importing the Developer ID certificate.
+- [ ] Run the read-only GitHub controls preflight before tagging:
+
+```bash
+./scripts/verify-github-release-controls.sh
+```
 
 ## Verify source
 

@@ -30,6 +30,7 @@ jobs:
           ./scripts/test-prepare-sparkle-release-key.sh
           ./scripts/test-create-dmg-signing.sh
           ./scripts/test-verify-release-package.sh
+          ./scripts/test-verify-github-release-controls.sh
           ./scripts/test-installed-sparkle-canary.sh
           ./scripts/test-run-installed-sparkle-canary.sh
 
