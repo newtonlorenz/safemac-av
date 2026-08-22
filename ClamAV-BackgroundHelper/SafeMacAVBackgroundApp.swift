@@ -135,7 +135,7 @@ final class BackgroundHelperNotificationCoordinator {
 final class SystemBackgroundHelperNotificationDelivery: BackgroundHelperNotificationDelivering {
     func authorizationStatus() async -> BackgroundHelperNotificationAuthorization {
         switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
-        case .authorized, .provisional, .ephemeral:
+        case .authorized, .provisional:
             return .authorized
         case .denied:
             return .denied

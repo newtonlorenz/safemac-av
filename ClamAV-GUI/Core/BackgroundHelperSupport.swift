@@ -47,7 +47,10 @@ enum BackgroundHelperBundle {
         let normalizedMainBundle = mainBundleURL.standardizedFileURL
         let expectedExecutable = executableURL(in: normalizedMainBundle).standardizedFileURL
         let normalizedExecutable = url.standardizedFileURL
-        guard normalizedExecutable == expectedExecutable else { return false }
+        guard normalizedExecutable == expectedExecutable,
+              hasNoSymlinkComponents(from: normalizedMainBundle, through: expectedExecutable) else {
+            return false
+        }
         let helperBundleURL = expectedExecutable
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -73,6 +76,32 @@ enum BackgroundHelperBundle {
               let requirement else { return false }
         return SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
+
+    /// Every path component from the main bundle to the helper executable must
+    /// be a real directory or file. `standardizedFileURL` is lexical and must
+    /// not be treated as a symlink-safety check.
+    static func hasNoSymlinkComponents(from root: URL, through leaf: URL) -> Bool {
+        let normalizedRoot = root.standardizedFileURL
+        let normalizedLeaf = leaf.standardizedFileURL
+        let rootPath = normalizedRoot.path
+        let leafPath = normalizedLeaf.path
+        guard leafPath == rootPath || leafPath.hasPrefix(rootPath + "/") else { return false }
+
+        var path = rootPath
+        var attributes = stat()
+        guard lstat(path, &attributes) == 0, (attributes.st_mode & S_IFMT) == S_IFDIR else {
+            return false
+        }
+        let suffix = leafPath.dropFirst(rootPath.count).split(separator: "/")
+        for component in suffix {
+            path += "/" + component
+            guard lstat(path, &attributes) == 0,
+                  (attributes.st_mode & S_IFMT) != S_IFLNK else {
+                return false
+            }
+        }
+        return true
+    }
 }
 
 enum FreshclamInvocationError: Error, Equatable {
@@ -94,10 +123,9 @@ struct FreshclamInvocation: Equatable {
         signatureDirectory: String,
         fileManager: FileManager = .default
     ) throws -> FreshclamInvocation {
-        guard isTrustedExecutable(at: executablePath, fileManager: fileManager) else {
+        guard let trustedExecutablePath = trustedExecutablePath(at: executablePath, fileManager: fileManager) else {
             throw FreshclamInvocationError.unsafeExecutable
         }
-        let resolvedExecutablePath = URL(fileURLWithPath: executablePath).resolvingSymlinksInPath().path
         guard configDirectory.hasPrefix("/"), signatureDirectory.hasPrefix("/") else {
             throw FreshclamInvocationError.unsafePath
         }
@@ -118,20 +146,27 @@ struct FreshclamInvocation: Equatable {
         arguments += ["--stdout", "--datadir=\(signatureDirectory)", "--verbose"]
         // Validate the resolved inode and execute that resolved path. This
         // prevents a later symlink retarget from changing what is launched.
-        return FreshclamInvocation(executablePath: resolvedExecutablePath, arguments: arguments)
+        return FreshclamInvocation(executablePath: trustedExecutablePath, arguments: arguments)
     }
 
     static func isTrustedExecutable(at path: String, fileManager: FileManager = .default) -> Bool {
-        guard path.hasPrefix("/"), fileManager.isExecutableFile(atPath: path) else { return false }
+        trustedExecutablePath(at: path, fileManager: fileManager) != nil
+    }
+
+    /// Resolve precisely once, validate the resolved regular file, and return
+    /// the same path the caller will execute.
+    static func trustedExecutablePath(at path: String, fileManager: FileManager = .default) -> String? {
+        guard path.hasPrefix("/") else { return nil }
         let resolvedPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard fileManager.isExecutableFile(atPath: resolvedPath) else { return nil }
         var attributes = stat()
         guard lstat(resolvedPath, &attributes) == 0,
               (attributes.st_mode & S_IFMT) == S_IFREG,
               (attributes.st_mode & 0o022) == 0,
               attributes.st_uid == 0 || attributes.st_uid == geteuid() else {
-            return false
+            return nil
         }
-        return true
+        return resolvedPath
     }
 }
 
