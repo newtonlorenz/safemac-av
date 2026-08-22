@@ -115,4 +115,23 @@ final class LaunchModeParserTests: XCTestCase {
             XCTAssertFalse(mode.consumesFinderRequests)
         }
     }
+
+    func testBackgroundWorkLeaseRejectsOverlappingAndSymlinkedLocks() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let first = BackgroundWorkLease(name: "signature-update", baseURL: root)
+        let second = BackgroundWorkLease(name: "signature-update", baseURL: root)
+        XCTAssertTrue(first.acquire())
+        XCTAssertFalse(second.acquire())
+        first.release()
+        XCTAssertTrue(second.acquire())
+        second.release()
+
+        let unsafe = root.appendingPathComponent("symlinked.lock")
+        try FileManager.default.createSymbolicLink(at: unsafe, withDestinationURL: URL(fileURLWithPath: "/tmp"))
+        let symlinked = BackgroundWorkLease(name: "symlinked", baseURL: root)
+        XCTAssertFalse(symlinked.acquire())
+    }
 }
