@@ -173,6 +173,8 @@ verify_app_bundle() {
     local expected_team_id
     local sparkle_framework
     local sparkle_version
+    local finder_extension
+    local finder_executable
 
     resolve_app_path
     executable_name="$(bundle_value CFBundleExecutable)"
@@ -188,6 +190,7 @@ verify_app_bundle() {
     contains_arch "$archs" x86_64 || fail "app executable is missing x86_64 slice: $archs"
 
     codesign --verify --strict --verbose=2 "$mounted_app_path"
+    xcrun stapler validate "$mounted_app_path"
     spctl --assess --type execute --verbose "$mounted_app_path"
 
     app_details="$(signature_details "$mounted_app_path")"
@@ -196,6 +199,7 @@ verify_app_bundle() {
     expected_team_id="$(sed -n 's/^TeamIdentifier=//p' <<< "$app_details" | head -1)"
     [[ -n "$expected_team_id" && "$expected_team_id" != "not set" ]] \
         || fail "app signature has no Developer ID Team identifier"
+    verify_distribution_code "$mounted_app_path" "$executable_path" "$expected_team_id"
 
     sparkle_framework="$mounted_app_path/Contents/Frameworks/Sparkle.framework"
     [[ -d "$sparkle_framework" ]] || fail "Sparkle framework not found: $sparkle_framework"
@@ -223,8 +227,12 @@ verify_app_bundle() {
         "$sparkle_version/Sparkle" \
         "$expected_team_id"
 
+    finder_extension="$mounted_app_path/Contents/PlugIns/ClamAV-GUI-Finder.appex"
+    finder_executable="$finder_extension/Contents/MacOS/ClamAV-GUI-Finder"
+    verify_distribution_code "$finder_extension" "$finder_executable" "$expected_team_id"
+
     codesign --verify --deep --strict --verbose=2 "$mounted_app_path"
-    info "mounted app and nested Sparkle code use Developer ID Team $expected_team_id, hardened runtime, secure timestamps, and universal architectures"
+    info "mounted app, Finder extension, and nested Sparkle code use Developer ID Team $expected_team_id, hardened runtime, secure timestamps, and universal architectures"
 }
 
 verify_appcast() {

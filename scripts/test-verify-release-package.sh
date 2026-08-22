@@ -37,6 +37,7 @@ make_fixture() {
     mkdir -p \
         "$package_dir/appcast" \
         "$app_dir/Contents/MacOS" \
+        "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS" \
         "$sparkle_dir/Updater.app/Contents/MacOS" \
         "$sparkle_dir/XPCServices/Downloader.xpc/Contents/MacOS" \
         "$sparkle_dir/XPCServices/Installer.xpc/Contents/MacOS" \
@@ -59,7 +60,9 @@ make_fixture() {
 </plist>
 PLIST
     printf '#!/bin/bash\n' > "$app_dir/Contents/MacOS/ClamAV-GUI"
+    printf 'finder\n' > "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
     chmod +x "$app_dir/Contents/MacOS/ClamAV-GUI"
+    chmod +x "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex/Contents/MacOS/ClamAV-GUI-Finder"
 
     printf 'sparkle\n' > "$sparkle_dir/Sparkle"
     printf 'autoupdate\n' > "$sparkle_dir/Autoupdate"
@@ -146,6 +149,7 @@ run_appcast_failure_case() {
         "$PROJECT_DIR/scripts/verify-release-package.sh" "$WORK_DIR/package" >/dev/null 2>&1; then
         fail "mismatched appcast version was accepted"
     fi
+    perl -0pi -e 's/sparkle:version="4"/sparkle:version="3"/' "$WORK_DIR/package/appcast/appcast.xml"
 }
 
 run_nested_adhoc_failure_cases() {
@@ -158,6 +162,7 @@ run_nested_adhoc_failure_cases() {
         "$sparkle_dir/XPCServices/Installer.xpc"
         "$sparkle_dir/Autoupdate"
         "$app_dir/Contents/Frameworks/Sparkle.framework"
+        "$app_dir/Contents/PlugIns/ClamAV-GUI-Finder.appex"
     )
 
     for component in "${components[@]}"; do

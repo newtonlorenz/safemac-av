@@ -16,6 +16,7 @@ ARCHIVE_PATH="$BUILD_DIR/$PROJECT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 APP_PATH="$EXPORT_PATH/$PRODUCT_NAME.app"
 DMG_PATH="$BUILD_DIR/$DMG_NAME.dmg"
+APP_ZIP_PATH="$BUILD_DIR/$PRODUCT_NAME.zip"
 TEMP_DMG_DIR="$BUILD_DIR/dmg-contents"
 BUILD_LOG="$BUILD_DIR/archive.log"
 ENTITLEMENTS_PATH="$PROJECT_DIR/$PROJECT_NAME/ClamAV_GUI.entitlements"
@@ -399,6 +400,32 @@ sign_app() {
     verify_signed_app_components
 }
 
+notarize_app() {
+    print_step "Submitting the signed app for notarization"
+    remove_file "$APP_ZIP_PATH"
+    (cd "$EXPORT_PATH" && ditto -c -k --keepParent "$PRODUCT_NAME.app" "$APP_ZIP_PATH")
+
+    if [[ -n "$NOTARY_PROFILE" ]]; then
+        xcrun notarytool submit "$APP_ZIP_PATH" \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --wait \
+            --timeout "$NOTARY_TIMEOUT"
+    else
+        xcrun notarytool submit "$APP_ZIP_PATH" \
+            --key "$NOTARY_KEY_PATH" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait \
+            --timeout "$NOTARY_TIMEOUT"
+    fi
+
+    print_step "Stapling and validating the app notarization ticket"
+    xcrun stapler staple "$APP_PATH"
+    xcrun stapler validate "$APP_PATH"
+    codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+    remove_file "$APP_ZIP_PATH"
+}
+
 create_dmg() {
     print_step "Creating the DMG"
     remove_tree "$TEMP_DMG_DIR"
@@ -472,6 +499,10 @@ main() {
 
     if [[ -n "$SIGNING_IDENTITY" ]]; then
         sign_app
+    fi
+
+    if notarization_enabled; then
+        notarize_app
     fi
 
     create_dmg
