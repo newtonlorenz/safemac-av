@@ -19,25 +19,17 @@ final class FreshclamRunner: FreshclamRunnerProtocol {
     }
 
     func update(using settings: AppSettings) async throws -> UpdateResult {
-        guard FileManager.default.isExecutableFile(atPath: settings.freshclamPath) else {
+        let invocation: FreshclamInvocation
+        do {
+            invocation = try FreshclamInvocation.make(
+                executablePath: settings.freshclamPath,
+                configDirectory: settings.configDirectory,
+                signatureDirectory: settings.signatureDirectory
+            )
+        } catch {
             throw FreshclamError.executableNotFound(settings.freshclamPath)
         }
-
-        let signatureDirectory = URL(fileURLWithPath: settings.signatureDirectory)
-        if !FileManager.default.fileExists(atPath: signatureDirectory.path) {
-            try FileManager.default.createDirectory(at: signatureDirectory, withIntermediateDirectories: true)
-        }
-
-        var args: [String] = []
-        let configFile = URL(fileURLWithPath: settings.configDirectory).appendingPathComponent("freshclam.conf")
-        if FileManager.default.fileExists(atPath: configFile.path) {
-            args.append("--config-file=\(configFile.path)")
-        }
-        args.append("--stdout")
-        args.append("--datadir=\(settings.signatureDirectory)")
-        args.append("--verbose")
-
-        let completed = try await runFreshclam(executablePath: settings.freshclamPath, arguments: args)
+        let completed = try await runFreshclam(executablePath: invocation.executablePath, arguments: invocation.arguments)
         return Self.parseUpdateOutput(completed.output, exitCode: completed.exitCode)
     }
 

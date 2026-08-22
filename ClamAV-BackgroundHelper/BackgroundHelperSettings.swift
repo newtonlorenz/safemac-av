@@ -4,8 +4,15 @@ import Foundation
 struct BackgroundHelperSettings: Equatable {
     let autoUpdateSignatures: Bool
     let freshclamPath: String?
+    let configDirectory: String?
+    let signatureDirectory: String?
 
-    static let safeDefaults = BackgroundHelperSettings(autoUpdateSignatures: false, freshclamPath: nil)
+    static let safeDefaults = BackgroundHelperSettings(
+        autoUpdateSignatures: false,
+        freshclamPath: nil,
+        configDirectory: nil,
+        signatureDirectory: nil
+    )
 }
 
 /// Watches the containing directory rather than the JSON file, so atomic file
@@ -17,7 +24,6 @@ final class BackgroundHelperSettingsStore {
     private let fileManager: FileManager
     private let lock = NSLock()
     private var lastKnownGood: BackgroundHelperSettings?
-    private var directoryDescriptor: Int32 = -1
     private var source: DispatchSourceFileSystemObject?
 
     init(settingsURL: URL, fileManager: FileManager = .default) {
@@ -29,13 +35,6 @@ final class BackgroundHelperSettingsStore {
     }
 
     deinit {
-        let source = source
-        self.source = nil
-        if directoryDescriptor >= 0 {
-            close(directoryDescriptor)
-            directoryDescriptor = -1
-        }
-        source?.setCancelHandler {}
         source?.cancel()
     }
 
@@ -57,10 +56,17 @@ final class BackgroundHelperSettingsStore {
     func startWatching(onReload: @escaping (BackgroundHelperSettings) -> Void = { _ in }) {
         guard source == nil else { return }
         let directory = settingsURL.deletingLastPathComponent()
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let descriptor = open(directory.path, O_EVTONLY)
+        if !fileManager.fileExists(atPath: directory.path) {
+            do {
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+                try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            } catch {
+                return
+            }
+        }
+        guard isSafeOwnerOnlyDirectory(at: directory) else { return }
+        let descriptor = open(directory.path, O_EVTONLY | O_NOFOLLOW)
         guard descriptor >= 0 else { return }
-        directoryDescriptor = descriptor
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
             eventMask: [.write, .rename],
@@ -70,26 +76,30 @@ final class BackgroundHelperSettingsStore {
             guard let self else { return }
             onReload(self.reload())
         }
-        source.setCancelHandler { [weak self] in
-            guard let self, self.directoryDescriptor >= 0 else { return }
-            close(self.directoryDescriptor)
-            self.directoryDescriptor = -1
-        }
+        source.setCancelHandler { close(descriptor) }
         self.source = source
         source.resume()
     }
 
     private func decodeSettings(at url: URL) -> BackgroundHelperSettings? {
-        guard let data = try? Data(contentsOf: url),
+        guard isSafeOwnerOnlyDirectory(at: settingsURL.deletingLastPathComponent()),
+              isSafeOwnerOnlyRegularFile(at: url),
+              let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let autoUpdateSignatures = object["autoUpdateSignatures"] as? Bool else {
             return nil
         }
         let freshclamPath = object["freshclamPath"] as? String
-        guard freshclamPath == nil || freshclamPath!.hasPrefix("/") else { return nil }
+        let configDirectory = object["configDirectory"] as? String
+        let signatureDirectory = object["signatureDirectory"] as? String
+        guard freshclamPath == nil || freshclamPath!.hasPrefix("/"),
+              configDirectory == nil || configDirectory!.hasPrefix("/"),
+              signatureDirectory == nil || signatureDirectory!.hasPrefix("/") else { return nil }
         return BackgroundHelperSettings(
             autoUpdateSignatures: autoUpdateSignatures,
-            freshclamPath: freshclamPath
+            freshclamPath: freshclamPath,
+            configDirectory: configDirectory,
+            signatureDirectory: signatureDirectory
         )
     }
 
@@ -101,7 +111,9 @@ final class BackgroundHelperSettingsStore {
     private func persistLastKnownGood(_ settings: BackgroundHelperSettings) {
         guard let data = try? JSONSerialization.data(withJSONObject: [
             "autoUpdateSignatures": settings.autoUpdateSignatures,
-            "freshclamPath": settings.freshclamPath as Any
+            "freshclamPath": settings.freshclamPath as Any,
+            "configDirectory": settings.configDirectory as Any,
+            "signatureDirectory": settings.signatureDirectory as Any
         ], options: [.sortedKeys]) else { return }
         do {
             try data.write(to: lastKnownGoodURL, options: .atomic)
@@ -112,11 +124,22 @@ final class BackgroundHelperSettingsStore {
     }
 
     private func isSafeOwnerOnlyRegularFile(at url: URL) -> Bool {
-        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
-              attributes[.type] as? FileAttributeType == .typeRegular,
-              attributes[.ownerAccountID] as? NSNumber == NSNumber(value: geteuid()),
-              let mode = attributes[.posixPermissions] as? NSNumber,
-              mode.intValue & 0o077 == 0 else {
+        var attributes = stat()
+        guard lstat(url.path, &attributes) == 0,
+              attributes.st_uid == geteuid(),
+              (attributes.st_mode & S_IFMT) == S_IFREG,
+              (attributes.st_mode & 0o077) == 0 else {
+            return false
+        }
+        return true
+    }
+
+    private func isSafeOwnerOnlyDirectory(at url: URL) -> Bool {
+        var attributes = stat()
+        guard lstat(url.path, &attributes) == 0,
+              attributes.st_uid == geteuid(),
+              (attributes.st_mode & S_IFMT) == S_IFDIR,
+              (attributes.st_mode & 0o077) == 0 else {
             return false
         }
         return true

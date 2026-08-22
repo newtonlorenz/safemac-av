@@ -59,6 +59,63 @@ enum BackgroundHelperBundle {
     }
 }
 
+enum FreshclamInvocationError: Error, Equatable {
+    case unsafeExecutable
+    case unsafePath
+    case signatureDirectoryCreationFailed
+}
+
+/// Shared command construction keeps foreground and helper updates on the
+/// same freshclam contract: configuration, data directory, stdout and verbose
+/// output. Both callers validate the executable before it is ever launched.
+struct FreshclamInvocation: Equatable {
+    let executablePath: String
+    let arguments: [String]
+
+    static func make(
+        executablePath: String,
+        configDirectory: String,
+        signatureDirectory: String,
+        fileManager: FileManager = .default
+    ) throws -> FreshclamInvocation {
+        guard isTrustedExecutable(at: executablePath, fileManager: fileManager) else {
+            throw FreshclamInvocationError.unsafeExecutable
+        }
+        guard configDirectory.hasPrefix("/"), signatureDirectory.hasPrefix("/") else {
+            throw FreshclamInvocationError.unsafePath
+        }
+        let signatureURL = URL(fileURLWithPath: signatureDirectory, isDirectory: true)
+        do {
+            if !fileManager.fileExists(atPath: signatureURL.path) {
+                try fileManager.createDirectory(at: signatureURL, withIntermediateDirectories: true)
+            }
+        } catch {
+            throw FreshclamInvocationError.signatureDirectoryCreationFailed
+        }
+        let configFile = URL(fileURLWithPath: configDirectory, isDirectory: true)
+            .appendingPathComponent("freshclam.conf")
+        var arguments = [String]()
+        if fileManager.fileExists(atPath: configFile.path) {
+            arguments.append("--config-file=\(configFile.path)")
+        }
+        arguments += ["--stdout", "--datadir=\(signatureDirectory)", "--verbose"]
+        return FreshclamInvocation(executablePath: executablePath, arguments: arguments)
+    }
+
+    static func isTrustedExecutable(at path: String, fileManager: FileManager = .default) -> Bool {
+        guard path.hasPrefix("/"), fileManager.isExecutableFile(atPath: path) else { return false }
+        let resolvedPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        var attributes = stat()
+        guard lstat(resolvedPath, &attributes) == 0,
+              (attributes.st_mode & S_IFMT) == S_IFREG,
+              (attributes.st_mode & 0o022) == 0,
+              attributes.st_uid == 0 || attributes.st_uid == geteuid() else {
+            return false
+        }
+        return true
+    }
+}
+
 enum BackgroundRoute: String, CaseIterable {
     case open
     case settings
@@ -108,24 +165,37 @@ final class BackgroundRouteRequestStore {
     }
 
     func consume() -> BackgroundRoute? {
+        guard let route = peek(), acknowledge(route) else { return nil }
+        return route
+    }
+
+    func peek() -> BackgroundRoute? {
         guard isSafeRegularFile(at: requestURL),
-              let rawValue = try? String(contentsOf: requestURL, encoding: .utf8),
-              let route = BackgroundRoute.parse(rawValue) else {
+              let rawValue = try? String(contentsOf: requestURL, encoding: .utf8) else {
             return nil
+        }
+        return BackgroundRoute.parse(rawValue)
+    }
+
+    /// Acknowledge only the route just dispatched. A changed request remains
+    /// durable for the next drain instead of being deleted as stale work.
+    func acknowledge(_ route: BackgroundRoute) -> Bool {
+        guard isSafeRegularFile(at: requestURL),
+              (try? String(contentsOf: requestURL, encoding: .utf8)) == route.rawValue else {
+            return false
         }
         do {
             try fileManager.removeItem(at: requestURL)
-            return route
+            return true
         } catch {
-            return nil
+            return false
         }
     }
 
     /// Drops a request only after proving it is our owner-only regular file.
     /// Used if canonical main-app launch fails, preventing later replay.
-    func discard() {
-        guard isSafeRegularFile(at: requestURL) else { return }
-        try? fileManager.removeItem(at: requestURL)
+    func discard(_ route: BackgroundRoute) {
+        _ = acknowledge(route)
     }
 
     private func isSafeRegularFile(at url: URL) -> Bool {

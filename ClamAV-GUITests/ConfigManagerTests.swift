@@ -51,6 +51,18 @@ final class ConfigManagerTests: XCTestCase {
         XCTAssertEqual(configManager.lastSettingsLoadState, .loaded)
     }
 
+    func testSaveSettingsUsesOwnerOnlyDirectoryAndFilePermissions() throws {
+        try configManager.saveSettings(.default)
+
+        let appDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI")
+        let settingsURL = appDirectory.appendingPathComponent("settings.json")
+        let directoryAttributes = try FileManager.default.attributesOfItem(atPath: appDirectory.path)
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: settingsURL.path)
+
+        XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+        XCTAssertEqual((fileAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
     func testLoadCorruptedSettingsReturnsDefaultsWithoutOverwritingFile() throws {
         let appDirectory = tempDirectory.appendingPathComponent("ClamAV-GUI", isDirectory: true)
         try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: false)

@@ -121,7 +121,6 @@ final class AppState: ObservableObject {
         resolvedNotificationManager.setupNotificationCategories()
         if startsInteractiveBackgroundServices {
             setupNotifications()
-            drainBackgroundRouteRequests()
             setupFileWatcherAutoScan()
             configureMonitoring()
         }
@@ -197,22 +196,24 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func handleBackgroundRoute(_ route: BackgroundRoute) {
+    private func handleBackgroundRoute(_ route: BackgroundRoute) -> Bool {
         switch route {
         case .open:
-            MainWindowControllerRegistry.shared.showMainWindow(selecting: .dashboard)
+            return MainWindowControllerRegistry.shared.showMainWindow(selecting: .dashboard)
         case .settings:
-            MainWindowControllerRegistry.shared.showMainWindow(selecting: .settings)
+            return MainWindowControllerRegistry.shared.showMainWindow(selecting: .settings)
         case .checkForUpdates:
             NotificationCenter.default.post(name: .checkForAppUpdates, object: nil)
+            return true
         }
     }
 
     @discardableResult
     func drainBackgroundRouteRequests() -> Int {
+        guard MainWindowControllerRegistry.shared.isRouterAvailable else { return 0 }
         var count = 0
-        while let route = backgroundRouteRequestStore.consume() {
-            handleBackgroundRoute(route)
+        while let route = backgroundRouteRequestStore.peek() {
+            guard handleBackgroundRoute(route), backgroundRouteRequestStore.acknowledge(route) else { break }
             count += 1
         }
         return count

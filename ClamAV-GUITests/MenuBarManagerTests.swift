@@ -67,6 +67,22 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(waiterCalls, 2)
     }
 
+    func testMainWindowRegistryDefersColdRouteUntilRouterIsInstalled() {
+        let registry = MainWindowControllerRegistry()
+        var readyCalls = 0
+        registry.whenRouterAvailable { readyCalls += 1 }
+
+        XCTAssertFalse(registry.isRouterAvailable)
+        XCTAssertFalse(registry.showMainWindow(selecting: .settings))
+        XCTAssertEqual(readyCalls, 0)
+
+        registry.installRouter { _ in }
+
+        XCTAssertTrue(registry.isRouterAvailable)
+        XCTAssertEqual(readyCalls, 1)
+        XCTAssertTrue(registry.showMainWindow(selecting: .settings))
+    }
+
     func testConcreteMainWindowControllerRetainsOneWindowAndExactSharedState() throws {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)

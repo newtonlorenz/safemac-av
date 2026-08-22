@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Security
 
 @main
 final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
@@ -68,12 +69,13 @@ final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
 private enum MainAppHandoff {
     private static let bundleURL = URL(fileURLWithPath: "/Applications/SafeMac AV.app", isDirectory: true)
     private static let mainBundleIdentifier = "com.newtonlorenz.ClamAV-GUI"
+    private static let teamIdentifier = "CQPH8YR62A"
 
     static func send(_ route: BackgroundRoute) {
         BackgroundRouteHandoff(
             requestStore: BackgroundRouteRequestStore(),
             validateMainApplication: {
-                Bundle(url: bundleURL)?.bundleIdentifier == mainBundleIdentifier
+                canonicalMainApplicationIsTrusted()
             },
             openMainApplication: { completion in
                 NSWorkspace.shared.openApplication(at: bundleURL, configuration: .init()) { _, error in
@@ -89,6 +91,27 @@ private enum MainAppHandoff {
             }
         ).send(route)
     }
+
+    private static func canonicalMainApplicationIsTrusted() -> Bool {
+        var attributes = stat()
+        guard lstat(bundleURL.path, &attributes) == 0,
+              (attributes.st_mode & S_IFMT) == S_IFDIR,
+              Bundle(url: bundleURL)?.bundleIdentifier == mainBundleIdentifier else {
+            return false
+        }
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(bundleURL as CFURL, [], &code) == errSecSuccess,
+              let code else {
+            return false
+        }
+        let requirementString = "identifier \(mainBundleIdentifier) and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(requirementString as CFString, [], &requirement) == errSecSuccess,
+              let requirement else {
+            return false
+        }
+        return SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess
+    }
 }
 
 final class BackgroundSignatureUpdater {
@@ -100,13 +123,22 @@ final class BackgroundSignatureUpdater {
     }()
 
     private let settingsStore: BackgroundHelperSettingsStore
+    private let execute: (FreshclamInvocation, TimeInterval) -> Void
 
-    init(settingsURL: URL? = nil) {
+    init(
+        settingsURL: URL? = nil,
+        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = BackgroundSignatureUpdater.execute
+    ) {
         settingsStore = BackgroundHelperSettingsStore(settingsURL: settingsURL ?? Self.defaultSettingsURL)
+        self.execute = execute
     }
 
-    init(settingsStore: BackgroundHelperSettingsStore) {
+    init(
+        settingsStore: BackgroundHelperSettingsStore,
+        execute: @escaping (FreshclamInvocation, TimeInterval) -> Void = BackgroundSignatureUpdater.execute
+    ) {
         self.settingsStore = settingsStore
+        self.execute = execute
     }
 
     func runIfAvailable() {
@@ -117,15 +149,31 @@ final class BackgroundSignatureUpdater {
         let settings = settingsStore.reload()
         guard settings.autoUpdateSignatures,
               let executablePath = settings.freshclamPath,
-              FileManager.default.isExecutableFile(atPath: executablePath) else {
+              let configDirectory = settings.configDirectory,
+              let signatureDirectory = settings.signatureDirectory,
+              let invocation = try? FreshclamInvocation.make(
+                executablePath: executablePath,
+                configDirectory: configDirectory,
+                signatureDirectory: signatureDirectory
+              ) else {
             return
         }
+        execute(invocation, 300)
+    }
+
+    private static func execute(_ invocation: FreshclamInvocation, timeout: TimeInterval) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.executableURL = URL(fileURLWithPath: invocation.executablePath)
+        process.arguments = invocation.arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
+            let deadline = Date().addingTimeInterval(timeout)
+            while process.isRunning, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            if process.isRunning { process.terminate() }
             process.waitUntilExit()
         } catch {
             return
