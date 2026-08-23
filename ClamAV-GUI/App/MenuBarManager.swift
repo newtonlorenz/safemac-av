@@ -56,6 +56,48 @@ extension NSApplication: ApplicationActivationPolicyApplying {
 }
 
 @MainActor
+enum ApplicationTerminationReason {
+    case menuBarQuit
+    case scheduledLaunchCompletion
+}
+
+@MainActor
+protocol ApplicationTerminating: AnyObject {
+    func terminate(_ sender: Any?)
+}
+
+extension NSApplication: ApplicationTerminating {}
+
+@MainActor
+protocol ApplicationTerminationAuthorizing: AnyObject {
+    func requestTermination(reason: ApplicationTerminationReason)
+    func applicationShouldTerminate() -> NSApplication.TerminateReply
+}
+
+@MainActor
+final class ApplicationTerminationController: ApplicationTerminationAuthorizing {
+    static let shared = ApplicationTerminationController(application: NSApplication.shared)
+
+    private let application: ApplicationTerminating
+    private var authorizedReason: ApplicationTerminationReason?
+
+    init(application: ApplicationTerminating) {
+        self.application = application
+    }
+
+    func requestTermination(reason: ApplicationTerminationReason) {
+        authorizedReason = reason
+        application.terminate(nil)
+    }
+
+    func applicationShouldTerminate() -> NSApplication.TerminateReply {
+        guard authorizedReason != nil else { return .terminateCancel }
+        authorizedReason = nil
+        return .terminateNow
+    }
+}
+
+@MainActor
 final class MenuBarManager: ObservableObject {
     @Published private(set) var isDockHidden = false
 
@@ -97,6 +139,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
     private var runActiveInteractiveMaintenance: (LaunchMode) async -> Void
     private var runScheduledSignatureUpdate: () async -> Void
     private var finishScheduledLaunch: () -> Void
+    private var terminationController: ApplicationTerminationAuthorizing
     private var launchConfigurationRegistry: ApplicationLaunchConfigurationRegistry?
     private var mainWindowController: MainWindowControlling?
     private var isWaitingForMainWindowControllerFactory = false
@@ -134,8 +177,9 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         runActiveInteractiveMaintenance = { _ in }
         runScheduledSignatureUpdate = {}
         finishScheduledLaunch = {
-            NSApplication.shared.terminate(nil)
+            ApplicationTerminationController.shared.requestTermination(reason: .scheduledLaunchCompletion)
         }
+        terminationController = ApplicationTerminationController.shared
         launchConfigurationRegistry = ApplicationLaunchConfigurationRegistry.shared
         isConfiguredForLaunch = false
         super.init()
@@ -155,6 +199,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         runActiveInteractiveMaintenance: @escaping (LaunchMode) async -> Void = { _ in },
         runScheduledSignatureUpdate: @escaping () async -> Void = {},
         finishScheduledLaunch: @escaping () -> Void = {},
+        terminationController: ApplicationTerminationAuthorizing? = nil,
         startsConfigured: Bool = true,
         launchConfigurationRegistry: ApplicationLaunchConfigurationRegistry? = nil
     ) {
@@ -168,6 +213,7 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         self.runActiveInteractiveMaintenance = runActiveInteractiveMaintenance
         self.runScheduledSignatureUpdate = runScheduledSignatureUpdate
         self.finishScheduledLaunch = finishScheduledLaunch
+        self.terminationController = terminationController ?? ApplicationTerminationController.shared
         self.launchConfigurationRegistry = launchConfigurationRegistry
         isConfiguredForLaunch = startsConfigured && launchConfigurationRegistry == nil
         super.init()
@@ -387,6 +433,10 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        terminationController.applicationShouldTerminate()
     }
 
     private func startActiveMaintenance() {

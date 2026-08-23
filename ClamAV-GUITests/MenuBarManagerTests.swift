@@ -331,6 +331,34 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertTrue(delegateType.init() is MenuBarApplicationDelegate)
     }
 
+    func testApplicationDelegateCancelsRegularApplicationQuitRequests() {
+        let terminationController = ApplicationTerminationControllerMock()
+        let delegate = MenuBarApplicationDelegate(
+            manager: MenuBarManager(application: MenuBarApplicationMock()),
+            settingsProvider: { .default },
+            argumentsProvider: { [] },
+            terminationController: terminationController
+        )
+
+        let reply = delegate.applicationShouldTerminate(NSApplication.shared)
+
+        XCTAssertEqual(reply, .terminateCancel)
+        XCTAssertEqual(terminationController.shouldTerminateCalls, 1)
+    }
+
+    func testTerminationControllerAllowsOnlyExplicitMenuBarQuit() {
+        let application = ApplicationTerminationMock()
+        let controller = ApplicationTerminationController(application: application)
+
+        XCTAssertEqual(controller.applicationShouldTerminate(), .terminateCancel)
+
+        controller.requestTermination(reason: .menuBarQuit)
+
+        XCTAssertEqual(application.terminateCalls, 1)
+        XCTAssertEqual(controller.applicationShouldTerminate(), .terminateNow)
+        XCTAssertEqual(controller.applicationShouldTerminate(), .terminateCancel)
+    }
+
     func testHidingDockRequestsAccessoryActivationPolicy() {
         let application = MenuBarApplicationMock()
         let manager = MenuBarManager(application: application)
@@ -386,6 +414,18 @@ final class MenuBarManagerTests: XCTestCase {
         )
         let installFactory = try XCTUnwrap(source.range(of: "MainWindowControllerRegistry.shared.installFactory"))
         XCTAssertLessThan(installConfiguration.lowerBound, installFactory.lowerBound)
+    }
+
+    func testMenuBarQuitButtonUsesAuthorizedTerminationPath() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("ClamAV-GUI/Views/MenuBar/MenuBarPopoverView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("ApplicationTerminationController.shared.requestTermination(reason: .menuBarQuit)"))
     }
 
     func testVisibleInteractiveDelegateLazilyCreatesAndRetainsOneMainWindowController() async {
@@ -1150,4 +1190,25 @@ private final class MenuBarApplicationMock: ApplicationActivationPolicyApplying 
         return result
     }
 
+}
+
+@MainActor
+private final class ApplicationTerminationMock: ApplicationTerminating {
+    private(set) var terminateCalls = 0
+
+    func terminate(_ sender: Any?) {
+        terminateCalls += 1
+    }
+}
+
+@MainActor
+private final class ApplicationTerminationControllerMock: ApplicationTerminationAuthorizing {
+    private(set) var shouldTerminateCalls = 0
+
+    func requestTermination(reason: ApplicationTerminationReason) {}
+
+    func applicationShouldTerminate() -> NSApplication.TerminateReply {
+        shouldTerminateCalls += 1
+        return .terminateCancel
+    }
 }

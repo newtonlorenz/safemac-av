@@ -16,7 +16,9 @@ struct MenuBarPopoverView: View {
         self.showMainWindowAction = showMainWindowAction ?? {
             MainWindowControllerRegistry.shared.showMainWindow(selecting: $0)
         }
-        self.quitAction = quitAction ?? { NSApplication.shared.terminate(nil) }
+        self.quitAction = quitAction ?? {
+            ApplicationTerminationController.shared.requestTermination(reason: .menuBarQuit)
+        }
     }
 
     var body: some View {
