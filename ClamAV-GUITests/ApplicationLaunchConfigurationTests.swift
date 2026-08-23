@@ -482,4 +482,6 @@ private final class LaunchConfigurationMainWindowControllerMock: MainWindowContr
         selections.append(selection)
         onShow?()
     }
+
+    func closeMainWindow() {}
 }

@@ -6,6 +6,7 @@ typealias MainWindowActivationOperation = @MainActor @Sendable () -> Void
 @MainActor
 protocol MainWindowControlling: AnyObject {
     func showMainWindow(selecting selection: NavigationTab?)
+    func closeMainWindow()
 }
 
 @MainActor
@@ -14,6 +15,7 @@ final class MainWindowControllerRegistry {
 
     private var factory: (() -> MainWindowControlling?)?
     private var router: ((NavigationTab?) -> Void)?
+    private var closeRouter: (() -> Void)?
     private var routerAvailabilityWaiters: [() -> Void] = []
     private var factoryAvailabilityWaiters: [() -> Void] = []
 
@@ -43,6 +45,10 @@ final class MainWindowControllerRegistry {
         waiters.forEach { $0() }
     }
 
+    func installCloseRouter(_ closeRouter: @escaping () -> Void) {
+        self.closeRouter = closeRouter
+    }
+
     var isRouterAvailable: Bool { router != nil }
 
     func whenRouterAvailable(_ operation: @escaping () -> Void) {
@@ -57,6 +63,13 @@ final class MainWindowControllerRegistry {
     func showMainWindow(selecting selection: NavigationTab?) -> Bool {
         guard let router else { return false }
         router(selection)
+        return true
+    }
+
+    @discardableResult
+    func closeMainWindow() -> Bool {
+        guard let closeRouter else { return false }
+        closeRouter()
         return true
     }
 }
@@ -128,6 +141,10 @@ final class MainWindowController: MainWindowControlling {
         window.deminiaturize(nil)
         window.orderFront(nil)
         scheduleActivationIfNeeded()
+    }
+
+    func closeMainWindow() {
+        windowController.window?.performClose(nil)
     }
 
     private func scheduleActivationIfNeeded() {

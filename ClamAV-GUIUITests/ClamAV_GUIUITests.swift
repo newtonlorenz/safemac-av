@@ -122,6 +122,31 @@ final class ClamAV_GUIUITests: XCTestCase {
         XCTAssertEqual(app.windows.matching(identifier: "main-window").count, 1)
     }
 
+    func testQuittingForegroundWindowKeepsMenuBarAppRunning() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
+        app.launch()
+
+        openMainWindow(in: app)
+        app.typeKey("q", modifierFlags: .command)
+
+        XCTAssertTrue(
+            app.windows["main-window"].waitForNonExistence(timeout: 3),
+            "Expected Command-Q from the foreground window to close that window"
+        )
+        XCTAssertTrue(
+            app.wait(for: .runningForeground, timeout: 3) || app.wait(for: .runningBackground, timeout: 3),
+            "Expected SafeMac AV to keep running after its foreground window closed"
+        )
+
+        let stabilityDeadline = Date().addingTimeInterval(1)
+        repeat {
+            XCTAssertNotEqual(app.state, .notRunning, "SafeMac AV terminated after closing its foreground window")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        } while Date() < stabilityDeadline
+    }
+
     func testLaunchAtLoginSettingShowsCurrentStatus() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
