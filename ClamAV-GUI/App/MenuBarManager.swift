@@ -228,6 +228,9 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
         MainWindowControllerRegistry.shared.installRouter { [weak self] selection in
             self?.showMainWindow(selecting: selection)
         }
+        MainWindowControllerRegistry.shared.installCloseRouter { [weak self] in
+            self?.closeMainWindow()
+        }
         continueApplicationLaunchIfReady()
     }
 
@@ -387,6 +390,10 @@ final class MenuBarApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    private func closeMainWindow() {
+        mainWindowController?.closeMainWindow()
     }
 
     private func startActiveMaintenance() {

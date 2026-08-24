@@ -125,6 +125,15 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertEqual(selections[1], .settings)
     }
 
+    func testMainWindowRegistryRoutesForegroundCloseWithoutCreatingAController() {
+        let registry = MainWindowControllerRegistry()
+        var closeCalls = 0
+        registry.installCloseRouter { closeCalls += 1 }
+
+        XCTAssertTrue(registry.closeMainWindow())
+        XCTAssertEqual(closeCalls, 1)
+    }
+
     func testMainWindowRegistryResumesFactoryWaitersExactlyOnce() {
         let registry = MainWindowControllerRegistry()
         var waiterCalls = 0
@@ -377,6 +386,8 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertFalse(source.contains("MainWindowPresentationBridge"))
         XCTAssertFalse(source.contains("OpenWindowAction"))
         XCTAssertTrue(source.contains("MenuBarExtra"))
+        XCTAssertTrue(source.contains("CommandGroup(replacing: .appTermination)"))
+        XCTAssertTrue(source.contains("MainWindowControllerRegistry.shared.closeMainWindow()"))
         XCTAssertFalse(source.contains("@StateObject private var initialLaunchHandler"))
         XCTAssertFalse(source.contains("applicationDelegate.configure"))
         XCTAssertTrue(source.contains("SoftwareUpdateManager(startsUpdater: false)"))
@@ -1041,6 +1052,8 @@ private final class MainWindowControllerMock: MainWindowControlling {
         selections.append(selection)
         onShow?()
     }
+
+    func closeMainWindow() {}
 }
 
 @MainActor

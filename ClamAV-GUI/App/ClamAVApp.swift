@@ -207,6 +207,7 @@ struct ClamAVApp: App {
         }
         .menuBarExtraStyle(.window)
         .commands {
+            ForegroundAppCommands()
             AppUpdateCommands(updater: softwareUpdateManager)
             ScanCommands()
         }
@@ -231,6 +232,17 @@ struct ClamAVApp: App {
         return nil
     }
 
+}
+
+struct ForegroundAppCommands: Commands {
+    var body: some Commands {
+        CommandGroup(replacing: .appTermination) {
+            Button("Close SafeMac AV") {
+                MainWindowControllerRegistry.shared.closeMainWindow()
+            }
+            .keyboardShortcut("q")
+        }
+    }
 }
 
 struct ScanCommands: Commands {
