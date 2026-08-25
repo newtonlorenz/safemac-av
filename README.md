@@ -110,7 +110,7 @@ SafeMac AV remains available from its shield in the menu bar after the main wind
 
 For a guided environment check, run `./setup.sh`. It is read-only by default; installation and configuration changes require explicit flags shown by `./setup.sh --help`.
 
-## Build and test
+## Build and test from source
 
 Build the Release configuration from the command line without a signing identity:
 
@@ -132,69 +132,15 @@ Run the interactive UI smoke test on a logged-in Mac. Unlike the headless unit s
 
 These wrappers use dedicated temporary DerivedData and unregister their app bundles when each command exits. The hosted CI workflow intentionally omits UI automation because macOS UI tests require both a locally signable test host and a reliable logged-in window session. An ad-hoc or development-signed local test run is sufficient; forcing `CODE_SIGNING_ALLOWED=NO` terminates the UI runner before the test can execute.
 
-## Local packages and releases
+## Build a local DMG
 
-The distribution helper creates `build/SafeMac-AV.dmg` in three explicit modes:
+Create an unsigned DMG for local testing:
 
 ```bash
-# Unsigned local DMG for testing
 ./scripts/create-dmg.sh
-
-# Signed local DMG; not notarized
-SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
-  ./scripts/create-dmg.sh
-
-# Signed, submitted with a notarytool Keychain profile, and stapled
-SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
-NOTARY_PROFILE='safemac-av-notary' \
-  ./scripts/create-dmg.sh
-
-# Signed, submitted with an App Store Connect API key, and stapled
-SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
-NOTARY_KEY_PATH='/path/to/AuthKey_ABC123DEFG.p8' \
-NOTARY_KEY_ID='ABC123DEFG' \
-NOTARY_ISSUER_ID='00000000-0000-0000-0000-000000000000' \
-  ./scripts/create-dmg.sh
 ```
 
-Create the Keychain profile separately with `xcrun notarytool store-credentials`. Credentials should stay in Keychain or in an external `.p8` file outside the repository and must never be committed or passed as plain-text script arguments. The resulting DMG and `SHA256SUMS.txt` are written under the ignored `build/` directory. Only the notarization modes submit to Apple; they staple both the app bundle and DMG and verify nested embedded code before publication.
-If Keychain contains duplicate Developer ID certificate names, set `SIGNING_IDENTITY` to the SHA-1 hash shown by `security find-identity -v -p codesigning`.
-
-Maintainers can also run the manual **Release package** GitHub Actions workflow to build a signed, notarized, stapled app-in-DMG package and checksum file without publishing a GitHub Release. Configure a protected GitHub environment named `release` with required maintainer reviewers, and store the release secrets in that environment. Add a GitHub tag ruleset for `refs/tags/v*` that blocks updates and deletions and limits tag creation to designated release maintainers. The workflow job runs only when dispatched from `main`; its `release_ref` must be a full annotated tag ref such as `refs/tags/v1.2.0`, and the resolved tag commit must equal the freshly fetched current `origin/main` HEAD. The workflow resolves and compares the tag before exposing any release secret, then checks out the immutable commit SHA. It requires these secrets:
-
-- `DEVELOPER_ID_CERTIFICATE_BASE64`: base64-encoded Developer ID Application `.p12`
-- `DEVELOPER_ID_CERTIFICATE_PASSWORD`: password for that `.p12`
-- `RELEASE_KEYCHAIN_PASSWORD`: temporary CI keychain password
-- `NOTARY_KEY_BASE64`: base64-encoded App Store Connect API `.p8`
-- `NOTARY_KEY_ID`: App Store Connect API key ID
-- `NOTARY_ISSUER_ID`: App Store Connect issuer ID
-- `SPARKLE_PRIVATE_ED_KEY_BASE64`: base64 encoding of the modern private-key file exported by Sparkle `generate_keys -x` (the exported file must decode to a 32-byte Ed25519 seed)
-
-Set repository variables `SPARKLE_FEED_URL`, `SPARKLE_PUBLIC_ED_KEY`, and `SPARKLE_DOWNLOAD_URL_PREFIX` to embed app-update configuration in release builds and generate appcasts with published DMG URLs. Both URLs must be credential-free HTTPS URLs, the download prefix must end in `/`, and the public key must be canonical base64 for exactly 32 bytes. Before importing the Developer ID certificate, the release workflow decodes the private-key file under the runner's temporary directory with mode `0600`, derives its public key, and rejects any public/private mismatch. The temporary key is removed even if a later step fails. If the feed URL or public key is missing from a non-release local build, SafeMac AV disables its app-update UI instead of checking a placeholder feed. Generate a local appcast from a directory containing release archives with:
-
-```bash
-SPARKLE_PRIVATE_ED_KEY='/path/to/sparkle_private_ed_key' \
-SPARKLE_DOWNLOAD_URL_PREFIX='https://example.com/downloads/' \
-  ./scripts/generate-appcast.sh build/appcast
-```
-
-Before replacing the currently installed app, verify that the signed appcast advertises exactly one newer update to that installed build. Both canary scripts require a deep, strict Developer ID Application signature from Team `CQPH8YR62A`, hardened runtime, secure timestamp, and Gatekeeper trust:
-
-```bash
-./scripts/verify-installed-sparkle-canary.sh "/Applications/SafeMac AV.app" build/appcast/appcast.xml build/SafeMac-AV.dmg
-```
-
-After publishing the appcast and DMG, run the installed-app Sparkle canary against a temporary copy of the installed app. The canary requires Sparkle 2's `sparkle-cli`; it does not mutate the source app bundle:
-
-```bash
-SAFEMAC_CANARY_EXPECT_UPDATE=1 \
-SAFEMAC_CANARY_INSTALL=1 \
-SPARKLE_CLI='/path/to/sparkle.app/Contents/MacOS/sparkle' \
-  ./scripts/run-installed-sparkle-canary.sh
-```
-
-Release publication remains a separate, explicit step after downloading and verifying the workflow artifacts.
-See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) for the full release gate.
+The script writes `SafeMac-AV.dmg` and `SHA256SUMS.txt` to the ignored `build/` directory. Maintainers should follow the [release checklist](docs/RELEASE_CHECKLIST.md) for signing, notarization, appcast generation, canary checks, and publication.
 
 ## Security and privacy model
 
@@ -248,7 +194,7 @@ Bug reports, focused fixes, tests, and accessibility improvements are welcome. S
 
 The checked-in `com.newtonlorenz.*` identifiers identify the upstream project. If you distribute a fork, change the app, extension, test, notification, LaunchAgent, and app-group identifiers to a namespace you control; see the fork checklist in the contributing guide.
 
-## License and credit
+## License
 
 SafeMac AV is available under the [MIT License](LICENSE). You may use, modify, and distribute it, including commercially. The license requires copies or substantial portions to retain the copyright and permission notice:
 

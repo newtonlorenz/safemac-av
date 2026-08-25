@@ -22,6 +22,8 @@ Use this checklist for a signed and notarized release. Publication is a separate
   - `SPARKLE_PRIVATE_ED_KEY_BASE64`: base64 encoding of a modern Sparkle exported key file whose decoded seed is exactly 32 bytes
 - [ ] Confirm the Sparkle public key belongs to that private key. The workflow independently derives and compares it before importing the Developer ID certificate.
 
+The release workflow stores the decoded private key in the runner's temporary directory with mode `0600`, rejects public/private key mismatches, and removes the temporary key even if a later step fails. A non-release local build without a feed URL or public key disables the app-update UI instead of checking a placeholder feed.
+
 ## Verify source
 
 Run locally before tagging:
@@ -30,6 +32,53 @@ Run locally before tagging:
 ./scripts/run-tests.sh unit
 ./scripts/run-tests.sh release
 ```
+
+## Create a local package
+
+Create an unsigned DMG for local testing:
+
+```bash
+./scripts/create-dmg.sh
+```
+
+Create a signed local DMG without notarizing it:
+
+```bash
+SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+  ./scripts/create-dmg.sh
+```
+
+Create a signed, notarized, and stapled package with a `notarytool` Keychain profile:
+
+```bash
+SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+NOTARY_PROFILE='safemac-av-notary' \
+  ./scripts/create-dmg.sh
+```
+
+Alternatively, use an App Store Connect API key stored outside the repository:
+
+```bash
+SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+NOTARY_KEY_PATH='/path/to/AuthKey_ABC123DEFG.p8' \
+NOTARY_KEY_ID='ABC123DEFG' \
+NOTARY_ISSUER_ID='00000000-0000-0000-0000-000000000000' \
+  ./scripts/create-dmg.sh
+```
+
+Create the Keychain profile separately with `xcrun notarytool store-credentials`. Keep credentials in Keychain or in an external `.p8` file. Never commit credentials or pass them as plain-text script arguments. The script writes the DMG and `SHA256SUMS.txt` under the ignored `build/` directory. Notarization modes submit to Apple, staple the app and DMG, and verify nested code.
+
+If Keychain contains duplicate certificate names, set `SIGNING_IDENTITY` to the SHA-1 hash reported by `security find-identity -v -p codesigning`.
+
+To test appcast generation locally, place the release archives in a separate directory. Generate the appcast in that directory:
+
+```bash
+SPARKLE_PRIVATE_ED_KEY='/path/to/sparkle_private_ed_key' \
+SPARKLE_DOWNLOAD_URL_PREFIX='https://example.com/downloads/' \
+  ./scripts/generate-appcast.sh build/local-appcast
+```
+
+Do not replace the appcast downloaded from the **Release package** workflow with this local output.
 
 ## Tag and package
 
