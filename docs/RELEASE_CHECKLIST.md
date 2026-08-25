@@ -70,6 +70,16 @@ Create the Keychain profile separately with `xcrun notarytool store-credentials`
 
 If Keychain contains duplicate certificate names, set `SIGNING_IDENTITY` to the SHA-1 hash reported by `security find-identity -v -p codesigning`.
 
+To test appcast generation locally, place the release archives in a separate directory. Generate the appcast in that directory:
+
+```bash
+SPARKLE_PRIVATE_ED_KEY='/path/to/sparkle_private_ed_key' \
+SPARKLE_DOWNLOAD_URL_PREFIX='https://example.com/downloads/' \
+  ./scripts/generate-appcast.sh build/local-appcast
+```
+
+Do not replace the appcast downloaded from the **Release package** workflow with this local output.
+
 ## Tag and package
 
 Do not package final release assets from a moving branch ref. After release publication is approved:
@@ -92,14 +102,6 @@ shasum -a 256 -c SHA256SUMS.txt
 
 - [ ] Confirm the verifier reports the embedded `SafeMacAVBackground.app` helper. It must be Developer-ID signed by Team `CQPH8YR62A`, hardened, timestamped, universal, `LSUIElement=true`, and free of Sparkle.
 - [ ] Exercise launch-at-login migration on an installed build: legacy main-app item enabled, helper registration/approval, helper enablement, legacy removal, and disable rollback. If a downgrade is needed during this one-release bridge, disable launch at login before installing the pre-helper build and re-enable it from that build; do not assume an old build can recreate the helper migration automatically.
-
-- [ ] Generate a local appcast from a directory containing release archives:
-
-```bash
-SPARKLE_PRIVATE_ED_KEY='/path/to/sparkle_private_ed_key' \
-SPARKLE_DOWNLOAD_URL_PREFIX='https://example.com/downloads/' \
-  ./scripts/generate-appcast.sh build/appcast
-```
 
 - [ ] Before replacing the currently installed app, verify the signed appcast advertises exactly one newer update to that installed build. The verifier requires a deep, strict Developer ID Application signature from Team `CQPH8YR62A`, hardened runtime, secure timestamp, and Gatekeeper trust:
 
