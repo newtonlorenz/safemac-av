@@ -4,8 +4,13 @@ All notable project changes will be documented in this file. The format follows 
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-28
+
 ### Added
 
+- A native macOS login-item control with enabled, disabled, approval-required, and unavailable status feedback in Settings.
+- Real daily or weekly per-user scheduling for automatic ClamAV malware-signature updates, with transactional rollback and privacy-safe result notifications.
+- Sparkle-based app-update checking, guarded by release-provided feed URL and public EdDSA key configuration.
 - An embedded, hardened macOS 13+ background login-item helper for launch at login, the persistent menu bar, and automatic signature-update launches.
 - Transactional migration from the legacy main-app login item, shared symlink-resistant background-work leases, and release verification for the embedded helper.
 - Documented one-release launch-at-login downgrade recovery: disable the helper login item before installing a pre-helper build, then re-enable the legacy login item from that build.
@@ -13,22 +18,19 @@ All notable project changes will be documented in this file. The format follows 
 
 ### Changed
 
+- The local DMG helper can notarize with either a notarytool Keychain profile or App Store Connect API key credentials and always writes `SHA256SUMS.txt`.
+- The release-package workflow can embed Sparkle app-update settings and generate a signed appcast artifact when the Sparkle private key secret is configured.
 - New automatic signature schedules invoke only the embedded helper with a fixed flag; the foreground app keeps the legacy scheduled-update handler for one compatibility release.
 - Freshclam success parsing now fails closed for every nonzero exit, and helper/main handoff code requirements require the Apple generic anchor, exact bundle identifier, and Team ID.
 - Sparkle now defers its first-run consent until visible interactive launch maintenance completes; hidden and scheduled modes start it only through an explicit Check for Updates action.
+- SafeMac AV now keeps its menu-bar process running when Command-Q closes the foreground window; full termination remains available from the tray Quit action.
 
-## [1.2.0] - 2026-08-22
+### Fixed
 
-### Added
-
-- A native macOS login-item control with enabled, disabled, approval-required, and unavailable status feedback in Settings.
-- Real daily or weekly per-user scheduling for automatic ClamAV malware-signature updates, with transactional rollback and privacy-safe result notifications.
-- Sparkle-based app-update checking, guarded by release-provided feed URL and public EdDSA key configuration.
-
-### Changed
-
-- The local DMG helper can notarize with either a notarytool Keychain profile or App Store Connect API key credentials and always writes `SHA256SUMS.txt`.
-- The release-package workflow can embed Sparkle app-update settings and generate a signed appcast artifact when the Sparkle private key secret is configured.
+- Restored reliable foreground-window presentation after background startup and made launch-at-login registration retryable when macOS reports the service as not found.
+- Made Recent Scan review navigation-only so it cannot accidentally start another scan.
+- Prevented local build products from leaving duplicate Finder-extension registrations behind.
+- Preserved Finder scan requests across contention, restart, and acknowledgement failures without exposing selected paths through notifications.
 
 ### Security
 
