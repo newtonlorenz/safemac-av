@@ -133,7 +133,9 @@ let content = """
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
     <item>
-      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(dmgData.count)" sparkle:version="\(updateVersion)" sparkle:shortVersionString="1.2.0" sparkle:edSignature="\(archiveSignature)" />
+      <sparkle:version>\(updateVersion)</sparkle:version>
+      <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(dmgData.count)" sparkle:edSignature="\(archiveSignature)" />
     </item>
   </channel>
 </rss>
@@ -187,8 +189,8 @@ case "url-fragment":
     )
 case "misleading-version":
     content = content.replacingOccurrences(
-        of: #"sparkle:version="3""#,
-        with: #"data-sparkle:version="3" sparkle:version="1""#
+        of: #"<sparkle:version>3</sparkle:version>"#,
+        with: #"<data-sparkle:version>3</data-sparkle:version><sparkle:version>1</sparkle:version>"#
     )
 case "commented-valid-invalid-real", "cdata-valid-invalid-real":
     let expression = try NSRegularExpression(pattern: #"<enclosure\b[^>]*>"#)
@@ -197,8 +199,8 @@ case "commented-valid-invalid-real", "cdata-valid-invalid-real":
           let swiftRange = Range(match.range, in: content) else { exit(2) }
     let validEnclosure = String(content[swiftRange])
     let invalidRealEnclosure = validEnclosure.replacingOccurrences(
-        of: #"sparkle:version="3""#,
-        with: #"sparkle:version="1""#
+        of: "https://downloads.example.com/SafeMac-AV.dmg",
+        with: "https://user@downloads.example.com/SafeMac-AV.dmg"
     )
     let hiddenValidEnclosure = mode == "commented-valid-invalid-real"
         ? "<!-- \(validEnclosure) -->"
@@ -280,7 +282,7 @@ guard var content = String(data: appcastData[..<prefixRange.lowerBound], encodin
 let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
 let dmgData = try Data(contentsOf: URL(fileURLWithPath: dmgPath))
 let archiveSignature = try privateKey.signature(for: dmgData).base64EncodedString()
-let duplicate = #"      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\#(dmgData.count)" sparkle:version="4" sparkle:shortVersionString="1.3.0" sparkle:edSignature="\#(archiveSignature)" />"#
+let duplicate = #"      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\#(dmgData.count)" sparkle:edSignature="\#(archiveSignature)" />"#
 content = content.replacingOccurrences(of: "    </item>", with: duplicate + "\n    </item>")
 let signedContent = Data(content.utf8)
 let feedSignature = try privateKey.signature(for: signedContent).base64EncodedString()
