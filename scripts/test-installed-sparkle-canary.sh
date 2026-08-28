@@ -213,12 +213,129 @@ try signedAppcast.write(to: appcastURL, atomically: true, encoding: .utf8)
 SWIFT
 }
 
+write_item_version_appcast() {
+    local update_version="$1"
+    local info_plist="$2"
+    local dmg_path="$3"
+    local appcast_path="$4"
+    local metadata_mode="${5:-version-before-enclosure}"
+
+    swift - "$update_version" "$info_plist" "$dmg_path" "$appcast_path" "$WORK_DIR/sparkle-public-key.txt" "$metadata_mode" <<'SWIFT'
+import CryptoKit
+import Foundation
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+let updateVersion = arguments[0]
+let infoPlistPath = arguments[1]
+let dmgPath = arguments[2]
+let appcastPath = arguments[3]
+let publicKeyPath = arguments[4]
+let metadataMode = arguments[5]
+
+let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
+let publicKeyBase64 = privateKey.publicKey.rawRepresentation.base64EncodedString()
+let dmgData = try Data(contentsOf: URL(fileURLWithPath: dmgPath))
+let archiveSignature = try privateKey.signature(for: dmgData).base64EncodedString()
+let itemBody: String
+
+switch metadataMode {
+case "version-before-enclosure":
+    itemBody = """
+      <title>1.2.0</title>
+      <sparkle:version>\(updateVersion)</sparkle:version>
+      <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(dmgData.count)" sparkle:edSignature="\(archiveSignature)" />
+"""
+case "enclosure-before-version":
+    itemBody = """
+      <title>1.2.0</title>
+      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(dmgData.count)" sparkle:edSignature="\(archiveSignature)" />
+      <sparkle:version>\(updateVersion)</sparkle:version>
+      <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+"""
+case "nested-version-only":
+    itemBody = """
+      <title>1.2.0</title>
+      <description>
+        <sparkle:version>\(updateVersion)</sparkle:version>
+        <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+      </description>
+      <enclosure url="https://downloads.example.com/SafeMac-AV.dmg" length="\(dmgData.count)" sparkle:edSignature="\(archiveSignature)" />
+"""
+default:
+    exit(2)
+}
+let content = """
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <item>
+\(itemBody)
+    </item>
+  </channel>
+</rss>
+"""
+let signedContent = Data((content + "\n").utf8)
+let feedSignature = try privateKey.signature(for: signedContent).base64EncodedString()
+let signedAppcast = "\(content)\n<!-- sparkle-signatures:\nedSignature: \(feedSignature)\nlength: \(signedContent.count)\n-->\n"
+try signedAppcast.write(to: URL(fileURLWithPath: appcastPath), atomically: true, encoding: .utf8)
+try publicKeyBase64.write(to: URL(fileURLWithPath: publicKeyPath), atomically: true, encoding: .utf8)
+let plist = try String(contentsOfFile: infoPlistPath, encoding: .utf8)
+try plist.replacingOccurrences(of: "__SPARKLE_PUBLIC_ED_KEY__", with: publicKeyBase64)
+    .write(to: URL(fileURLWithPath: infoPlistPath), atomically: true, encoding: .utf8)
+SWIFT
+}
+
 run_success_case() {
     EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX="https://downloads.example.com/" \
-        "$PROJECT_DIR/scripts/verify-installed-sparkle-canary.sh" \
+    "$PROJECT_DIR/scripts/verify-installed-sparkle-canary.sh" \
         "$WORK_DIR/SafeMac AV.app" \
         "$WORK_DIR/package/appcast/appcast.xml" \
         "$WORK_DIR/package/SafeMac-AV.dmg" >/dev/null
+}
+
+run_item_version_success_case() {
+    cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+    write_item_version_appcast "3" \
+        "$WORK_DIR/SafeMac AV.app/Contents/Info.plist" \
+        "$WORK_DIR/package/SafeMac-AV.dmg" \
+        "$WORK_DIR/package/appcast/appcast.xml"
+    EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX="https://downloads.example.com/" \
+    "$PROJECT_DIR/scripts/verify-installed-sparkle-canary.sh" \
+        "$WORK_DIR/SafeMac AV.app" \
+        "$WORK_DIR/package/appcast/appcast.xml" \
+        "$WORK_DIR/package/SafeMac-AV.dmg" >/dev/null
+    mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+
+    cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+    write_item_version_appcast "3" \
+        "$WORK_DIR/SafeMac AV.app/Contents/Info.plist" \
+        "$WORK_DIR/package/SafeMac-AV.dmg" \
+        "$WORK_DIR/package/appcast/appcast.xml" \
+        "enclosure-before-version"
+    EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX="https://downloads.example.com/" \
+    "$PROJECT_DIR/scripts/verify-installed-sparkle-canary.sh" \
+        "$WORK_DIR/SafeMac AV.app" \
+        "$WORK_DIR/package/appcast/appcast.xml" \
+        "$WORK_DIR/package/SafeMac-AV.dmg" >/dev/null
+    mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
+}
+
+run_nested_item_version_failure_case() {
+    cp "$WORK_DIR/package/appcast/appcast.xml" "$WORK_DIR/package/appcast/appcast.xml.bak"
+    write_item_version_appcast "3" \
+        "$WORK_DIR/SafeMac AV.app/Contents/Info.plist" \
+        "$WORK_DIR/package/SafeMac-AV.dmg" \
+        "$WORK_DIR/package/appcast/appcast.xml" \
+        "nested-version-only"
+    if EXPECTED_SPARKLE_DOWNLOAD_URL_PREFIX="https://downloads.example.com/" \
+        "$PROJECT_DIR/scripts/verify-installed-sparkle-canary.sh" \
+            "$WORK_DIR/SafeMac AV.app" \
+            "$WORK_DIR/package/appcast/appcast.xml" \
+            "$WORK_DIR/package/SafeMac-AV.dmg" >/dev/null 2>&1; then
+        fail "nested item-level appcast metadata was accepted"
+    fi
+    mv "$WORK_DIR/package/appcast/appcast.xml.bak" "$WORK_DIR/package/appcast/appcast.xml"
 }
 
 run_same_version_failure_case() {
@@ -422,6 +539,8 @@ main() {
     export LSREGISTER_BIN LSREGISTER_LOG
     make_fixture
     run_success_case
+    run_item_version_success_case
+    run_nested_item_version_failure_case
     run_signature_policy_failure_cases
     run_test_fixture_override_case
     run_test_fixture_override_scope_case
