@@ -216,7 +216,13 @@ if [[ " $* " == *" --entitlements - --xml "* ]]; then
     printf "%s\n" "<plist><dict><key>com.apple.security.application-groups</key><array><string>$group</string></array><key>com.apple.security.app-sandbox</key><$sandbox/></dict></plist>"
 fi
 exit 0'
-    write_fake_tool spctl 'exit 0'
+    write_fake_tool spctl '
+target="${!#}"
+if [[ "$target" == *.dmg ]]; then
+    [[ " $* " == *" --type open "* ]] || exit 2
+    [[ " $* " == *" --context context:primary-signature "* ]] || exit 2
+fi
+exit 0'
     write_fake_tool xcrun '[[ "${1:-}" == "stapler" && "${2:-}" == "validate" ]] || exit 2'
     write_fake_tool lipo '
 target="${!#}"

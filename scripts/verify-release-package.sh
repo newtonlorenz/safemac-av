@@ -217,7 +217,7 @@ verify_dmg_trust() {
 
     codesign --verify --strict --verbose=2 "$DMG_PATH"
     xcrun stapler validate "$DMG_PATH"
-    spctl --assess --type open --verbose "$DMG_PATH"
+    spctl --assess --type open --context context:primary-signature --verbose "$DMG_PATH"
     info "DMG signature, stapled ticket, and Gatekeeper assessment"
 }
 
