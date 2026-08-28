@@ -7,9 +7,48 @@ struct ScanProgress: Equatable {
     var infectedCount: Int
     var startTime: Date
     var estimatedTimeRemaining: TimeInterval?
+    var bytesScanned: Int64
+    var estimatedTotalFiles: Int?
+    var estimatedTotalBytes: Int64?
+
+    init(
+        status: ScanStatus,
+        currentFile: String?,
+        filesScanned: Int,
+        infectedCount: Int,
+        startTime: Date,
+        estimatedTimeRemaining: TimeInterval? = nil,
+        bytesScanned: Int64 = 0,
+        estimatedTotalFiles: Int? = nil,
+        estimatedTotalBytes: Int64? = nil
+    ) {
+        self.status = status
+        self.currentFile = currentFile
+        self.filesScanned = filesScanned
+        self.infectedCount = infectedCount
+        self.startTime = startTime
+        self.estimatedTimeRemaining = estimatedTimeRemaining
+        self.bytesScanned = bytesScanned
+        self.estimatedTotalFiles = estimatedTotalFiles
+        self.estimatedTotalBytes = estimatedTotalBytes
+    }
 
     var elapsedTime: TimeInterval {
         Date().timeIntervalSince(startTime)
+    }
+
+    var fractionComplete: Double? {
+        if let estimatedTotalBytes, estimatedTotalBytes > 0 {
+            return min(1, max(0, Double(bytesScanned) / Double(estimatedTotalBytes)))
+        }
+        if let estimatedTotalFiles, estimatedTotalFiles > 0 {
+            return min(1, max(0, Double(filesScanned) / Double(estimatedTotalFiles)))
+        }
+        return nil
+    }
+
+    var percentComplete: Int? {
+        fractionComplete.map { Int(($0 * 100).rounded(.down)) }
     }
 }
 

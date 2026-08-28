@@ -41,9 +41,10 @@ per-user launchd
 1. A view creates a `ScanRequest` with selected URLs and immutable `ScanOptions`.
 2. `AppState` validates the configured ClamAV installation.
 3. `ScanCoordinator` prevents overlapping scans and owns cancellation state.
-4. `ClamAVRunner` launches `clamscan`, or a configured local `clamdscan`, with an argument array rather than a shell command.
-5. Stdout and stderr are parsed into progress, detections, and a `ScanReport`. ClamAV exit code `1` means detections were found; higher codes are failures.
-6. When requested, detections are passed to `QuarantineManager` after the scan completes.
+4. `ClamAVRunner` estimates the eligible regular-file count and byte size on a utility task, respecting recursion, size, exclusion, symlink, and filesystem options where the filesystem APIs expose them.
+5. `ClamAVRunner` launches `clamscan`, or a configured local `clamdscan`, with an argument array rather than a shell command.
+6. Stdout and stderr are parsed into progress, detections, and a `ScanReport`. Completed file sizes provide an estimated percentage and time remaining. The estimate is not exact because archives can expand, files can change, and ClamAV can skip unreadable input. Infected-only scans suppress the clean-file output needed for percent tracking, while symlink-following scans cannot be bounded safely without reproducing ClamAV's cycle handling; both remain indeterminate. ClamAV exit code `1` means detections were found; higher codes are failures.
+7. When requested, detections are passed to `QuarantineManager` after the scan completes.
 
 ### Signature update
 

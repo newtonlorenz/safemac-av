@@ -147,6 +147,186 @@ final class ClamAVRunnerTests: XCTestCase {
 
 }
 
+final class ScanProgressEstimateTests: XCTestCase {
+    func testFractionCompleteUsesEstimatedBytes() {
+        let progress = ScanProgress(
+            status: .scanning,
+            currentFile: "/tmp/example",
+            filesScanned: 1,
+            infectedCount: 0,
+            startTime: Date(),
+            bytesScanned: 250,
+            estimatedTotalFiles: 4,
+            estimatedTotalBytes: 1_000
+        )
+
+        XCTAssertEqual(progress.fractionComplete, 0.25)
+        XCTAssertEqual(progress.percentComplete, 25)
+    }
+
+    func testFractionCompleteIsUnavailableWithoutPositiveEstimate() {
+        let progress = ScanProgress(
+            status: .scanning,
+            currentFile: nil,
+            filesScanned: 0,
+            infectedCount: 0,
+            startTime: Date()
+        )
+
+        XCTAssertNil(progress.fractionComplete)
+        XCTAssertNil(progress.percentComplete)
+    }
+
+    func testFractionCompleteClampsWhenFilesystemChangesDuringScan() {
+        let progress = ScanProgress(
+            status: .scanning,
+            currentFile: nil,
+            filesScanned: 3,
+            infectedCount: 0,
+            startTime: Date(),
+            bytesScanned: 1_500,
+            estimatedTotalFiles: 2,
+            estimatedTotalBytes: 1_000
+        )
+
+        XCTAssertEqual(progress.fractionComplete, 1)
+        XCTAssertEqual(progress.percentComplete, 100)
+    }
+
+    func testEstimatedTimeRemainingUsesObservedByteThroughput() {
+        XCTAssertEqual(
+            ScanProgressEstimate.estimatedTimeRemaining(
+                bytesScanned: 250,
+                totalBytes: 1_000,
+                elapsedTime: 10
+            ),
+            30
+        )
+    }
+
+    func testEstimatedTimeRemainingRequiresProgressAndElapsedTime() {
+        XCTAssertNil(
+            ScanProgressEstimate.estimatedTimeRemaining(
+                bytesScanned: 0,
+                totalBytes: 1_000,
+                elapsedTime: 10
+            )
+        )
+        XCTAssertNil(
+            ScanProgressEstimate.estimatedTimeRemaining(
+                bytesScanned: 250,
+                totalBytes: 1_000,
+                elapsedTime: 0
+            )
+        )
+    }
+
+    func testEstimatorSumsRecursiveRegularFilesAndTracksTheirSizes() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let nested = root.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let first = root.appendingPathComponent("first.bin")
+        let second = nested.appendingPathComponent("second.bin")
+        try Data(repeating: 1, count: 128).write(to: first)
+        try Data(repeating: 2, count: 384).write(to: second)
+
+        var options = ScanOptions.default
+        options.excludedPaths = []
+        let estimate = await ScanSizeEstimator.estimate(paths: [root], options: options)
+
+        XCTAssertEqual(estimate.totalFiles, 2)
+        XCTAssertEqual(estimate.totalBytes, 512)
+        XCTAssertEqual(estimate.fileSize(atPath: first.path), 128)
+        XCTAssertEqual(estimate.fileSize(atPath: second.path), 384)
+    }
+
+    func testEstimatorHonorsExclusionsAndDoesNotFollowSymlinksByDefault() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let ignored = root.appendingPathComponent("ignored", isDirectory: true)
+        let linkedTarget = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: ignored, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: linkedTarget, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: linkedTarget)
+        }
+
+        let includedFile = root.appendingPathComponent("included.bin")
+        try Data(repeating: 1, count: 64).write(to: includedFile)
+        try Data(repeating: 2, count: 128).write(to: ignored.appendingPathComponent("ignored.bin"))
+        try Data(repeating: 3, count: 256).write(to: linkedTarget.appendingPathComponent("linked.bin"))
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("linked-folder"),
+            withDestinationURL: linkedTarget
+        )
+
+        var options = ScanOptions.default
+        options.followSymlinks = false
+        options.excludedPaths = ["ignored"]
+        let estimate = await ScanSizeEstimator.estimate(paths: [root], options: options)
+
+        XCTAssertEqual(estimate.totalFiles, 1)
+        XCTAssertEqual(estimate.totalBytes, 64)
+        XCTAssertEqual(estimate.fileSize(atPath: includedFile.path), 64)
+    }
+
+    func testEstimatorUsesIndeterminateProgressWhenOnlyInfectedFilesAreReported() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data(repeating: 1, count: 64).write(to: root.appendingPathComponent("included.bin"))
+
+        var options = ScanOptions.default
+        options.reportOnlyInfected = true
+        let estimate = await ScanSizeEstimator.estimate(paths: [root], options: options)
+
+        XCTAssertEqual(estimate.totalFiles, 0)
+        XCTAssertEqual(estimate.totalBytes, 0)
+    }
+
+    func testEstimatorUsesIndeterminateProgressWhenFollowingSymlinks() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data(repeating: 1, count: 64).write(to: root.appendingPathComponent("included.bin"))
+
+        var options = ScanOptions.default
+        options.followSymlinks = true
+        let estimate = await ScanSizeEstimator.estimate(paths: [root], options: options)
+
+        XCTAssertEqual(estimate.totalFiles, 0)
+        XCTAssertEqual(estimate.totalBytes, 0)
+    }
+
+    func testEstimatorHonorsRegexExclusionPatterns() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let includedFile = root.appendingPathComponent("included.txt")
+        try Data(repeating: 1, count: 64).write(to: includedFile)
+        try Data(repeating: 2, count: 128).write(to: root.appendingPathComponent("ignored.tmp"))
+
+        var options = ScanOptions.default
+        options.excludedPaths = [#"\.tmp$"#]
+        let estimate = await ScanSizeEstimator.estimate(paths: [root], options: options)
+
+        XCTAssertEqual(estimate.totalFiles, 1)
+        XCTAssertEqual(estimate.totalBytes, 64)
+        XCTAssertEqual(estimate.fileSize(atPath: includedFile.path), 64)
+    }
+}
+
 final class FreshclamRunnerTests: XCTestCase {
     func testParseAlreadyUpToDateOutput() {
         let output = """
