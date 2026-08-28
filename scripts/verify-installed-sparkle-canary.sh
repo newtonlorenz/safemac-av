@@ -192,9 +192,33 @@ func firstMatch(_ pattern: String, in value: String) -> String? {
     return String(value[swiftRange])
 }
 
-final class EnclosureCollector: NSObject, XMLParserDelegate {
-    var enclosures: [[String: String]] = []
+struct AppcastItem {
+    let version: String
+    let enclosures: [[String: String]]
+}
+
+final class AppcastItemCollector: NSObject, XMLParserDelegate {
+    private struct MutableItem {
+        var versions: [String] = []
+        var enclosures: [[String: String]] = []
+    }
+
+    var items: [AppcastItem] = []
     var parseError: Error?
+    var isMalformed = false
+    private var depth = 0
+    private var elementStack: [String] = []
+    private var rootName: String?
+    private var channelDepth: Int?
+    private var hasSeenChannel = false
+    private var itemDepth: Int?
+    private var currentItem: MutableItem?
+    private var isReadingVersion = false
+    private var versionText = ""
+
+    private func qualifiedName(_ elementName: String, _ qName: String?) -> String {
+        qName ?? elementName
+    }
 
     func parser(
         _ parser: XMLParser,
@@ -203,9 +227,99 @@ final class EnclosureCollector: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String]
     ) {
-        if elementName == "enclosure" || qName == "enclosure" {
-            enclosures.append(attributeDict)
+        let name = qualifiedName(elementName, qName)
+        let parentName = elementStack.last
+        elementStack.append(name)
+        depth += 1
+
+        if depth == 1 {
+            guard name == "rss", rootName == nil else {
+                isMalformed = true
+                return
+            }
+            rootName = name
+            return
         }
+        if name == "rss" {
+            isMalformed = true
+            return
+        }
+        if name == "channel" {
+            guard rootName == "rss", parentName == "rss", depth == 2, !hasSeenChannel else {
+                isMalformed = true
+                return
+            }
+            hasSeenChannel = true
+            channelDepth = depth
+            return
+        }
+        if name == "item" {
+            guard let channelDepth, parentName == "channel", depth == channelDepth + 1 else {
+                return
+            }
+            guard currentItem == nil else {
+                isMalformed = true
+                return
+            }
+            currentItem = MutableItem()
+            itemDepth = depth
+            return
+        }
+
+        guard let itemDepth, currentItem != nil else { return }
+        if isReadingVersion, depth > itemDepth + 1 {
+            isMalformed = true
+        }
+        guard depth == itemDepth + 1 else { return }
+        if name == "sparkle:version" {
+            guard !isReadingVersion else {
+                isMalformed = true
+                return
+            }
+            isReadingVersion = true
+            versionText = ""
+        } else if name == "enclosure" {
+            currentItem?.enclosures.append(attributeDict)
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if isReadingVersion {
+            versionText.append(string)
+        }
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        let name = qualifiedName(elementName, qName)
+        if let itemDepth, depth == itemDepth + 1, isReadingVersion, name == "sparkle:version" {
+            let value = versionText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.isEmpty {
+                isMalformed = true
+            } else {
+                currentItem?.versions.append(value)
+            }
+            isReadingVersion = false
+            versionText = ""
+        }
+        if name == "item", depth == itemDepth, let item = currentItem {
+            if item.versions.count == 1 {
+                items.append(AppcastItem(version: item.versions[0], enclosures: item.enclosures))
+            } else {
+                isMalformed = true
+            }
+            currentItem = nil
+            self.itemDepth = nil
+        }
+        if name == "channel", depth == channelDepth {
+            self.channelDepth = nil
+        }
+        _ = elementStack.popLast()
+        depth -= 1
     }
 
     func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
@@ -263,21 +377,19 @@ guard let feedSignature = Data(base64Encoded: feedSignatureBase64),
     fail("signed-feed signature invalid")
 }
 
-let collector = EnclosureCollector()
+let collector = AppcastItemCollector()
 let parser = XMLParser(data: Data(contentData))
 parser.delegate = collector
 parser.shouldProcessNamespaces = false
 parser.shouldResolveExternalEntities = false
-guard parser.parse(), collector.parseError == nil else {
+guard parser.parse(), collector.parseError == nil, !collector.isMalformed else {
     fail("appcast XML is invalid")
 }
-let updateEnclosures = collector.enclosures.compactMap { attributes -> (attributes: [String: String], version: Int)? in
-    guard let versionString = attributes["sparkle:version"],
-          let version = Int(versionString),
-          version > installedVersion else {
-        return nil
+let updateEnclosures = collector.items.flatMap { item -> [(attributes: [String: String], version: Int)] in
+    guard let version = Int(item.version), version > installedVersion else {
+        return []
     }
-    return (attributes, version)
+    return item.enclosures.map { ($0, version) }
 }
 guard updateEnclosures.count == 1 else {
     fail("expected exactly one newer appcast enclosure")
