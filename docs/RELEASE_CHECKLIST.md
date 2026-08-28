@@ -103,13 +103,16 @@ shasum -a 256 -c SHA256SUMS.txt
 - [ ] Confirm the verifier reports the embedded `SafeMacAVBackground.app` helper. It must be Developer-ID signed by Team `CQPH8YR62A`, hardened, timestamped, universal, `LSUIElement=true`, and free of Sparkle.
 - [ ] Exercise launch-at-login migration on an installed build: legacy main-app item enabled, helper registration/approval, helper enablement, legacy removal, and disable rollback. If a downgrade is needed during this one-release bridge, disable launch at login before installing the pre-helper build and re-enable it from that build; do not assume an old build can recreate the helper migration automatically.
 
-- [ ] Before replacing the currently installed app, verify the signed appcast advertises exactly one newer update to that installed build. The verifier requires a deep, strict Developer ID Application signature from Team `CQPH8YR62A`, hardened runtime, secure timestamp, and Gatekeeper trust:
+- [ ] Before replacing the currently installed app, preserve a verified signed lower-build bundle that is Sparkle-capable: it must contain a real `SUFeedURL` and `SUPublicEDKey`, with `SURequireSignedFeed=true` and `SUVerifyUpdateBeforeExtraction=true`. A public build without those settings is not a valid canary.
+- [ ] Verify the signed appcast advertises exactly one newer update to that preserved lower build. The verifier requires a deep, strict Developer ID Application signature from Team `CQPH8YR62A`, hardened runtime, secure timestamp, and Gatekeeper trust:
 
 ```bash
-./scripts/verify-installed-sparkle-canary.sh "/Applications/SafeMac AV.app" build/appcast/appcast.xml build/SafeMac-AV.dmg
+SAFEMAC_CANARY_APP_PATH='/path/to/lower-build/SafeMac AV.app'
+./scripts/verify-installed-sparkle-canary.sh "$SAFEMAC_CANARY_APP_PATH" build/appcast/appcast.xml build/SafeMac-AV.dmg
 ```
 
 - [ ] Copy `SafeMac AV.app` to `/Applications`, launch it, and confirm the main window opens. Enable launch at login, approve it if macOS asks, then confirm the embedded helper owns one menu-bar item without prompting for notification permission.
+- [ ] Keep the preserved lower-build canary until public-feed verification is complete. The post-publication Sparkle canary must use it through `SAFEMAC_CANARY_APP_PATH`; the just-built version cannot discover an update to itself.
 - [ ] From Settings › Notifications, choose **Allow Background Update Notifications** and confirm the dedicated helper authorization request is shown only after that explicit click (including while the regular login helper is already running). Confirm a denied or not-determined helper authorization suppresses scheduled-update notifications without another prompt.
 - [ ] Confirm `appcast.xml` is present, has valid feed and archive EdDSA signatures, and references the published DMG URL prefix.
 
@@ -128,6 +131,7 @@ After final publication approval:
 ```bash
 SAFEMAC_CANARY_EXPECT_UPDATE=1 \
 SAFEMAC_CANARY_INSTALL=1 \
+SAFEMAC_CANARY_APP_PATH='/path/to/lower-build/SafeMac AV.app' \
 SPARKLE_CLI='/path/to/sparkle.app/Contents/MacOS/sparkle' \
   ./scripts/run-installed-sparkle-canary.sh
 ```
