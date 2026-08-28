@@ -35,6 +35,7 @@
 		A1000001200000000000063 /* ExternalScanRequestStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000061 /* ExternalScanRequestStore.swift */; };
 		A1000001200000000000004 /* ConfigManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000004 /* ConfigManager.swift */; };
 		A1000001200000000000005 /* ClamAVRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000005 /* ClamAVRunner.swift */; };
+		C0DE00012000000000000097 /* ScanSizeEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00022000000000000097 /* ScanSizeEstimator.swift */; };
 		A1000001200000000000006 /* FreshclamRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000006 /* FreshclamRunner.swift */; };
 		A1000001200000000000007 /* QuarantineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000007 /* QuarantineManager.swift */; };
 		A1000001200000000000008 /* ScanScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002200000000000008 /* ScanScheduler.swift */; };
@@ -152,6 +153,7 @@
 		A1000002200000000000053 /* LaunchMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchMode.swift; sourceTree = "<group>"; };
 		A1000002200000000000004 /* ConfigManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigManager.swift; sourceTree = "<group>"; };
 		A1000002200000000000005 /* ClamAVRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClamAVRunner.swift; sourceTree = "<group>"; };
+		C0DE00022000000000000097 /* ScanSizeEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanSizeEstimator.swift; sourceTree = "<group>"; };
 		A1000002200000000000006 /* FreshclamRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreshclamRunner.swift; sourceTree = "<group>"; };
 		A1000002200000000000007 /* QuarantineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuarantineManager.swift; sourceTree = "<group>"; };
 		A1000002200000000000008 /* ScanScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanScheduler.swift; sourceTree = "<group>"; };
@@ -331,6 +333,7 @@
 			children = (
 				A1000002200000000000004 /* ConfigManager.swift */,
 				A1000002200000000000005 /* ClamAVRunner.swift */,
+				C0DE00022000000000000097 /* ScanSizeEstimator.swift */,
 				A1000002200000000000006 /* FreshclamRunner.swift */,
 				A1000002200000000000007 /* QuarantineManager.swift */,
 				A1000002200000000000008 /* ScanScheduler.swift */,
@@ -764,6 +767,7 @@
 				C0DE00012000000000000096 /* MainWindowController.swift in Sources */,
 				A1000001200000000000004 /* ConfigManager.swift in Sources */,
 				A1000001200000000000005 /* ClamAVRunner.swift in Sources */,
+				C0DE00012000000000000097 /* ScanSizeEstimator.swift in Sources */,
 				A1000001200000000000006 /* FreshclamRunner.swift in Sources */,
 				A1000001200000000000007 /* QuarantineManager.swift in Sources */,
 				A1000001200000000000008 /* ScanScheduler.swift in Sources */,

@@ -143,10 +143,11 @@ struct MenuBarPopoverView: View {
 
     private var scanStatus: MenuBarStatus {
         if let progress = appState.currentScanProgress, appState.isScanning {
+            let percentage = progress.percentComplete.map { " · \($0)%" } ?? ""
             return MenuBarStatus(
                 icon: "waveform.path.ecg",
                 tint: .blue,
-                detail: "\(progress.status.rawValue) · \(progress.filesScanned) files"
+                detail: "\(progress.status.rawValue)\(percentage) · \(progress.filesScanned) files"
             )
         }
 

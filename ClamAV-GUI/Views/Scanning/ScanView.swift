@@ -271,9 +271,6 @@ struct ScanProgressView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            ProgressView()
-                .scaleEffect(2)
-
             VStack(spacing: 8) {
                 Text(progress.status.rawValue)
                     .font(.headline)
@@ -285,6 +282,38 @@ struct ScanProgressView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+            }
+
+            if let fractionComplete = progress.fractionComplete {
+                VStack(spacing: 8) {
+                    ProgressView(value: fractionComplete)
+                        .progressViewStyle(.linear)
+                        .accessibilityIdentifier("scan-progress-bar")
+                        .accessibilityValue("\(progress.percentComplete ?? 0) percent")
+
+                    HStack {
+                        Text("\(progress.percentComplete ?? 0)% complete")
+                        Spacer()
+                        if let remaining = progress.estimatedTimeRemaining {
+                            Text("About \(formatDuration(remaining)) remaining")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                    if let totalFiles = progress.estimatedTotalFiles {
+                        Text(estimatedWorkDescription(
+                            totalFiles: totalFiles,
+                            totalBytes: progress.estimatedTotalBytes
+                        ))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    }
+                }
+                .frame(maxWidth: 520)
+            } else {
+                ProgressView()
+                    .scaleEffect(2)
             }
 
             HStack(spacing: 40) {
@@ -341,6 +370,19 @@ struct ScanProgressView: View {
         let minutes = Int(interval) / 60
         let seconds = Int(interval) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private func formatDuration(_ interval: TimeInterval) -> String {
+        let totalSeconds = max(1, Int(interval.rounded()))
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return minutes > 0 ? String(format: "%dm %02ds", minutes, seconds) : "\(seconds)s"
+    }
+
+    private func estimatedWorkDescription(totalFiles: Int, totalBytes: Int64?) -> String {
+        let fileDescription = "Estimated total: \(totalFiles) file\(totalFiles == 1 ? "" : "s")"
+        guard let totalBytes, totalBytes > 0 else { return fileDescription }
+        return "\(fileDescription) · \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))"
     }
 }
 

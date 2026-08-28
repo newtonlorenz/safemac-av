@@ -14,6 +14,7 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
     private let configManager: ConfigManagerProtocol
     private var currentProcess: Process?
     private var isCancelled = false
+    private var currentEstimationTask: Task<ScanSizeEstimate, Never>?
     private(set) var currentProcessPID: Int32?
     private(set) var scanIsPaused = false
 
@@ -31,6 +32,15 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
             throw ClamAVError.executableNotFound(backend.executablePath)
         }
 
+        let estimationTask = Task.detached(priority: .utility) {
+            ScanSizeEstimator.estimateSynchronously(paths: paths, options: options)
+        }
+        currentEstimationTask = estimationTask
+        let sizeEstimate = await estimationTask.value
+        currentEstimationTask = nil
+        guard !isCancelled else { throw ClamAVError.cancelled }
+        let scanStartTime = Date()
+
         let process = Process()
         currentProcess = process
         if settings.lowImpactMode {
@@ -46,7 +56,10 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        let outputState = ClamAVScanOutputState()
+        let outputState = ClamAVScanOutputState(
+            sizeEstimate: sizeEstimate,
+            scanStartTime: scanStartTime
+        )
 
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
@@ -109,7 +122,9 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
                         currentFile: nil,
                         filesScanned: 0,
                         infectedCount: 0,
-                        startTime: startTime
+                        startTime: startTime,
+                        estimatedTotalFiles: sizeEstimate.totalFiles,
+                        estimatedTotalBytes: sizeEstimate.totalBytes
                     ))
                 }
             } catch {
@@ -125,6 +140,8 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
 
     func cancelCurrentScan() {
         isCancelled = true
+        currentEstimationTask?.cancel()
+        currentEstimationTask = nil
         currentProcess?.terminate()
         currentProcess = nil
         currentProcessPID = nil
@@ -297,7 +314,15 @@ private final class ClamAVScanOutputState: @unchecked Sendable {
     private var infectedFiles: [ScanResult] = []
     private var errors: [String] = []
     private var filesScanned = 0
+    private var bytesScanned: Int64 = 0
     private var stdoutBuffer = ""
+    private let sizeEstimate: ScanSizeEstimate
+    private let scanStartTime: Date
+
+    init(sizeEstimate: ScanSizeEstimate, scanStartTime: Date) {
+        self.sizeEstimate = sizeEstimate
+        self.scanStartTime = scanStartTime
+    }
 
     func appendStdout(_ output: String, startTime: Date, progressHandler: @escaping (ScanProgress) -> Void) {
         let updates = lockedProgressUpdates {
@@ -348,6 +373,7 @@ private final class ClamAVScanOutputState: @unchecked Sendable {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
+        let currentFile = extractCurrentFile(from: trimmed)
         if let result = ClamAVRunner.parseInfectedLine(trimmed) {
             infectedFiles.append(result)
             filesScanned += 1
@@ -355,12 +381,37 @@ private final class ClamAVScanOutputState: @unchecked Sendable {
             filesScanned += 1
         }
 
+        if let currentFile,
+           trimmed.hasSuffix(" FOUND") || trimmed.contains(": OK") || trimmed.contains(": Empty file") {
+            bytesScanned += sizeEstimate.fileSize(atPath: currentFile) ?? 0
+        }
+
+        let elapsedScanningTime = Date().timeIntervalSince(scanStartTime)
+        let estimatedTimeRemaining: TimeInterval?
+        if sizeEstimate.totalBytes > 0 {
+            estimatedTimeRemaining = ScanProgressEstimate.estimatedTimeRemaining(
+                bytesScanned: bytesScanned,
+                totalBytes: sizeEstimate.totalBytes,
+                elapsedTime: elapsedScanningTime
+            )
+        } else {
+            estimatedTimeRemaining = ScanProgressEstimate.estimatedTimeRemaining(
+                bytesScanned: Int64(filesScanned),
+                totalBytes: Int64(sizeEstimate.totalFiles),
+                elapsedTime: elapsedScanningTime
+            )
+        }
+
         return ScanProgress(
             status: .scanning,
-            currentFile: extractCurrentFile(from: trimmed),
+            currentFile: currentFile,
             filesScanned: filesScanned,
             infectedCount: infectedFiles.count,
-            startTime: startTime
+            startTime: startTime,
+            estimatedTimeRemaining: estimatedTimeRemaining,
+            bytesScanned: bytesScanned,
+            estimatedTotalFiles: sizeEstimate.totalFiles,
+            estimatedTotalBytes: sizeEstimate.totalBytes
         )
     }
 
