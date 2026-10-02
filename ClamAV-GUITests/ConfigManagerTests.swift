@@ -334,6 +334,31 @@ final class ConfigManagerTests: XCTestCase {
         XCTAssertFalse(settings.clamdSettings.clamdScanPath.isEmpty)
     }
 
+    func testLocalDatabaseFilesAreRecognisedForEverySignatureDatabase() throws {
+        let signatureDir = tempDirectory.appendingPathComponent("db")
+        try FileManager.default.createDirectory(at: signatureDir, withIntermediateDirectories: true)
+        for (name, version) in [("main", "123"), ("daily", "456"), ("bytecode", "789")] {
+            try "ClamAV:test:\(version):meta".write(
+                to: signatureDir.appendingPathComponent("\(name).cld"),
+                atomically: true,
+                encoding: .ascii
+            )
+        }
+        var settings = AppSettings.default
+        settings.clamScanPath = "/usr/bin/true"
+        settings.freshclamPath = "/usr/bin/true"
+        settings.signatureDirectory = signatureDir.path
+        try configManager.saveSettings(settings)
+
+        let info = configManager.getSignatureInfo()
+
+        XCTAssertEqual(info.mainVersion, "123")
+        XCTAssertEqual(info.dailyVersion, "456")
+        XCTAssertEqual(info.bytecodeVersion, "789")
+        XCTAssertNotNil(info.lastUpdated)
+        XCTAssertTrue(configManager.validateClamAVInstallation(using: settings).isReady)
+    }
+
     func testValidateInstallationUsesConfiguredPaths() throws {
         let testRoot = tempDirectory.appendingPathComponent("clamav-configured")
         let signatureDir = testRoot.appendingPathComponent("db")

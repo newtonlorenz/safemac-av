@@ -1,7 +1,129 @@
+import Darwin
 import XCTest
 @testable import ClamAV_GUI
 
 final class ClamAVRunnerTests: XCTestCase {
+
+    @MainActor
+    func testCancellingPausedProcessCompletesAndAllowsAnotherScan() async throws {
+        let fixture = try makeRunner(script: "exec /bin/sleep 30")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let started = expectation(description: "Scanner started")
+        let completed = expectation(description: "Paused scanner cancelled")
+        let task = Task {
+            do {
+                _ = try await fixture.runner.scan(paths: [], options: .default) { _ in started.fulfill() }
+                XCTFail("Cancelled scan must not complete successfully")
+            } catch ClamAVError.cancelled {
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+            completed.fulfill()
+        }
+        await fulfillment(of: [started], timeout: 3)
+        let pid = try XCTUnwrap(fixture.runner.currentProcessPID)
+        fixture.runner.pauseScan()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        fixture.runner.cancelCurrentScan()
+
+        await fulfillment(of: [completed], timeout: 2)
+        // Preserve cleanup even when the regression fails on a stopped process.
+        if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+        await task.value
+        XCTAssertNil(fixture.runner.currentProcessPID)
+        XCTAssertFalse(fixture.runner.scanIsPaused)
+
+        try Data("#!/bin/sh\nprintf '/tmp/clean: OK\\n'\n".utf8).write(to: fixture.executable)
+        let report = try await fixture.runner.scan(paths: [], options: .default) { _ in }
+        XCTAssertEqual(report.filesScanned, 1)
+    }
+
+    func testSignalTerminationIsAnErrorRatherThanAnInfection() async throws {
+        let fixture = try makeRunner(script: "kill -HUP $$")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        do {
+            _ = try await fixture.runner.scan(paths: [], options: .default) { _ in }
+            XCTFail("A scanner terminated by a signal must not report a completed scan")
+        } catch ClamAVError.scanFailed(let code, let message) {
+            XCTAssertEqual(code, SIGHUP)
+            XCTAssertTrue(message.contains("signal"))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testScanPreservesUTF8AcrossPipeReadsAndFinalOutput() async throws {
+        let fixture = try makeRunner(script: """
+        printf '/tmp/caf\\303'
+        /bin/sleep 0.1
+        printf '\\251.txt: Test-Signature FOUND\\n'
+        printf '/tmp/final: Other-Signature FOUND'
+        exit 1
+        """)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let report = try await fixture.runner.scan(paths: [], options: .default) { _ in }
+
+        XCTAssertEqual(report.infectedFiles.map(\.path), ["/tmp/café.txt", "/tmp/final"])
+        XCTAssertEqual(report.filesScanned, 2)
+        XCTAssertEqual(report.completionState, .infectedFound)
+    }
+
+    func testScanUsesConfiguredDatabaseAndCombinesExclusionsWithoutDuplicates() async throws {
+        let fixture = try makeRunner(script: "printf '%s\\n' \"$@\" > \"$0.arguments\"")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let config = ConfigManager(appSupportURL: fixture.directory)
+        var settings = config.loadSettings()
+        settings.signatureDirectory = "/tmp/configured-signatures"
+        settings.defaultExclusions = ["global-default", "shared"]
+        settings.customExclusions = ["global-custom", "shared"]
+        try config.saveSettings(settings)
+        var options = ScanOptions.default
+        options.databasePath = nil
+        options.excludedPaths = ["scan-only", "shared", "scan-only"]
+
+        _ = try await fixture.runner.scan(paths: [], options: options) { _ in }
+
+        let arguments = try String(contentsOf: fixture.executable.appendingPathExtension("arguments"), encoding: .utf8)
+            .components(separatedBy: "\n")
+        XCTAssertTrue(arguments.contains("--database=/tmp/configured-signatures"))
+        for exclusion in ["global-default", "global-custom", "shared", "scan-only"] {
+            XCTAssertEqual(arguments.filter { $0 == "--exclude=\(exclusion)" }.count, 1)
+            XCTAssertEqual(arguments.filter { $0 == "--exclude-dir=\(exclusion)" }.count, 1)
+        }
+    }
+
+    func testScanDatabaseOverrideTakesPrecedenceOverConfiguredDirectory() async throws {
+        let fixture = try makeRunner(script: "printf '%s\\n' \"$@\" > \"$0.arguments\"")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let config = ConfigManager(appSupportURL: fixture.directory)
+        var settings = config.loadSettings()
+        settings.signatureDirectory = "/tmp/configured-signatures"
+        try config.saveSettings(settings)
+        var options = ScanOptions.default
+        options.databasePath = "/tmp/scan-signatures"
+
+        _ = try await fixture.runner.scan(paths: [], options: options) { _ in }
+
+        let arguments = try String(contentsOf: fixture.executable.appendingPathExtension("arguments"), encoding: .utf8)
+            .components(separatedBy: "\n")
+        XCTAssertEqual(arguments.filter { $0.hasPrefix("--database=") }, ["--database=/tmp/scan-signatures"])
+    }
+
+    private func makeRunner(script: String) throws -> (runner: ClamAVRunner, directory: URL, executable: URL) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let executable = directory.appendingPathComponent("scanner")
+        try Data(("#!/bin/sh\n" + script + "\n").utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let config = ConfigManager(appSupportURL: directory)
+        var settings = AppSettings.default
+        settings.clamScanPath = executable.path
+        settings.lowImpactMode = false
+        try config.saveSettings(settings)
+        return (ClamAVRunner(configManager: config), directory, executable)
+    }
 
     // MARK: - Output Parsing Tests
 
@@ -79,6 +201,16 @@ final class ClamAVRunnerTests: XCTestCase {
     }
 
     // MARK: - Argument Building Tests
+
+    func testDisablingArchiveScanningOverridesClamAVDefault() {
+        var options = ScanOptions.default
+        options.scanArchives = false
+
+        let arguments = ClamAVRunner.buildClamscanArguments(paths: [], options: options)
+
+        XCTAssertTrue(arguments.contains("--scan-archive=no"))
+        XCTAssertFalse(arguments.contains("--scan-archive=yes"))
+    }
 
     func testBuildDefaultArguments() {
         let options = ScanOptions.default

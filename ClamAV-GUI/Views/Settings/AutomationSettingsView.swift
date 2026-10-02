@@ -50,8 +50,10 @@ struct AutomationSettingsView: View {
                 Divider()
 
                 Toggle("Scan new downloads immediately", isOn: savedBinding(\.autoScanDownloads))
-                Toggle("Scan when Mac is idle", isOn: savedBinding(\.scanWhenIdle))
-                Toggle("Pause scans on battery", isOn: savedBinding(\.pauseOnBattery))
+                Text("Scans run on battery power. Automatic idle scans and battery-based pausing are not currently supported.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("automation-availability-note")
                 Toggle("Low impact mode", isOn: savedBinding(\.lowImpactMode))
             }
 

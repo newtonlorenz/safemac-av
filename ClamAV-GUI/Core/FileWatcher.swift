@@ -73,7 +73,12 @@ final class FileWatcher: FileWatcherProtocol {
 
         eventStream = stream
         FSEventStreamSetDispatchQueue(stream, queue)
-        FSEventStreamStart(stream)
+        guard FSEventStreamStart(stream) else {
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            eventStream = nil
+            return
+        }
         isWatching = true
 
         startBatchTimer()

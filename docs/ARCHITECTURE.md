@@ -42,8 +42,10 @@ per-user launchd
 2. `AppState` validates the configured ClamAV installation.
 3. `ScanCoordinator` prevents overlapping scans and owns cancellation state.
 4. `ClamAVRunner` launches `clamscan`, or a configured local `clamdscan`, with an argument array rather than a shell command.
-5. Stdout and stderr are parsed into progress, detections, and a `ScanReport`. ClamAV exit code `1` means detections were found; higher codes are failures.
-6. When requested, detections are passed to `QuarantineManager` after the scan completes.
+5. Stdout and stderr are buffered as bytes until complete lines are available and drained before building a `ScanReport`. Normal ClamAV exit code `1` means detections were found; higher codes and signal termination are failures.
+6. When requested, detections are passed to `QuarantineManager` after the scan completes. The final report records successful quarantine actions and includes failures as visible warnings.
+
+The optional `clamdscan` backend delegates scan limits, exclusions and archive policy to the daemon's `clamd.conf`; it does not enforce the equivalent per-scan `clamscan` options.
 
 ### Signature update
 
@@ -63,7 +65,9 @@ Mutation ordering is transactional:
 - restore verifies SHA-256, preserves an existing destination as a backup, and rolls all moves back on metadata failure; and
 - delete commits metadata first, deletes the payload, and restores the previous metadata if deletion fails.
 
-The quarantine directory is not an encryption or privilege boundary. The current user can inspect or modify it.
+Quarantine operations use a shared serial transaction queue and a persistent, user-owned `.transaction.lock` advisory lock to coordinate cooperating app processes. The lock is released after each operation but its file is retained. SHA-256 is calculated in bounded chunks rather than loading the entire file. Restore and deletion require an exact current metadata record and a regular UUID-named payload in the selected quarantine directory. Invalid storage is reported in the interface rather than appearing empty.
+
+The quarantine directory is not an encryption or privilege boundary. The current user can inspect or modify it, and external filesystem changes are outside the app's transaction guarantees.
 
 ### Scheduled scan
 
@@ -71,9 +75,13 @@ The quarantine directory is not an encryption or privilege boundary. The current
 
 Schedules run in the logged-in user's context. Moving or deleting the built app can invalidate the executable path captured in an existing LaunchAgent.
 
+Calendar weekdays (Sunday = 1) are converted to launchd weekdays (Sunday = 0) when writing schedules. Existing weekly scan jobs created by an older build must be re-saved to update their installed property lists. Automatic signature schedules reconcile on canonical installed-app startup.
+
 ### Folder monitoring
 
 `FileWatcher` creates an FSEvent stream for configured folders. New or changed files are filtered, deduplicated, and either scanned immediately for configured Downloads behavior or batched. Monitoring exists only for the lifetime of the app process; it is not a privileged on-access scanner.
+
+Batches wait for an active scan to finish instead of being discarded. Dashboard monitoring status reflects a successfully started watcher with a valid configured folder. Idle-triggered scans and battery-based pausing are not implemented and are not presented as working controls.
 
 ### Background helper and launch at login
 

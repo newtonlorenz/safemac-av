@@ -5,6 +5,34 @@ final class ClamAV_GUIUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testHistoryExplainsItsSessionScopeAndEmptyState() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launch()
+        openMainWindow(in: app)
+        app.buttons["sidebar-history"].click()
+
+        XCTAssertTrue(app.staticTexts["history-session-notice"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["No scans yet"].exists)
+        let screenshot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        screenshot.name = "Session history empty state"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testCustomScanCommandOpensFilePickerFromDashboard() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launch()
+        openMainWindow(in: app)
+        app.typeKey("s", modifierFlags: [.command, .shift])
+
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5), "Custom Scan should present a file picker")
+        cancel.click()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-title-scan"].exists)
+    }
+
     func testSidebarNavigationSwitchesDetailViews() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
