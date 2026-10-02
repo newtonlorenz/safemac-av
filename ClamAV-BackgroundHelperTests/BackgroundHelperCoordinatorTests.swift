@@ -143,8 +143,14 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         XCTAssertFalse(source.contains("import FinderSync"))
     }
 
-    func testAppAdapterCreatesStatusItemOnlyForVisibleBackgroundSession() {
-        let app = SafeMacAVBackgroundApp()
+    func testAppAdapterCreatesStatusItemOnlyForVisibleBackgroundSession() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = SafeMacAVBackgroundApp(
+            lease: BackgroundWorkLease(name: "background-monitoring", baseURL: root),
+            settingsStore: BackgroundHelperSettingsStore(settingsURL: root.appendingPathComponent("settings.json"))
+        )
 
         app.start(arguments: ["SafeMacAVBackground"])
 
@@ -188,7 +194,10 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         XCTAssertNil(BackgroundRoute.parse("--finder-request"))
 
         XCTAssertTrue(BackgroundMenuBarOwnership.mainShouldPresentMenuBar(helperIsEnabled: false))
-        XCTAssertTrue(BackgroundMenuBarOwnership.mainShouldPresentMenuBar(helperIsEnabled: true))
+        XCTAssertTrue(BackgroundMenuBarOwnership.mainShouldPresentMenuBar(
+            helperIsEnabled: true,
+            makeLease: { BackgroundWorkLease(name: "background-monitoring", baseURL: root) }
+        ))
         let ownershipLease = BackgroundWorkLease(name: "background-monitoring", baseURL: root)
         XCTAssertTrue(ownershipLease.acquire())
         XCTAssertFalse(BackgroundMenuBarOwnership.mainShouldPresentMenuBar(

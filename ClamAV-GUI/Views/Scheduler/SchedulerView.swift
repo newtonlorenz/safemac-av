@@ -42,7 +42,17 @@ struct SchedulerView: View {
                     jobs: $scheduledJobs,
                     onEdit: { editingJob = $0 },
                     onDelete: deleteJob,
-                    onToggle: toggleJob
+                    onToggle: toggleJob,
+                    onRun: { job in
+                        appState.selectedTab = .scan
+                        Task {
+                            await appState.runScheduledScan(
+                                jobID: job.id,
+                                paths: job.paths.map { URL(fileURLWithPath: $0) }
+                            )
+                        }
+                    },
+                    isScanning: appState.isScanning || appState.scanCoordinator.isScanning
                 )
             }
         }
@@ -218,6 +228,8 @@ struct ScheduledJobsList: View {
     let onEdit: (ScanJob) -> Void
     let onDelete: (ScanJob) -> Void
     let onToggle: (ScanJob) -> Void
+    let onRun: (ScanJob) -> Void
+    let isScanning: Bool
 
     var body: some View {
         List {
@@ -226,7 +238,9 @@ struct ScheduledJobsList: View {
                     job: job,
                     onEdit: { onEdit(job) },
                     onDelete: { onDelete(job) },
-                    onToggle: { onToggle(job) }
+                    onToggle: { onToggle(job) },
+                    onRun: { onRun(job) },
+                    isScanning: isScanning
                 )
             }
         }
@@ -239,6 +253,8 @@ struct ScheduledJobRow: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onToggle: () -> Void
+    let onRun: () -> Void
+    let isScanning: Bool
 
     var body: some View {
         HStack {
@@ -247,6 +263,7 @@ struct ScheduledJobRow: View {
                 set: { _ in onToggle() }
             ))
             .labelsHidden()
+            .accessibilityLabel("Enable \(job.name)")
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(job.name)
@@ -285,9 +302,9 @@ struct ScheduledJobRow: View {
 
             Menu {
                 Button("Edit", action: onEdit)
-                Button("Run Now") {
-                    // Trigger immediate scan
-                }
+                Button("Run Now", action: onRun)
+                    .disabled(isScanning)
+                    .accessibilityIdentifier("scheduled-run-now-\(job.id.uuidString)")
                 Divider()
                 Button("Delete", role: .destructive, action: onDelete)
             } label: {

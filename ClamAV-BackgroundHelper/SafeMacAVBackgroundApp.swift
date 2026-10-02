@@ -6,13 +6,24 @@ import UserNotifications
 
 @main
 final class SafeMacAVBackgroundApp: NSObject, NSApplicationDelegate {
-    private let lease = BackgroundWorkLease(name: "background-monitoring")
-    private let settingsStore = BackgroundHelperSettingsStore(
-        settingsURL: BackgroundSignatureUpdater.resolvedSettingsURL()
-    )
+    private let lease: BackgroundWorkLease
+    private let settingsStore: BackgroundHelperSettingsStore
     private var statusItem: NSStatusItem?
     private var coordinator: BackgroundHelperCoordinator?
     private let notificationCoordinator = BackgroundHelperNotificationCoordinator()
+
+    override convenience init() {
+        self.init(
+            lease: BackgroundWorkLease(name: "background-monitoring"),
+            settingsStore: BackgroundHelperSettingsStore(settingsURL: BackgroundSignatureUpdater.resolvedSettingsURL())
+        )
+    }
+
+    init(lease: BackgroundWorkLease, settingsStore: BackgroundHelperSettingsStore) {
+        self.lease = lease
+        self.settingsStore = settingsStore
+        super.init()
+    }
 
     static func main() {
         let application = NSApplication.shared

@@ -7,6 +7,7 @@ struct ScanView: View {
     @State private var scanOptions: ScanOptions = .default
     @State private var showingFilePicker = false
     @State private var isDragOver = false
+    @State private var showingSetup = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,9 +26,9 @@ struct ScanView: View {
                         appState.cancelScan()
                     }
                 )
-            } else if let report = appState.lastScanResult {
+            } else if !showingSetup, let report = appState.lastScanResult {
                 ScanResultsView(report: report) {
-                    appState.lastScanResult = nil
+                    showingSetup = true
                 }
             } else {
                 ScanSetupView(
@@ -41,6 +42,10 @@ struct ScanView: View {
             }
         }
         .accessibilityIdentifier("scan-content")
+        .onAppear { consumeCustomScanRequest() }
+        .onChange(of: appState.shouldOpenCustomScanPicker) { _ in
+            consumeCustomScanRequest()
+        }
         .fileImporter(
             isPresented: $showingFilePicker,
             allowedContentTypes: [.folder, .item],
@@ -60,11 +65,21 @@ struct ScanView: View {
         }
     }
 
+    private func consumeCustomScanRequest() {
+        guard appState.shouldOpenCustomScanPicker else { return }
+        appState.shouldOpenCustomScanPicker = false
+        showingSetup = true
+        showingFilePicker = true
+    }
+
     private func startScan() {
         guard !selectedPaths.isEmpty else { return }
         Task {
-            await appState.startScan(paths: selectedPaths, options: scanOptions)
-            selectedPaths = []
+            let outcome = await appState.startScan(paths: selectedPaths, options: scanOptions)
+            if case .completed = outcome {
+                selectedPaths = []
+                showingSetup = false
+            }
         }
     }
 }
@@ -100,6 +115,7 @@ struct ScanSetupView: View {
                     }
                     .adaptiveGlassButton(prominent: true)
                     .disabled(selectedPaths.isEmpty)
+                    .accessibilityIdentifier("start-custom-scan")
                 }
                 .frame(maxWidth: 820)
                 .frame(maxWidth: .infinity)
@@ -131,6 +147,7 @@ struct DropZoneView: View {
                 Button("Browse...") {
                     onBrowse()
                 }
+                .accessibilityIdentifier("browse-scan-files")
 
                 Button("Quick Scan") {
                     let home = FileManager.default.homeDirectoryForCurrentUser
@@ -216,12 +233,18 @@ struct SelectedPathsList: View {
 }
 
 struct ScanOptionsView: View {
+    @EnvironmentObject var appState: AppState
     @Binding var options: ScanOptions
     @State private var isExpanded = false
 
     var body: some View {
         DisclosureGroup("Scan Options", isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 12) {
+                if appState.settings.scannerBackend == .clamdscan {
+                    Text("The ClamAV daemon controls scan limits, exclusions and archive settings through clamd.conf. These per-scan options apply to clamscan.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Toggle("Scan subdirectories", isOn: $options.recursive)
                 Toggle("Follow symbolic links", isOn: $options.followSymlinks)
                 Toggle("Scan archives (ZIP, TAR, etc.)", isOn: $options.scanArchives)
@@ -249,7 +272,7 @@ struct ScanOptionsView: View {
                         Text("10").tag(10)
                         Text("15").tag(15)
                         Text("20").tag(20)
-                        Text("Unlimited").tag(100)
+                        Text("100").tag(100)
                     }
                     .frame(width: 100)
                 }
@@ -352,6 +375,23 @@ struct ScanResultsView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScanSummaryHeader(report: report)
+
+            if !report.errors.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Scan needs attention", systemImage: "exclamationmark.triangle.fill")
+                            .font(.headline)
+                        ForEach(Array(report.errors.enumerated()), id: \.offset) { _, error in
+                            Text(error).font(.callout).textSelection(.enabled)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                }
+                .frame(maxHeight: 150)
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("scan-result-warnings")
+            }
 
             if report.infectedFiles.isEmpty {
                 CleanResultView()
@@ -529,7 +569,7 @@ struct InfectedFilesList: View {
 
         switch sortOrder {
         case .severity:
-            return filtered.sorted { $0.severity.rawValue > $1.severity.rawValue }
+            return filtered.sorted { $0.severity.priority > $1.severity.priority }
         case .path:
             return filtered.sorted { $0.path < $1.path }
         case .name:

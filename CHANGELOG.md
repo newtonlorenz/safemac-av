@@ -4,6 +4,24 @@ All notable project changes will be documented in this file. The format follows 
 
 ## [Unreleased]
 
+### Fixed
+
+- Correct weekly scan and signature-update scheduling to use the selected weekday. Re-save existing weekly scan jobs once to update their installed LaunchAgents.
+- Preserve scanner output across UTF-8 pipe boundaries and process termination, distinguish signal failures, and honour disabled archive scanning.
+- Make cancellation of paused scans explicit and keep process state until termination completes.
+- Preserve quarantine records during concurrent operations, validate stored records before file actions, and hash large files in bounded memory.
+- Show successful quarantine actions, scan warnings and quarantine storage errors in the interface.
+- Queue folder-monitoring batches while another scan is running and report monitoring only when the watcher starts successfully.
+- Connect Custom Scan and scheduled Run Now controls, retain previous results when preparing another scan, and order threats by severity.
+- Recognise all three ClamAV databases in either CVD or CLD format.
+- Apply the configured signature directory and global exclusions to manual scans while preserving explicit per-scan database overrides.
+
+### Changed
+
+- Scan history now shows completion dates, an empty state and its current-session retention policy.
+- Remove inactive idle-scan and battery-pause controls and explain the current automation limits.
+- Explain that the optional ClamAV daemon controls scan limits, exclusions and archive settings through its own configuration.
+
 ## [1.2.0] - 2026-08-28
 
 ### Added

@@ -17,9 +17,11 @@ final class AppState: ObservableObject {
     @Published var lastUpdateResult: UpdateResult?
     @Published var isUpdatingSignatures = false
     @Published var quarantinedFiles: [QuarantinedFile] = []
+    @Published private(set) var quarantineLoadError: String?
     @Published var settings: AppSettings
     @Published var logs: [LogEntry] = []
     @Published var scanError: String?
+    @Published private(set) var isMonitoringActive = false
     @Published var settingsSaveError: String?
     @Published var launchAtLoginError: String?
     @Published var signatureUpdateScheduleError: String?
@@ -53,6 +55,9 @@ final class AppState: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var pendingAutomaticDownloadPaths: [URL] = []
     private var isProcessingAutomaticDownloads = false
+    private var activeScanGeneration: UUID?
+    private var pendingAutomaticMonitoringPaths: [URL] = []
+    private var isProcessingAutomaticMonitoring = false
     private var pendingExternalScanRequestIDs = Set<UUID>()
     private var shouldLoadAllExternalScanRequests = false
     private var isConsumingExternalScanRequests = false
@@ -113,7 +118,7 @@ final class AppState: ObservableObject {
         self.protectionScoreManager = scoreManager
         self.protectionScore = scoreManager.calculateScore(
             lastScanDate: nil,
-            monitoringEnabled: loadedSettings.monitoringEnabled,
+            monitoringEnabled: false,
             finderExtensionEnabled: FinderExtensionManager.isEnabled
         )
         self.notificationPermissionStatus = resolvedNotificationManager.permissionStatus
@@ -272,6 +277,8 @@ final class AppState: ObservableObject {
             return outcome
         }
 
+        let generation = UUID()
+        activeScanGeneration = generation
         scanError = nil
         isScanning = true
         isScanPaused = false
@@ -281,34 +288,48 @@ final class AppState: ObservableObject {
         let admissionFailureMessage = source == .finder
             ? FinderScanRequestHandoff.genericFailureMessage
             : "SafeMac AV couldn’t start this scan. Try again."
-        let outcome = await scanCoordinator.run(
+        var outcome = await scanCoordinator.run(
             request,
             onAdmitted: onAdmitted,
             admissionFailureMessage: admissionFailureMessage
         ) { [weak self] progress in
             Task { @MainActor in
-                self?.currentScanProgress = progress
+                guard let self, self.activeScanGeneration == generation else { return }
+                self.currentScanProgress = progress
             }
+        }
+        if activeScanGeneration == generation {
+            activeScanGeneration = nil
         }
 
         switch outcome {
         case .completed(let report):
-            lastScanResult = report
-
+            var results = report.infectedFiles
+            var errors = report.errors
             if options.quarantineInfected {
-                for result in report.infectedFiles {
+                for index in results.indices {
+                    let result = results[index]
                     do {
                         try await quarantineManager.quarantine(file: result.path, threat: result.threatName)
+                        results[index].actionTaken = .quarantined
                     } catch {
+                        errors.append("\((result.path as NSString).lastPathComponent) could not be quarantined. The detected threat may remain at its original location. Review the logs before retrying.")
                         addLog(.error, "Failed to quarantine \(result.path): \(error.localizedDescription)")
                     }
                 }
                 loadQuarantinedFiles()
             }
-
-            scanHistoryManager.addEntry(ScanHistoryEntry(from: report, scanType: scanType))
+            let finalReport = ScanReport(
+                startTime: report.startTime, endTime: report.endTime,
+                filesScanned: report.filesScanned, infectedFiles: results,
+                errors: errors, scanPaths: report.scanPaths,
+                exitCode: report.exitCode, completionState: report.completionState
+            )
+            lastScanResult = finalReport
+            outcome = .completed(finalReport)
+            scanHistoryManager.addEntry(ScanHistoryEntry(from: finalReport, scanType: scanType))
             addLog(.info, "Scan completed: \(report.filesScanned) files scanned, \(report.infectedFiles.count) threats found")
-            await sendScanNotification(report: report, source: source, requestedPaths: paths)
+            await sendScanNotification(report: finalReport, source: source, requestedPaths: paths)
         case .failed(let message):
             scanError = message
             addLog(.error, "Scan failed: \(message)")
@@ -330,6 +351,7 @@ final class AppState: ObservableObject {
     }
 
     func cancelScan() {
+        activeScanGeneration = nil
         scanCoordinator.cancelCurrentScan()
         isScanning = false
         isScanPaused = false
@@ -393,7 +415,13 @@ final class AppState: ObservableObject {
     }
 
     func loadQuarantinedFiles() {
-        quarantinedFiles = quarantineManager.listQuarantinedFiles()
+        do {
+            quarantinedFiles = try quarantineManager.readQuarantinedFiles()
+            quarantineLoadError = nil
+        } catch {
+            quarantineLoadError = "Quarantine could not be read. Existing files were left unchanged. Check the quarantine folder and try again."
+            addLog(.error, "Could not load quarantine: \(error.localizedDescription)")
+        }
     }
 
     func restoreFromQuarantine(_ file: QuarantinedFile) async throws {
@@ -418,6 +446,9 @@ final class AppState: ObservableObject {
         }
         if !settings.autoScanDownloads {
             pendingAutomaticDownloadPaths.removeAll()
+        }
+        if !settings.monitoringEnabled {
+            pendingAutomaticMonitoringPaths.removeAll()
         }
         configureMonitoring()
         refreshProtectionScore()
@@ -623,7 +654,7 @@ final class AppState: ObservableObject {
     func refreshProtectionScore() {
         protectionScore = protectionScoreManager.calculateScore(
             lastScanDate: lastScanResult?.endTime,
-            monitoringEnabled: settings.monitoringEnabled,
+            monitoringEnabled: isMonitoringActive,
             finderExtensionEnabled: FinderExtensionManager.isEnabled
         )
     }
@@ -778,7 +809,48 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func enqueueAutomaticMonitoringScan(_ urls: [URL]) {
+        guard settings.monitoringEnabled else { return }
+        pendingAutomaticMonitoringPaths = uniqueDirectories(
+            pendingAutomaticMonitoringPaths + urls.map(\.standardizedFileURL)
+        )
+        guard !isProcessingAutomaticMonitoring else { return }
+        isProcessingAutomaticMonitoring = true
+        Task { @MainActor [weak self] in
+            await self?.processAutomaticMonitoringScans()
+        }
+    }
+
+    private func processAutomaticMonitoringScans() async {
+        defer { isProcessingAutomaticMonitoring = false }
+        while !pendingAutomaticMonitoringPaths.isEmpty {
+            await scanCoordinator.waitUntilIdle()
+            guard settings.monitoringEnabled else {
+                pendingAutomaticMonitoringPaths.removeAll()
+                break
+            }
+            guard !pendingAutomaticMonitoringPaths.isEmpty else { break }
+            guard !scanCoordinator.isScanning else { continue }
+            let paths = pendingAutomaticMonitoringPaths
+            pendingAutomaticMonitoringPaths.removeAll()
+            let outcome = await startScan(
+                paths: paths, options: realtimeOptions(), scanType: .realtime, source: .realtime
+            )
+            if case .skippedAlreadyRunning = outcome {
+                pendingAutomaticMonitoringPaths = uniqueDirectories(paths + pendingAutomaticMonitoringPaths)
+            }
+        }
+    }
+
     private func configureMonitoring() {
+        defer {
+            isMonitoringActive = settings.monitoringEnabled && fileWatcher.isWatching
+                && settings.monitoredDirectories.contains { path in
+                    var isDirectory: ObjCBool = false
+                    return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+                }
+            refreshProtectionScore()
+        }
         fileWatcher.updateConfiguration(
             batchIntervalMinutes: settings.batchScanIntervalMinutes,
             batchThreshold: settings.batchScanFileThreshold
@@ -803,7 +875,7 @@ final class AppState: ObservableObject {
         fileWatcher.startWatching(directories: directories) { [weak self] files in
             guard let self else { return }
             Task { @MainActor in
-                await self.startScan(paths: files, options: self.realtimeOptions(), scanType: .realtime, source: .realtime)
+                self.enqueueAutomaticMonitoringScan(files)
             }
         }
     }

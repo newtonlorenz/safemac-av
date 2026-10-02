@@ -22,7 +22,16 @@ struct QuarantineView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            if appState.quarantinedFiles.isEmpty {
+            if let error = appState.quarantineLoadError {
+                VStack(spacing: 12) {
+                    Label("Quarantine Couldn’t Be Loaded", systemImage: "exclamationmark.triangle")
+                        .font(.headline)
+                    Text(error).foregroundStyle(.secondary)
+                    Button("Retry") { appState.loadQuarantinedFiles() }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("quarantine-load-error")
+            } else if appState.quarantinedFiles.isEmpty {
                 EmptyQuarantineView()
             } else {
                 QuarantineToolbar(

@@ -47,7 +47,7 @@ final class ProtectionScoreManager {
             ScoreComponent(title: "ClamAV Installed", isComplete: isInstalled, points: 25, action: isInstalled ? nil : .configureClamAV),
             ScoreComponent(title: "Signatures Up to Date", isComplete: signaturesFresh, points: 25, action: signaturesFresh ? nil : .updateSignatures),
             ScoreComponent(title: "Recent Scan", isComplete: recentScan, points: 25, action: recentScan ? nil : .reviewScan),
-            ScoreComponent(title: "Real-time Monitoring", isComplete: monitoringEnabled, points: 15, action: monitoringEnabled ? nil : .enableMonitoring),
+            ScoreComponent(title: "Folder Monitoring", isComplete: monitoringEnabled, points: 15, action: monitoringEnabled ? nil : .enableMonitoring),
             ScoreComponent(title: "Finder Extension", isComplete: finderExtensionEnabled, points: 10, action: finderExtensionEnabled ? nil : .openFinderSettings)
         ]
         return ProtectionScore(score: components.filter(\.isComplete).map(\.points).reduce(0, +), components: components)

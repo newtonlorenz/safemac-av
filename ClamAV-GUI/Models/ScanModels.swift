@@ -28,7 +28,7 @@ struct ScanResult: Identifiable, Equatable {
     let path: String
     let threatName: String
     let severity: ThreatSeverity
-    let actionTaken: ScanAction
+    var actionTaken: ScanAction
     let timestamp: Date
 
     init(path: String, threatName: String, severity: ThreatSeverity = .medium, actionTaken: ScanAction = .reported) {
@@ -46,6 +46,15 @@ enum ThreatSeverity: String, CaseIterable, Codable {
     case medium = "Medium"
     case high = "High"
     case critical = "Critical"
+
+    var priority: Int {
+        switch self {
+        case .low: return 0
+        case .medium: return 1
+        case .high: return 2
+        case .critical: return 3
+        }
+    }
 
     var color: String {
         switch self {

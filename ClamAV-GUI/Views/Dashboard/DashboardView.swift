@@ -73,9 +73,9 @@ struct StatusCardsSection: View {
 
             StatusCard(
                 title: "Quarantine",
-                value: "\(appState.quarantinedFiles.count) files",
+                value: appState.quarantineLoadError == nil ? "\(appState.quarantinedFiles.count) files" : "Needs attention",
                 icon: "lock.shield",
-                color: appState.quarantinedFiles.isEmpty ? .gray : .orange
+                color: appState.quarantineLoadError == nil && appState.quarantinedFiles.isEmpty ? .gray : .orange
             )
 
             StatusCard(
@@ -94,9 +94,9 @@ struct StatusCardsSection: View {
 
             StatusCard(
                 title: "Monitoring",
-                value: appState.settings.monitoringEnabled ? "Active" : "Disabled",
+                value: appState.settings.monitoringEnabled ? (appState.isMonitoringActive ? "Watching folders" : "Not watching") : "Disabled",
                 icon: "eye",
-                color: appState.settings.monitoringEnabled ? .green : .gray
+                color: appState.isMonitoringActive ? .green : (appState.settings.monitoringEnabled ? .orange : .gray)
             )
         }
     }
