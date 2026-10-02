@@ -266,7 +266,7 @@ final class ScanScheduler: ScanSchedulerProtocol {
         case .weekly:
             calendarInterval = """
                 <key>Weekday</key>
-                <integer>\(job.schedule.dayOfWeek ?? 1)</integer>
+                <integer>\((job.schedule.dayOfWeek ?? 1) - 1)</integer>
                 <key>Hour</key>
                 <integer>\(job.schedule.time.hour ?? 9)</integer>
                 <key>Minute</key>

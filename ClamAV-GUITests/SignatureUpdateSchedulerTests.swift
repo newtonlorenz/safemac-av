@@ -79,6 +79,24 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         XCTAssertEqual(try permissions(at: fixture.plistURL), 0o644)
     }
 
+    func testWeeklySchedulesConvertSundayAndSaturdayToLaunchdDays() throws {
+        for (weekday, launchdDay) in [(1, 0), (7, 6)] {
+            let fixture = try makeFixture()
+            let scheduler = makeScheduler(fixture: fixture)
+            let schedule = ScanSchedule(
+                frequency: .weekly,
+                time: DateComponents(hour: 9, minute: 0),
+                dayOfWeek: weekday
+            )
+
+            try scheduler.reconcile(enabled: true, schedule: schedule)
+
+            let plist = try readPlist(at: fixture.plistURL)
+            let interval = try XCTUnwrap(plist["StartCalendarInterval"] as? [String: Int])
+            XCTAssertEqual(interval["Weekday"], launchdDay)
+        }
+    }
+
     func testWeeklyScheduleIncludesSelectedWeekday() throws {
         let fixture = try makeFixture()
         let scheduler = makeScheduler(fixture: fixture)
@@ -92,7 +110,7 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
 
         let plist = try readPlist(at: fixture.plistURL)
         XCTAssertEqual(plist["StartCalendarInterval"] as? [String: Int], [
-            "Weekday": 4,
+            "Weekday": 3,
             "Hour": 12,
             "Minute": 5
         ])

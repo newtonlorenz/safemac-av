@@ -12,17 +12,27 @@ protocol ClamAVRunnerProtocol {
 
 final class ClamAVRunner: ClamAVRunnerProtocol {
     private let configManager: ConfigManagerProtocol
+    private let processLock = NSLock()
     private var currentProcess: Process?
     private var isCancelled = false
-    private(set) var currentProcessPID: Int32?
-    private(set) var scanIsPaused = false
+    private var processPID: Int32?
+    private var isPaused = false
+
+    var currentProcessPID: Int32? { withProcessLock { processPID } }
+    var scanIsPaused: Bool { withProcessLock { isPaused } }
+
+    private func withProcessLock<T>(_ operation: () throws -> T) rethrows -> T {
+        processLock.lock()
+        defer { processLock.unlock() }
+        return try operation()
+    }
 
     init(configManager: ConfigManagerProtocol) {
         self.configManager = configManager
     }
 
     func scan(paths: [URL], options: ScanOptions, progressHandler: @escaping (ScanProgress) -> Void) async throws -> ScanReport {
-        isCancelled = false
+        withProcessLock { isCancelled = false }
         let settings = configManager.loadSettings()
         let startTime = Date()
         let backend = scannerBackend(for: settings, paths: paths, options: options)
@@ -32,7 +42,7 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
         }
 
         let process = Process()
-        currentProcess = process
+        withProcessLock { currentProcess = process }
         if settings.lowImpactMode {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/nice")
             process.arguments = ["-n", "10", backend.executablePath] + backend.arguments
@@ -48,33 +58,41 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
 
         let outputState = ClamAVScanOutputState()
 
-        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
-            outputState.appendStdout(output, startTime: startTime, progressHandler: progressHandler)
+        let stdoutReader = ClamAVPipeReader(handle: stdoutPipe.fileHandleForReading) { data in
+            outputState.appendStdout(data, startTime: startTime, progressHandler: progressHandler)
         }
-
-        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
-            outputState.appendStderr(output)
+        let stderrReader = ClamAVPipeReader(handle: stderrPipe.fileHandleForReading) { data in
+            outputState.appendStderr(data)
         }
+        stdoutReader.start()
+        stderrReader.start()
 
         return try await withCheckedThrowingContinuation { continuation in
             process.terminationHandler = { [weak self] proc in
-                stdoutPipe.fileHandleForReading.readabilityHandler = nil
-                stderrPipe.fileHandleForReading.readabilityHandler = nil
-                self?.currentProcess = nil
-                self?.currentProcessPID = nil
-                self?.scanIsPaused = false
+                stdoutReader.finish()
+                stderrReader.finish()
+                let cancelled = self?.withProcessLock {
+                    self?.currentProcess = nil
+                    self?.processPID = nil
+                    self?.isPaused = false
+                    return self?.isCancelled == true
+                } ?? false
 
-                if self?.isCancelled == true {
+                if cancelled {
                     continuation.resume(throwing: ClamAVError.cancelled)
                     return
                 }
 
                 outputState.flushStdout(startTime: startTime, progressHandler: progressHandler)
                 let snapshot = outputState.snapshot()
+
+                guard proc.terminationReason == .exit else {
+                    continuation.resume(throwing: ClamAVError.scanFailed(
+                        exitCode: proc.terminationStatus,
+                        message: "Scanner terminated by signal \(proc.terminationStatus)."
+                    ))
+                    return
+                }
 
                 let completionState = Self.completionState(
                     forExitCode: proc.terminationStatus,
@@ -100,8 +118,11 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
             }
 
             do {
-                try process.run()
-                currentProcessPID = process.processIdentifier
+                try withProcessLock {
+                    guard !isCancelled else { throw ClamAVError.cancelled }
+                    try process.run()
+                    processPID = process.processIdentifier
+                }
                 // Send initial scanning status so UI updates from "Preparing"
                 DispatchQueue.main.async {
                     progressHandler(ScanProgress(
@@ -113,34 +134,48 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
                     ))
                 }
             } catch {
-                stdoutPipe.fileHandleForReading.readabilityHandler = nil
-                stderrPipe.fileHandleForReading.readabilityHandler = nil
-                currentProcess = nil
-                currentProcessPID = nil
-                scanIsPaused = false
-                continuation.resume(throwing: ClamAVError.processStartFailed(error.localizedDescription))
+                stdoutReader.stop()
+                stderrReader.stop()
+                withProcessLock {
+                    currentProcess = nil
+                    processPID = nil
+                    isPaused = false
+                }
+                if case ClamAVError.cancelled = error {
+                    continuation.resume(throwing: ClamAVError.cancelled)
+                } else {
+                    continuation.resume(throwing: ClamAVError.processStartFailed(error.localizedDescription))
+                }
             }
         }
     }
 
     func cancelCurrentScan() {
-        isCancelled = true
-        currentProcess?.terminate()
-        currentProcess = nil
-        currentProcessPID = nil
-        scanIsPaused = false
+        withProcessLock {
+            isCancelled = true
+            guard let process = currentProcess, process.isRunning else { return }
+            process.terminate()
+            // A stopped process cannot act on SIGTERM until it continues.
+            if isPaused {
+                kill(process.processIdentifier, SIGCONT)
+            }
+            isPaused = false
+            // Retain the process and PID until termination actually completes.
+        }
     }
 
     func pauseScan() {
-        guard let pid = currentProcessPID else { return }
-        kill(pid, SIGSTOP)
-        scanIsPaused = true
+        withProcessLock {
+            guard !isCancelled, let pid = processPID else { return }
+            if kill(pid, SIGSTOP) == 0 { isPaused = true }
+        }
     }
 
     func resumeScan() {
-        guard let pid = currentProcessPID else { return }
-        kill(pid, SIGCONT)
-        scanIsPaused = false
+        withProcessLock {
+            guard let pid = processPID else { return }
+            if kill(pid, SIGCONT) == 0 { isPaused = false }
+        }
     }
 
     private func scannerBackend(for settings: AppSettings, paths: [URL], options: ScanOptions) -> (executablePath: String, arguments: [String]) {
@@ -151,9 +186,18 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
             )
         }
 
+        var effectiveOptions = options
+        if effectiveOptions.databasePath?.isEmpty != false {
+            effectiveOptions.databasePath = settings.signatureDirectory
+        }
+        var seenExclusions = Set<String>()
+        effectiveOptions.excludedPaths = (options.excludedPaths + settings.allExclusions).filter {
+            seenExclusions.insert($0).inserted
+        }
+
         return (
             settings.clamScanPath,
-            Self.buildClamscanArguments(paths: paths, options: options)
+            Self.buildClamscanArguments(paths: paths, options: effectiveOptions)
         )
     }
 
@@ -191,9 +235,7 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
             args.append("--follow-file-symlinks=0")
         }
 
-        if options.scanArchives {
-            args.append("--scan-archive=yes")
-        }
+        args.append("--scan-archive=\(options.scanArchives ? "yes" : "no")")
 
         args.append("--max-filesize=\(options.maxFileSize)M")
         args.append("--max-scansize=\(options.maxScanSize)M")
@@ -292,44 +334,87 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
     }
 }
 
+/// Serialises each pipe's reads with the final drain, so termination cannot
+/// snapshot output while a readability callback is still consuming its bytes.
+private final class ClamAVPipeReader: @unchecked Sendable {
+    private let handle: FileHandle
+    private let consume: (Data) -> Void
+    private let lock = NSLock()
+
+    init(handle: FileHandle, consume: @escaping (Data) -> Void) {
+        self.handle = handle
+        self.consume = consume
+    }
+
+    func start() {
+        handle.readabilityHandler = { [weak self] _ in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.consume(self.handle.availableData)
+        }
+    }
+
+    func stop() {
+        handle.readabilityHandler = nil
+    }
+
+    func finish() {
+        stop()
+        lock.lock()
+        defer { lock.unlock() }
+        consume(handle.readDataToEndOfFile())
+    }
+}
+
 private final class ClamAVScanOutputState: @unchecked Sendable {
     private let lock = NSLock()
     private var infectedFiles: [ScanResult] = []
     private var errors: [String] = []
     private var filesScanned = 0
-    private var stdoutBuffer = ""
+    private var stdoutBuffer = Data()
+    private var stderrBuffer = Data()
 
-    func appendStdout(_ output: String, startTime: Date, progressHandler: @escaping (ScanProgress) -> Void) {
+    func appendStdout(_ data: Data, startTime: Date, progressHandler: @escaping (ScanProgress) -> Void) {
         let updates = lockedProgressUpdates {
-            stdoutBuffer += output
-            let lines = stdoutBuffer.components(separatedBy: "\n")
-            stdoutBuffer = lines.last ?? ""
-            return lines.dropLast().compactMap { processOutputLine(String($0), startTime: startTime) }
+            stdoutBuffer.append(data)
+            return consumeLines(from: &stdoutBuffer).compactMap {
+                processOutputLine($0, startTime: startTime)
+            }
         }
-
         publish(updates: updates, progressHandler: progressHandler)
     }
 
     func flushStdout(startTime: Date, progressHandler: @escaping (ScanProgress) -> Void) {
         let updates = lockedProgressUpdates {
-            let trailingLine = stdoutBuffer
-            stdoutBuffer = ""
+            let trailingLine = String(decoding: stdoutBuffer, as: UTF8.self)
+            stdoutBuffer.removeAll()
+            recordError(String(decoding: stderrBuffer, as: UTF8.self))
+            stderrBuffer.removeAll()
             return [processOutputLine(trailingLine, startTime: startTime)].compactMap { $0 }
         }
-
         publish(updates: updates, progressHandler: progressHandler)
     }
 
-    func appendStderr(_ output: String) {
-        let lines = output.components(separatedBy: "\n")
+    func appendStderr(_ data: Data) {
         lock.lock()
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty && !trimmed.hasPrefix("LibClamAV") {
-                errors.append(trimmed)
-            }
+        defer { lock.unlock() }
+        stderrBuffer.append(data)
+        for line in consumeLines(from: &stderrBuffer) { recordError(line) }
+    }
+
+    private func consumeLines(from buffer: inout Data) -> [String] {
+        var lines: [String] = []
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            lines.append(String(decoding: buffer[..<newline], as: UTF8.self))
+            buffer.removeSubrange(...newline)
         }
-        lock.unlock()
+        return lines
+    }
+
+    private func recordError(_ line: String) {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty && !trimmed.hasPrefix("LibClamAV") { errors.append(trimmed) }
     }
 
     func snapshot() -> (Int, [ScanResult], [String]) {

@@ -191,7 +191,8 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
             guard let weekday = schedule.dayOfWeek, (1...7).contains(weekday) else {
                 throw SignatureUpdateSchedulerError.invalidSchedule
             }
-            interval["Weekday"] = weekday
+            // Calendar uses Sunday = 1; launchd uses Sunday = 0.
+            interval["Weekday"] = weekday - 1
         case .monthly:
             guard let day = schedule.dayOfMonth, (1...31).contains(day) else {
                 throw SignatureUpdateSchedulerError.invalidSchedule

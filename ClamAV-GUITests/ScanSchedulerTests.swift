@@ -16,6 +16,35 @@ final class ScanSchedulerTests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    func testWeeklySchedulesUseLaunchdWeekdaysForEverySelectedDay() throws {
+        for weekday in 1...7 {
+            let fixture = try makeFixture()
+            let scheduler = ScanScheduler(
+                launchAgentsDirectory: fixture.launchAgentsDirectory,
+                jobsStorageURL: fixture.storageURL,
+                launchctlRunner: { _, _ in }
+            )
+            let job = ScanJob(
+                name: "Weekly",
+                paths: ["/tmp/example"],
+                schedule: ScanSchedule(
+                    frequency: .weekly,
+                    time: DateComponents(hour: 9, minute: 15),
+                    dayOfWeek: weekday
+                )
+            )
+
+            try scheduler.createScheduledScan(job)
+
+            let data = try Data(contentsOf: fixture.plistURL(for: job))
+            let plist = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+            let interval = try XCTUnwrap(plist["StartCalendarInterval"] as? [String: Int])
+            XCTAssertEqual(interval["Weekday"], weekday - 1)
+            XCTAssertEqual(interval["Hour"], 9)
+            XCTAssertEqual(interval["Minute"], 15)
+        }
+    }
+
     func testLaunchArgumentsUseDurableJobIDOnly() {
         let scheduler = ScanScheduler()
         let job = ScanJob(

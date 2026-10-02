@@ -155,10 +155,9 @@ final class ConfigManager: ConfigManagerProtocol {
         var bytecodeVersion = "Unknown"
         var lastUpdated: Date?
 
-        let mainCvd = URL(fileURLWithPath: sigDir).appendingPathComponent("main.cvd")
-        let dailyCvd = URL(fileURLWithPath: sigDir).appendingPathComponent("daily.cvd")
-        let dailyCld = URL(fileURLWithPath: sigDir).appendingPathComponent("daily.cld")
-        let bytecodeCvd = URL(fileURLWithPath: sigDir).appendingPathComponent("bytecode.cvd")
+        let mainCvd = signatureDatabaseURL(named: "main", in: sigDir)
+        let dailyPath = signatureDatabaseURL(named: "daily", in: sigDir)
+        let bytecodeCvd = signatureDatabaseURL(named: "bytecode", in: sigDir)
 
         if let attrs = try? fileManager.attributesOfItem(atPath: mainCvd.path),
            let modDate = attrs[.modificationDate] as? Date {
@@ -166,7 +165,6 @@ final class ConfigManager: ConfigManagerProtocol {
             lastUpdated = modDate
         }
 
-        let dailyPath = fileManager.fileExists(atPath: dailyCld.path) ? dailyCld : dailyCvd
         if fileManager.fileExists(atPath: dailyPath.path) {
             dailyVersion = extractCvdVersion(from: dailyPath) ?? "Installed"
             if let attrs = try? fileManager.attributesOfItem(atPath: dailyPath.path),
@@ -188,6 +186,14 @@ final class ConfigManager: ConfigManagerProtocol {
             lastUpdated: lastUpdated,
             signatureCount: nil
         )
+    }
+
+    private func signatureDatabaseURL(named name: String, in directory: String) -> URL {
+        let base = URL(fileURLWithPath: directory, isDirectory: true)
+        let localDatabase = base.appendingPathComponent("\(name).cld")
+        return fileManager.fileExists(atPath: localDatabase.path)
+            ? localDatabase
+            : base.appendingPathComponent("\(name).cvd")
     }
 
     private func extractCvdVersion(from url: URL) -> String? {
