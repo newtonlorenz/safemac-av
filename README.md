@@ -44,7 +44,9 @@ The overview shows engine readiness, definition freshness and the latest scan ou
 
 Scan selections stay in place when you navigate between screens. Stopping a scan waits for the scanner to finish stopping and keeps an explicitly incomplete report. You can review detections, quarantine reported files and export full JSON or CSV reports, including scan locations and warnings. History keeps the latest 200 reports for the current app session; export anything you need to retain after quitting.
 
-Everyday automation and notification controls appear first in Settings. Engine paths and scanner options are under Advanced, with explicit Apply Changes and Cancel controls. Scheduled scans show their next planned run; the Mac must be available at that time.
+Unresolved detections remain prominent while definitions update or setup needs attention. Quarantine failures retain the affected file and reason when you navigate away, so you can return to review them. Restore and permanent deletion are unavailable during a scan or another quarantine operation.
+
+Everyday automation and notification controls appear first in Settings. Engine paths and scanner options are under Advanced, with explicit Apply Changes and Cancel controls. Preferences take effect only after they save successfully; a failed save leaves the active settings unchanged. Scheduled scans show their next planned run; the Mac must be available at that time.
 
 ## Requirements
 
@@ -57,6 +59,8 @@ Both Apple silicon (`/opt/homebrew`) and Intel Homebrew (`/usr/local`) defaults 
 ## Releases
 
 Download the latest compiled build from [GitHub Releases](https://github.com/newtonlorenz/safemac-av/releases/latest).
+
+This README describes the current source on `main`. Some improvements may not yet be in the downloadable release; check that release's notes for its included changes.
 
 > [!NOTE]
 > v1.0.0 predates the SafeMac AV rename and is distributed as `ClamAV-GUI-1.0.0.dmg` containing `ClamAV-GUI.app`. Releases from v1.1.0 use a `SafeMac-AV` DMG containing `SafeMac AV.app`.
@@ -131,6 +135,14 @@ Run the unit and integration suite:
 ```bash
 ./scripts/run-tests.sh unit
 ```
+
+With ClamAV installed, include the optional real-engine scan and quarantine/restore smoke test:
+
+```bash
+TEST_RUNNER_SAFEMAC_CLAMSCAN_PATH="$(brew --prefix)/bin/clamscan" ./scripts/run-tests.sh unit
+```
+
+This test uses harmless text, a temporary custom signature and isolated storage. It does not scan personal files or change installed definitions. Without the executable variable, only this optional test is skipped. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full verification workflow.
 
 Run the interactive UI smoke test on a logged-in Mac. Unlike the headless unit suite, the UI runner needs a locally signable test host, so do not disable code signing for this command:
 
