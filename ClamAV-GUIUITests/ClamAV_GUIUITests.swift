@@ -1,12 +1,65 @@
 import XCTest
 
 final class ClamAV_GUIUITests: XCTestCase {
+    private var ownedApplications: [XCUIApplication] = []
+    private var ownedRoots: [URL] = []
+
+    override func tearDownWithError() throws {
+        for application in ownedApplications { application.terminate() }
+        ownedApplications.removeAll()
+        for root in ownedRoots { try FileManager.default.removeItem(at: root) }
+        ownedRoots.removeAll()
+        try super.tearDownWithError()
+    }
+
+    private func makeApplication() throws -> XCUIApplication {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SafeMacAV-UITests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        ownedRoots.append(root)
+        let application = XCUIApplication()
+        application.launchEnvironment["SAFEMAC_UI_TEST_ROOT"] = root.path
+        ownedApplications.append(application)
+        return application
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
 
+    func testScanSelectionSurvivesSidebarNavigation() throws {
+        let app = try makeApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launch()
+        openMainWindow(in: app)
+        app.buttons["sidebar-scan"].click()
+        app.buttons["browse-scan-files"].click()
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        app.typeText(ownedRoots.last!.path + "\n")
+        let open = app.buttons["Open"].firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 3))
+        open.click()
+        XCTAssertTrue(app.buttons["Clear All"].waitForExistence(timeout: 3))
+        app.buttons["sidebar-history"].click()
+        app.buttons["sidebar-scan"].click()
+        XCTAssertTrue(app.buttons["Clear All"].exists, "Navigating away must keep selected scan locations")
+        app.buttons["Clear All"].click()
+        XCTAssertTrue(app.buttons["browse-scan-files"].exists)
+    }
+
+    func testDefinitionSetupExplainsMissingConfiguration() throws {
+        let app = try makeApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launch()
+        openMainWindow(in: app)
+        app.buttons["sidebar-scan"].click()
+        app.buttons["Open Definition Updates"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["definition-configuration-setup"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Definitions are not installed"].exists)
+        XCTAssertTrue(app.buttons["update-definitions-button"].exists)
+    }
+
     func testHistoryExplainsItsSessionScopeAndEmptyState() throws {
-        let app = XCUIApplication()
+        let app = try makeApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
         app.launch()
         openMainWindow(in: app)
@@ -21,7 +74,7 @@ final class ClamAV_GUIUITests: XCTestCase {
     }
 
     func testCustomScanCommandOpensFilePickerFromDashboard() throws {
-        let app = XCUIApplication()
+        let app = try makeApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
         app.launch()
         openMainWindow(in: app)
@@ -34,7 +87,7 @@ final class ClamAV_GUIUITests: XCTestCase {
     }
 
     func testSidebarNavigationSwitchesDetailViews() throws {
-        let app = XCUIApplication()
+        let app = try makeApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
         app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
         app.launch()
@@ -66,7 +119,7 @@ final class ClamAV_GUIUITests: XCTestCase {
     }
 
     func testModernShellExposesItsPrimarySurfaces() throws {
-        let app = XCUIApplication()
+        let app = try makeApplication()
         app.launchArguments = [
             "--ui-testing",
             "-ApplePersistenceIgnoreState", "YES",
@@ -92,7 +145,7 @@ final class ClamAV_GUIUITests: XCTestCase {
     }
 
     func testModernShellSupportsDarkAppearance() throws {
-        let app = XCUIApplication()
+        let app = try makeApplication()
         app.launchArguments = [
             "--ui-testing",
             "-ApplePersistenceIgnoreState", "YES",
@@ -116,7 +169,7 @@ final class ClamAV_GUIUITests: XCTestCase {
     }
 
     func testMenuBarExtraExposesStandaloneActions() throws {
-        let app = XCUIApplication()
+        let app = try makeApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
         app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
         app.launch()
@@ -134,7 +187,7 @@ final class ClamAV_GUIUITests: XCTestCase {
     }
 
     func testRepeatedMenuBarOpenReusesTheIdentifiedMainWindow() throws {
-        let app = XCUIApplication()
+        let app = try makeApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
         app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
         app.launch()
@@ -151,7 +204,7 @@ final class ClamAV_GUIUITests: XCTestCase {
     }
 
     func testQuittingForegroundWindowKeepsMenuBarAppRunning() throws {
-        let app = XCUIApplication()
+        let app = try makeApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
         app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
         app.launch()
@@ -176,7 +229,7 @@ final class ClamAV_GUIUITests: XCTestCase {
     }
 
     func testLaunchAtLoginSettingShowsCurrentStatus() throws {
-        let app = XCUIApplication()
+        let app = try makeApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
         app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
         app.launch()
@@ -192,7 +245,7 @@ final class ClamAV_GUIUITests: XCTestCase {
     }
 
     func testAutomaticSignatureScheduleExposesSemanticControls() throws {
-        let app = XCUIApplication()
+        let app = try makeApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
         app.launchEnvironment["ApplePersistenceIgnoreState"] = "YES"
         app.launch()
@@ -203,7 +256,9 @@ final class ClamAV_GUIUITests: XCTestCase {
         XCTAssertTrue(updatesButton.waitForExistence(timeout: 5), "Expected the Updates sidebar button")
         updatesButton.click()
 
-        XCTAssertTrue(app.descendants(matching: .any)["automatic-signature-updates-toggle"].waitForExistence(timeout: 5))
+        let automaticUpdates = app.descendants(matching: .any)["automatic-signature-updates-toggle"]
+        XCTAssertTrue(automaticUpdates.waitForExistence(timeout: 5))
+        automaticUpdates.click()
         XCTAssertTrue(app.descendants(matching: .any)["signature-update-frequency"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["signature-update-time"].waitForExistence(timeout: 5))
     }

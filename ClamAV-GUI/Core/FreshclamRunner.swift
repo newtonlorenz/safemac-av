@@ -26,8 +26,12 @@ final class FreshclamRunner: FreshclamRunnerProtocol {
                 configDirectory: settings.configDirectory,
                 signatureDirectory: settings.signatureDirectory
             )
-        } catch {
+        } catch FreshclamInvocationError.unsafeExecutable {
             throw FreshclamError.executableNotFound(settings.freshclamPath)
+        } catch FreshclamInvocationError.unsafePath {
+            throw FreshclamError.configurationFailed("Configuration and signature directories must use absolute paths.")
+        } catch FreshclamInvocationError.signatureDirectoryCreationFailed {
+            throw FreshclamError.configurationFailed("Unable to create the signature directory. Check its location and permissions.")
         }
         let completed = try await runFreshclam(executablePath: invocation.executablePath, arguments: invocation.arguments)
         return Self.parseUpdateOutput(completed.output, exitCode: completed.exitCode)
@@ -55,21 +59,21 @@ final class FreshclamRunner: FreshclamRunnerProtocol {
 
         let outputBuffer = FreshclamOutputBuffer()
 
-        outputPipe.fileHandleForReading.readabilityHandler = { handle in
-            outputBuffer.append(handle.availableData)
+        let outputReader = ProcessOutputReader(handle: outputPipe.fileHandleForReading) { data in
+            outputBuffer.append(data)
         }
+        outputReader.start()
 
         return try await withCheckedThrowingContinuation { continuation in
             process.terminationHandler = { proc in
-                outputPipe.fileHandleForReading.readabilityHandler = nil
-                outputBuffer.append(outputPipe.fileHandleForReading.readDataToEndOfFile())
+                outputReader.finish()
                 continuation.resume(returning: (outputBuffer.output, proc.terminationStatus))
             }
 
             do {
                 try process.run()
             } catch {
-                outputPipe.fileHandleForReading.readabilityHandler = nil
+                outputReader.stop()
                 continuation.resume(throwing: FreshclamError.processStartFailed(error.localizedDescription))
             }
         }
@@ -89,18 +93,17 @@ final class FreshclamRunner: FreshclamRunnerProtocol {
 
 private final class FreshclamOutputBuffer: @unchecked Sendable {
     private let lock = NSLock()
-    private var text = ""
+    private var data = Data()
 
     var output: String {
         lock.lock()
         defer { lock.unlock() }
-        return text
+        return String(decoding: data, as: UTF8.self)
     }
 
-    func append(_ data: Data) {
-        guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
+    func append(_ chunk: Data) {
         lock.lock()
-        text += chunk
+        data.append(chunk)
         lock.unlock()
     }
 }
@@ -109,6 +112,7 @@ enum FreshclamError: LocalizedError {
     case executableNotFound(String)
     case processStartFailed(String)
     case configNotFound
+    case configurationFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -118,6 +122,8 @@ enum FreshclamError: LocalizedError {
             return "Failed to start update: \(reason)"
         case .configNotFound:
             return "freshclam.conf not found"
+        case .configurationFailed(let reason):
+            return reason
         }
     }
 }

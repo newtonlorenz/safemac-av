@@ -359,6 +359,28 @@ final class ConfigManagerTests: XCTestCase {
         XCTAssertTrue(configManager.validateClamAVInstallation(using: settings).isReady)
     }
 
+    func testFreshMainDatabaseDoesNotHideStaleDailySignatures() throws {
+        let signatureDir = tempDirectory.appendingPathComponent("db")
+        try FileManager.default.createDirectory(at: signatureDir, withIntermediateDirectories: true)
+        let main = signatureDir.appendingPathComponent("main.cvd")
+        let daily = signatureDir.appendingPathComponent("daily.cld")
+        try "ClamAV:test:123:meta".write(to: main, atomically: true, encoding: .ascii)
+        try "ClamAV:test:456:meta".write(to: daily, atomically: true, encoding: .ascii)
+        let staleDate = Date().addingTimeInterval(-20 * 24 * 60 * 60)
+        try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: daily.path)
+        var settings = AppSettings.default
+        settings.clamScanPath = "/usr/bin/true"
+        settings.freshclamPath = "/usr/bin/true"
+        settings.signatureDirectory = signatureDir.path
+        try configManager.saveSettings(settings)
+
+        let info = configManager.getSignatureInfo()
+        XCTAssertEqual(try XCTUnwrap(info.lastUpdated).timeIntervalSince1970, staleDate.timeIntervalSince1970, accuracy: 1)
+        guard case .outdatedSignatures = configManager.validateClamAVInstallation(using: settings) else {
+            return XCTFail("Refreshing main must not hide an outdated daily database")
+        }
+    }
+
     func testValidateInstallationUsesConfiguredPaths() throws {
         let testRoot = tempDirectory.appendingPathComponent("clamav-configured")
         let signatureDir = testRoot.appendingPathComponent("db")
@@ -448,6 +470,52 @@ final class ConfigManagerTests: XCTestCase {
         XCTAssertTrue(exclusions.contains("node_modules"), "Should exclude node_modules")
         XCTAssertTrue(exclusions.contains(".git"), "Should exclude .git")
         XCTAssertTrue(exclusions.contains("__pycache__"), "Should exclude Python cache")
+    }
+
+    func testEngineDraftAppliesOnlyEditedFieldsToFreshSettings() {
+        let original = AppSettings.default
+        var draft = EngineSettingsDraft(settings: original)
+        draft.settings.clamScanPath = "/tmp/edited-scanner"
+        var current = original
+        current.showNotifications.toggle()
+        current.freshclamPath = "/tmp/new-updater"
+        current.customExclusions = ["recent-exclusion"]
+
+        let merged = draft.merging(into: current)
+
+        XCTAssertEqual(merged.clamScanPath, "/tmp/edited-scanner")
+        XCTAssertEqual(merged.freshclamPath, current.freshclamPath)
+        XCTAssertEqual(merged.showNotifications, current.showNotifications)
+        XCTAssertEqual(merged.customExclusions, current.customExclusions)
+        XCTAssertEqual(original.clamScanPath, AppSettings.default.clamScanPath)
+        XCTAssertTrue(draft.hasChanges)
+    }
+
+    func testEngineDraftPreservesUneditedDaemonFieldsAndCanBeDiscarded() {
+        let original = AppSettings.default
+        var draft = EngineSettingsDraft(settings: original)
+        draft.settings.clamdSettings.clamdScanPath = "/tmp/edited-daemon-client"
+        var current = original
+        current.clamdSettings.socketPath = "/tmp/new-daemon.sock"
+        current.clamdSettings.isEnabled = true
+
+        let merged = draft.merging(into: current)
+        XCTAssertEqual(merged.clamdSettings.clamdScanPath, "/tmp/edited-daemon-client")
+        XCTAssertEqual(merged.clamdSettings.socketPath, current.clamdSettings.socketPath)
+        XCTAssertTrue(merged.clamdSettings.isEnabled)
+
+        draft = EngineSettingsDraft(settings: current)
+        XCTAssertFalse(draft.hasChanges)
+        XCTAssertEqual(draft.merging(into: current), current)
+    }
+
+    func testEngineDraftRejectsRelativeOrEmptyStoragePaths() {
+        var draft = EngineSettingsDraft(settings: .default)
+        XCTAssertNil(draft.validationMessage)
+        draft.settings.quarantineDirectory = "relative/path"
+        XCTAssertNotNil(draft.validationMessage)
+        draft.settings.quarantineDirectory = ""
+        XCTAssertNotNil(draft.validationMessage)
     }
 
     // MARK: - Settings Merge Tests

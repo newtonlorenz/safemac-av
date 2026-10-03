@@ -4,6 +4,64 @@ import XCTest
 
 @MainActor
 final class ApplicationLaunchConfigurationTests: XCTestCase {
+#if DEBUG
+    func testUITestFactoryUsesIsolatedStorageAndDisablesExternalServices() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SafeMacAV-UITests-\(UUID().uuidString)")
+        let unrelated = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: unrelated, withIntermediateDirectories: false)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: unrelated)
+        }
+        let sentinel = unrelated.appendingPathComponent("settings.json")
+        let original = Data("unchanged user-data fixture".utf8)
+        try original.write(to: sentinel)
+
+        let state = try DebugUITestEnvironment.makeAppState(rootPath: root.path)
+
+        XCTAssertFalse(state.settings.monitoringEnabled)
+        XCTAssertFalse(state.settings.autoScanDownloads)
+        XCTAssertFalse(state.settings.autoUpdateSignatures)
+        XCTAssertFalse(state.settings.showNotifications)
+        XCTAssertFalse(state.isMonitoringActive)
+        XCTAssertEqual(state.settings.clamScanPath, "/usr/bin/true")
+        XCTAssertEqual(state.settings.freshclamPath, "/usr/bin/true")
+        XCTAssertEqual(state.launchAtLoginStatus, .disabled)
+        for path in [state.settings.quarantineDirectory, state.settings.signatureDirectory, state.settings.configDirectory] {
+            XCTAssertTrue(path.hasPrefix(root.resolvingSymlinksInPath().path + "/"))
+        }
+        state.settings.customExclusions = ["fixture"]
+        state.saveSettings()
+        XCTAssertEqual(try Data(contentsOf: sentinel), original)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("SafeMac AV/settings.json").path))
+    }
+
+    func testUnitTestFactoryGeneratesPrivateStorageWithoutUIRoot() throws {
+        let state = try DebugUITestEnvironment.makeUnitTestAppState()
+        let root = URL(fileURLWithPath: state.settings.configDirectory).deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        XCTAssertTrue(root.lastPathComponent.hasPrefix("SafeMacAV-UITests-"))
+        XCTAssertEqual(root.deletingLastPathComponent().path, FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path)
+        XCTAssertFalse(state.settings.autoScanDownloads)
+        XCTAssertFalse(state.isMonitoringActive)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("SafeMac AV/settings.json").path))
+    }
+
+    func testUITestFactoryRejectsMissingOrNonemptyStorageRoot() throws {
+        XCTAssertThrowsError(try DebugUITestEnvironment.makeAppState(rootPath: nil))
+        XCTAssertThrowsError(try DebugUITestEnvironment.makeAppState(rootPath: "/"))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SafeMacAV-UITests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sentinel = root.appendingPathComponent("keep.txt")
+        try Data("keep".utf8).write(to: sentinel)
+        XCTAssertThrowsError(try DebugUITestEnvironment.makeAppState(rootPath: root.path))
+        XCTAssertEqual(try Data(contentsOf: sentinel), Data("keep".utf8))
+    }
+#endif
+
     func testRegistryCoalescesDuplicateSubscriptionsAndInstallsExactlyOnce() {
         let registry = ApplicationLaunchConfigurationRegistry()
         let owner = LaunchConfigurationOwner()

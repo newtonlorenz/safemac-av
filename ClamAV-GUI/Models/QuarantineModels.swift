@@ -38,3 +38,10 @@ struct QuarantineMetadata: Codable {
         QuarantineMetadata(version: 1, files: [])
     }
 }
+
+/// Session-owned so asynchronous failures survive screen navigation.
+struct QuarantineActionError: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+}

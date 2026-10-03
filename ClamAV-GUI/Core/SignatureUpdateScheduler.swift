@@ -26,11 +26,12 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
     private struct MutationState {
         var previousJobBootedOut = false
         var legacyJobBootedOut = false
+        var previousPlistRemoved = false
         var replacementWritten = false
         var replacementBootstrapAttempted = false
 
         var requiresRollback: Bool {
-            previousJobBootedOut || legacyJobBootedOut || replacementWritten
+            previousJobBootedOut || legacyJobBootedOut || previousPlistRemoved || replacementWritten
                 || replacementBootstrapAttempted
         }
     }
@@ -128,6 +129,7 @@ final class SignatureUpdateScheduler: SignatureUpdateScheduling {
                 try bootstrap(plistURL: plistURL)
             } else if snapshot.plistData != nil {
                 try fileManager.removeItem(at: plistURL)
+                mutation.previousPlistRemoved = true
             }
             if legacySnapshot.plistData != nil {
                 try fileManager.removeItem(at: legacyLaunchAgentURL)

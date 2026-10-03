@@ -5,6 +5,43 @@ import XCTest
 
 @MainActor
 final class MenuBarManagerTests: XCTestCase {
+    func testIsolatedOwnershipIgnoresHintsWhileNormalOwnershipResponds() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let center = NotificationCenter()
+        let normal = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "normal", baseURL: root) },
+            startsRecoveryTimer: false,
+            ownershipNotificationCenter: center
+        )
+        let isolated = BackgroundMenuBarOwnershipCoordinator(
+            makeLease: { BackgroundWorkLease(name: "isolated", baseURL: root) },
+            startsRecoveryTimer: false,
+            observesOwnershipHints: false,
+            ownershipNotificationCenter: center
+        )
+        normal.reconcile(helperEnabled: false)
+        isolated.reconcile(helperEnabled: false)
+        XCTAssertTrue(normal.mainShouldPresentMenuBar)
+        XCTAssertTrue(isolated.mainShouldPresentMenuBar)
+        let hintApplied = expectation(description: "normal coordinator handles ownership hint")
+        let isolatedChanged = expectation(description: "isolated coordinator must ignore ownership hint")
+        isolatedChanged.isInverted = true
+        let isolatedObservation = isolated.$mainShouldPresentMenuBar.dropFirst().sink { _ in
+            isolatedChanged.fulfill()
+        }
+        defer { isolatedObservation.cancel() }
+        let observation = normal.$mainShouldPresentMenuBar.dropFirst().sink { isVisible in
+            if !isVisible { hintApplied.fulfill() }
+        }
+        defer { observation.cancel() }
+        // This center is process-local: no installed helper or app receives it.
+        center.post(name: BackgroundMenuBarOwnershipCoordinator.helperWillAcquireNotification, object: nil)
+        await fulfillment(of: [hintApplied, isolatedChanged], timeout: 1)
+        XCTAssertTrue(isolated.mainShouldPresentMenuBar)
+    }
+
     func testApplicationBundleStartsAsForegroundApplication() {
         XCTAssertNotEqual(
             Bundle(for: MenuBarApplicationDelegate.self)
@@ -390,7 +427,7 @@ final class MenuBarManagerTests: XCTestCase {
         XCTAssertTrue(source.contains("MainWindowControllerRegistry.shared.closeMainWindow()"))
         XCTAssertFalse(source.contains("@StateObject private var initialLaunchHandler"))
         XCTAssertFalse(source.contains("applicationDelegate.configure"))
-        XCTAssertTrue(source.contains("SoftwareUpdateManager(startsUpdater: false)"))
+        XCTAssertTrue(source.contains("SoftwareUpdateManager(startsUpdater: false, isAutomatedTest: isAutomatedTestLaunch)"))
         XCTAssertTrue(source.contains("softwareUpdateManager.startUpdaterIfPossible()"))
         let installConfiguration = try XCTUnwrap(
             source.range(of: "ApplicationLaunchConfigurationRegistry.shared.install")

@@ -1,89 +1,41 @@
 import SwiftUI
 
-struct ProtectionScoreView: View {
-    let score: ProtectionScore
-    @EnvironmentObject var appState: AppState
-    let onAction: (ScoreComponent) -> Void
+/// Presents a factual readiness or scan outcome, without implying overall protection.
+struct ScanOverviewStatusView: View {
+    let status: ScanOverviewStatus
+    let onAction: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 24) {
-            VStack(alignment: .leading, spacing: 14) {
-                Gauge(value: Double(score.score), in: 0...100) {
-                    Text("Protection")
-                } currentValueLabel: {
-                    Text("\(score.score)")
-                        .font(.title2.weight(.bold))
-                }
-                .gaugeStyle(.accessoryCircularCapacity)
-                .tint(scoreColor.gradient)
-                .scaleEffect(1.45)
-                .frame(width: 104, height: 104)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Protection Score")
-                        .font(.headline)
-                    Text(scoreSummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: status.symbol)
+                .font(.system(size: 26, weight: .regular))
+                .foregroundStyle(status.tint)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(status.title)
+                    .font(.title2.weight(.semibold))
+                Text(status.detail)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let title = status.actionTitle {
+                    Button(title, action: onAction)
+                        .buttonStyle(.bordered)
                 }
             }
-
-            Divider()
-
-            VStack(spacing: 7) {
-                ForEach(score.components) { component in
-                    HStack(spacing: 10) {
-                        Image(systemName: component.isComplete ? "checkmark.circle.fill" : "circle.dashed")
-                            .foregroundColor(component.isComplete ? .green : .secondary)
-                            .frame(width: 18)
-
-                        Text(component.title)
-                            .font(.subheadline)
-
-                        Spacer()
-
-                        if component.action != nil {
-                            if isUpdating(component) {
-                                HStack(spacing: 6) {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                    Text("Updating...")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            } else {
-                                Button("Review") { onAction(component) }
-                                    .buttonStyle(.link)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 3)
-                }
-            }
-            .frame(maxWidth: .infinity)
+            Spacer(minLength: 0)
         }
-        .padding(22)
-        .adaptiveGlassSurface(tint: scoreColor.opacity(0.08), cornerRadius: 26)
-        .accessibilityElement(children: .contain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("overview-readiness-status")
     }
+}
 
-    private var scoreColor: Color {
-        switch score.score {
-        case 80...: return .green
-        case 50..<80: return .orange
-        default: return .red
+extension ScanOverviewStatus {
+    var tint: Color {
+        switch kind {
+        case .scanning, .updating: return .accentColor
+        case .setupNeeded, .definitionsNeeded, .incomplete: return .orange
+        case .detections: return .red
+        case .ready: return .secondary
         }
-    }
-
-    private var scoreSummary: String {
-        switch score.score {
-        case 80...: return "Your Mac is well protected"
-        case 50..<80: return "A few items need attention"
-        default: return "Security setup needs attention"
-        }
-    }
-
-    private func isUpdating(_ component: ScoreComponent) -> Bool {
-        component.action == .updateSignatures && appState.isUpdatingSignatures
     }
 }

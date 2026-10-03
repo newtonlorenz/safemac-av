@@ -8,7 +8,6 @@ struct QuarantineView: View {
     @State private var fileToRestore: QuarantinedFile?
     @State private var fileToDelete: QuarantinedFile?
     @State private var searchText = ""
-    @State private var actionError: QuarantineActionError?
 
     var filteredFiles: [QuarantinedFile] {
         if searchText.isEmpty {
@@ -34,25 +33,55 @@ struct QuarantineView: View {
             } else if appState.quarantinedFiles.isEmpty {
                 EmptyQuarantineView()
             } else {
+                Text("Quarantined files are isolated. You can leave them here; restore a file only if you trust it and believe the detection was a mistake.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                 QuarantineToolbar(
                     searchText: $searchText,
                     selectedCount: selectedFiles.count,
                     onRestoreSelected: { showingRestoreConfirmation = true },
                     onDeleteSelected: { showingDeleteConfirmation = true }
                 )
+                .disabled(appState.isManagingQuarantine || appState.isScanning)
 
-                QuarantineList(
-                    files: filteredFiles,
-                    selectedFiles: $selectedFiles,
-                    onRestore: { file in
-                        fileToRestore = file
-                        showingRestoreConfirmation = true
-                    },
-                    onDelete: { file in
-                        fileToDelete = file
-                        showingDeleteConfirmation = true
+                if appState.isScanning {
+                    Text("Restore and delete actions are available after the scan finishes.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                if appState.isManagingQuarantine {
+                    ProgressView("Updating quarantine…")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if filteredFiles.isEmpty {
+                    VStack(spacing: 12) {
+                        Text("No matching files").font(.headline)
+                        Text("Try another filename or threat name.").foregroundStyle(.secondary)
+                        Button("Clear Search") { searchText = "" }
                     }
-                )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    QuarantineList(
+                        files: filteredFiles,
+                        selectedFiles: Binding(
+                            get: { selectedFiles },
+                            set: { if !appState.isManagingQuarantine { selectedFiles = $0 } }
+                        ),
+                        onRestore: { file in
+                            guard !appState.isManagingQuarantine, !appState.isScanning else { return }
+                            fileToRestore = file
+                            showingRestoreConfirmation = true
+                        },
+                        onDelete: { file in
+                            guard !appState.isManagingQuarantine, !appState.isScanning else { return }
+                            fileToDelete = file
+                            showingDeleteConfirmation = true
+                        }
+                    )
+                    .disabled(appState.isManagingQuarantine || appState.isScanning)
+                }
             }
         }
         .padding(.horizontal, GlassDesign.contentPadding)
@@ -63,10 +92,13 @@ struct QuarantineView: View {
                 fileToRestore = nil
             }
             Button("Restore", role: .destructive) {
+                guard !appState.isManagingQuarantine, !appState.isScanning else { return }
                 let files = filesTargetedForRestore
                 fileToRestore = nil
+                appState.isManagingQuarantine = true
                 Task {
                     await restore(files)
+                    appState.isManagingQuarantine = false
                 }
             }
         } message: {
@@ -81,9 +113,12 @@ struct QuarantineView: View {
                 fileToDelete = nil
             }
             Button("Delete", role: .destructive) {
+                guard !appState.isManagingQuarantine, !appState.isScanning else { return }
                 let files = filesTargetedForDeletion
                 fileToDelete = nil
+                appState.isManagingQuarantine = true
                 delete(files)
+                appState.isManagingQuarantine = false
             }
         } message: {
             if let file = fileToDelete {
@@ -92,7 +127,7 @@ struct QuarantineView: View {
                 Text("Are you sure you want to permanently delete \(selectedFiles.count) file(s)? This action cannot be undone.")
             }
         }
-        .alert(item: $actionError) { error in
+        .alert(item: $appState.quarantineActionError) { error in
             Alert(
                 title: Text(error.title),
                 message: Text(error.message),
@@ -118,6 +153,7 @@ struct QuarantineView: View {
     private func restore(_ files: [QuarantinedFile]) async {
         var successfulIDs = Set<UUID>()
         var failedFiles: [QuarantinedFile] = []
+        var failureReasons: [String] = []
 
         for file in files {
             do {
@@ -125,18 +161,19 @@ struct QuarantineView: View {
                 successfulIDs.insert(file.id)
             } catch {
                 failedFiles.append(file)
+                failureReasons.append("\(file.originalFileName): \(error.localizedDescription)")
             }
         }
 
         selectedFiles.subtract(successfulIDs)
         if !failedFiles.isEmpty {
-            actionError = QuarantineActionError(
+            appState.quarantineActionError = QuarantineActionError(
                 title: "Restore Incomplete",
                 message: failureMessage(
                     failedFiles: failedFiles,
                     totalCount: files.count,
                     action: "restored"
-                )
+                ) + "\n" + failureReasons.prefix(3).joined(separator: "\n")
             )
         }
     }
@@ -144,6 +181,7 @@ struct QuarantineView: View {
     private func delete(_ files: [QuarantinedFile]) {
         var successfulIDs = Set<UUID>()
         var failedFiles: [QuarantinedFile] = []
+        var failureReasons: [String] = []
 
         for file in files {
             do {
@@ -151,18 +189,19 @@ struct QuarantineView: View {
                 successfulIDs.insert(file.id)
             } catch {
                 failedFiles.append(file)
+                failureReasons.append("\(file.originalFileName): \(error.localizedDescription)")
             }
         }
 
         selectedFiles.subtract(successfulIDs)
         if !failedFiles.isEmpty {
-            actionError = QuarantineActionError(
+            appState.quarantineActionError = QuarantineActionError(
                 title: "Deletion Incomplete",
                 message: failureMessage(
                     failedFiles: failedFiles,
                     totalCount: files.count,
                     action: "deleted"
-                )
+                ) + "\n" + failureReasons.prefix(3).joined(separator: "\n")
             )
         }
     }
@@ -178,12 +217,6 @@ struct QuarantineView: View {
         let selectionNote = totalCount > 1 ? " Only successful items were removed from the selection." : ""
         return "\(failedFiles.count) of \(totalCount) file(s) could not be \(action): \(names)\(remaining). Review the listed item(s) before retrying.\(selectionNote)"
     }
-}
-
-private struct QuarantineActionError: Identifiable {
-    let id = UUID()
-    let title: String
-    let message: String
 }
 
 struct EmptyQuarantineView: View {
@@ -211,13 +244,30 @@ struct QuarantineToolbar: View {
     let onDeleteSelected: () -> Void
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                searchField
+                Spacer()
+                selectionActions
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                searchField
+                selectionActions
+            }
+        }
+        .padding(14)
+        .adaptiveGlassSurface(cornerRadius: GlassDesign.compactCornerRadius)
+    }
+
+    private var searchField: some View {
+        TextField("Search quarantine...", text: $searchText)
+            .textFieldStyle(.roundedBorder)
+            .frame(minWidth: 140, idealWidth: 200, maxWidth: .infinity)
+            .accessibilityLabel("Search quarantined files")
+    }
+
+    private var selectionActions: some View {
         HStack {
-            TextField("Search quarantine...", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 200)
-
-            Spacer()
-
             if selectedCount > 0 {
                 Text("\(selectedCount) selected")
                     .foregroundColor(.secondary)
@@ -234,8 +284,6 @@ struct QuarantineToolbar: View {
                 .foregroundColor(.red)
             }
         }
-        .padding(14)
-        .adaptiveGlassSurface(cornerRadius: GlassDesign.compactCornerRadius)
     }
 }
 
@@ -296,6 +344,8 @@ struct QuarantinedFileRow: View {
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("\(isExpanded ? "Hide" : "Show") details for \(file.originalFileName)")
+                .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
             }
 
             if isExpanded {
@@ -309,13 +359,16 @@ struct QuarantinedFileRow: View {
                             .textSelection(.enabled)
                     }
 
-                    HStack {
-                        Text("SHA256:")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    DisclosureGroup("Technical details") {
                         Text(file.sha256Hash)
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
+                            .accessibilityLabel("SHA256: \(file.sha256Hash)")
+                        Button("Copy SHA256") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(file.sha256Hash, forType: .string)
+                        }
+                        .buttonStyle(.bordered)
                     }
 
                     HStack(spacing: 12) {
@@ -325,12 +378,6 @@ struct QuarantinedFileRow: View {
                         Button("Delete", action: onDelete)
                             .buttonStyle(.bordered)
                             .foregroundColor(.red)
-
-                        Button("Copy Hash") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(file.sha256Hash, forType: .string)
-                        }
-                        .buttonStyle(.bordered)
                     }
                     .padding(.top, 4)
                 }

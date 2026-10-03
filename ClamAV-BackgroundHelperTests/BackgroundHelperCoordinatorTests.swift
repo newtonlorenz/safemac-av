@@ -482,6 +482,37 @@ final class BackgroundHelperCoordinatorTests: XCTestCase {
         ))
     }
 
+    func testUnchangedSettingsReloadDoesNotRewriteRecoveryCache() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        let settingsURL = root.appendingPathComponent("settings.json")
+        let cacheURL = root.appendingPathComponent("settings.last-known-good.json")
+        try writeSecureSettings(JSONSerialization.data(withJSONObject: [
+            "autoUpdateSignatures": true,
+            "freshclamPath": "/usr/bin/true"
+        ]), to: settingsURL)
+        let store = BackgroundHelperSettingsStore(settingsURL: settingsURL)
+        let settings = store.reload()
+        let original = try FileManager.default.attributesOfItem(atPath: cacheURL.path)
+
+        // Every cache replacement emits the directory event that causes reload.
+        // Keeping an identical cache intact prevents a self-sustaining write loop.
+        XCTAssertEqual(store.reload(), settings)
+        let reloaded = try FileManager.default.attributesOfItem(atPath: cacheURL.path)
+        XCTAssertEqual(reloaded[.systemFileNumber] as? NSNumber, original[.systemFileNumber] as? NSNumber)
+        XCTAssertEqual(reloaded[.modificationDate] as? Date, original[.modificationDate] as? Date)
+
+        try writeSecureSettings(JSONSerialization.data(withJSONObject: [
+            "autoUpdateSignatures": false,
+            "freshclamPath": "/usr/bin/true"
+        ]), to: settingsURL)
+        XCTAssertFalse(store.reload().autoUpdateSignatures)
+        try Data("invalid".utf8).write(to: settingsURL, options: .atomic)
+        XCTAssertFalse(BackgroundHelperSettingsStore(settingsURL: settingsURL).reload().autoUpdateSignatures)
+    }
+
     func testSettingsStoreRejectsUnsafePrimaryFileAndSymlink() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

@@ -268,6 +268,7 @@ final class ScanSchedulerTests: XCTestCase {
                 }
                 try data.write(to: url, options: options)
             },
+            launchAgentLoadedStatusProvider: { _ in true },
             launchctlRunner: { command, _ in launchctlCommands.append(command) }
         )
 
@@ -295,6 +296,7 @@ final class ScanSchedulerTests: XCTestCase {
         let scheduler = ScanScheduler(
             launchAgentsDirectory: fixture.launchAgentsDirectory,
             jobsStorageURL: fixture.storageURL,
+            launchAgentLoadedStatusProvider: { _ in true },
             launchctlRunner: { command, _ in
                 launchctlCommands.append(command)
                 if command == "load" {
@@ -335,6 +337,7 @@ final class ScanSchedulerTests: XCTestCase {
                 }
                 try data.write(to: url, options: options)
             },
+            launchAgentLoadedStatusProvider: { _ in true },
             launchctlRunner: { command, _ in launchctlCommands.append(command) }
         )
 
@@ -346,6 +349,38 @@ final class ScanSchedulerTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture.storageURL), originalMetadata)
         XCTAssertEqual(try Data(contentsOf: fixture.plistURL(for: job)), originalPlist)
         XCTAssertEqual(launchctlCommands, ["unload", "load"])
+    }
+
+    func testFailedUpdateAndRemoveKeepOriginallyUnloadedCurrentAgentUnloaded() throws {
+        for removing in [false, true] {
+            let fixture = try makeFixture()
+            let job = makeJob(name: "Unloaded current agent")
+            let metadata = try JSONEncoder().encode([job])
+            let plist = Data("existing plist".utf8)
+            try metadata.write(to: fixture.storageURL)
+            try plist.write(to: fixture.plistURL(for: job))
+            var operations: [String] = []
+            let scheduler = ScanScheduler(
+                launchAgentsDirectory: fixture.launchAgentsDirectory,
+                jobsStorageURL: fixture.storageURL,
+                dataWriter: { data, url, options in
+                    if url == fixture.storageURL { throw TestError.intentionalWriteFailure }
+                    try data.write(to: url, options: options)
+                },
+                launchAgentLoadedStatusProvider: { _ in false },
+                launchctlRunner: { command, _ in operations.append(command) }
+            )
+            var disabledJob = job
+            disabledJob.isEnabled = false
+            if removing {
+                XCTAssertThrowsError(try scheduler.removeScheduledScan(job))
+            } else {
+                XCTAssertThrowsError(try scheduler.updateScheduledScan(disabledJob))
+            }
+            XCTAssertTrue(operations.isEmpty)
+            XCTAssertEqual(try Data(contentsOf: fixture.plistURL(for: job)), plist)
+            XCTAssertEqual(try Data(contentsOf: fixture.storageURL), metadata)
+        }
     }
 
     func testFailedUpdateKeepsOriginallyUnloadedLegacyAgentUnloaded() throws {
@@ -674,6 +709,86 @@ final class ScanSchedulerTests: XCTestCase {
 
         XCTAssertEqual(scheduler.listScheduledScans().count, 0)
         XCTAssertThrowsError(try scheduler.loadScheduledScans())
+    }
+
+    func testConcurrentResultPersistenceDoesNotEraseNewScheduledJob() throws {
+        let fixture = try makeFixture()
+        var existing = makeJob(name: "Existing")
+        existing.isEnabled = false
+        var added = makeJob(name: "Added while result is saved")
+        added.isEnabled = false
+        try JSONEncoder().encode([existing]).write(to: fixture.storageURL)
+        let resultWriteStarted = DispatchSemaphore(value: 0)
+        let releaseResultWrite = DispatchSemaphore(value: 0)
+        let newJobWriteStarted = DispatchSemaphore(value: 0)
+        let finished = expectation(description: "Both scheduler operations finish")
+        finished.expectedFulfillmentCount = 2
+        let resultDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let existingID = existing.id
+        let addedJobData = try JSONEncoder().encode(added)
+        DispatchQueue.global().async {
+            let resultWriter = ScanScheduler(
+                launchAgentsDirectory: fixture.launchAgentsDirectory,
+                jobsStorageURL: fixture.storageURL,
+                dataWriter: { data, url, options in
+                    resultWriteStarted.signal()
+                    guard releaseResultWrite.wait(timeout: .now() + 5) == .success else {
+                        throw TestError.intentionalWriteFailure
+                    }
+                    try data.write(to: url, options: options)
+                },
+                launchctlRunner: { _, _ in }
+            )
+            resultWriter.markScheduledScanRun(jobID: existingID, result: "Completed", at: resultDate)
+            finished.fulfill()
+        }
+        XCTAssertEqual(resultWriteStarted.wait(timeout: .now() + 2), .success)
+        DispatchQueue.global().async {
+            let creator = ScanScheduler(
+                launchAgentsDirectory: fixture.launchAgentsDirectory,
+                jobsStorageURL: fixture.storageURL,
+                dataWriter: { data, url, options in
+                    try data.write(to: url, options: options)
+                    newJobWriteStarted.signal()
+                },
+                launchctlRunner: { _, _ in }
+            )
+            do {
+                let addedJob = try JSONDecoder().decode(ScanJob.self, from: addedJobData)
+                try creator.createScheduledScan(addedJob)
+            } catch {
+                XCTFail("Concurrent create failed: \(error)")
+            }
+            finished.fulfill()
+        }
+        // Without transaction locking, the newer job is written before the paused stale result.
+        _ = newJobWriteStarted.wait(timeout: .now() + 0.2)
+        releaseResultWrite.signal()
+        wait(for: [finished], timeout: 5)
+        let reader = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            launchctlRunner: { _, _ in }
+        )
+        let jobs = try reader.loadScheduledScans()
+        XCTAssertEqual(Set(jobs.map(\.id)), Set([existing.id, added.id]))
+        XCTAssertEqual(jobs.first { $0.id == existing.id }?.lastRun, resultDate)
+    }
+
+    func testMutationRejectsSymlinkStorageLockWithoutChangingTarget() throws {
+        let fixture = try makeFixture()
+        let target = fixture.storageURL.deletingLastPathComponent().appendingPathComponent("keep.txt")
+        try Data("keep".utf8).write(to: target)
+        let lockURL = fixture.storageURL.appendingPathExtension("lock")
+        try FileManager.default.createSymbolicLink(at: lockURL, withDestinationURL: target)
+        let scheduler = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            launchctlRunner: { _, _ in XCTFail("Unsafe storage must not change launchd") }
+        )
+        XCTAssertThrowsError(try scheduler.createScheduledScan(makeJob(name: "Unsafe lock")))
+        XCTAssertEqual(try Data(contentsOf: target), Data("keep".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.storageURL.path))
     }
 
     func testLaunchctlPrintOnlyTreatsKnownMissingStatusesAsUnloaded() throws {

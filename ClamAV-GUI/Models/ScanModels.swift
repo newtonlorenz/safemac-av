@@ -18,12 +18,13 @@ enum ScanStatus: String, Equatable {
     case scanning = "Scanning"
     case paused = "Paused"
     case completing = "Completing..."
+    case cancelling = "Stopping…"
     case completed = "Completed"
     case cancelled = "Cancelled"
     case failed = "Failed"
 }
 
-struct ScanResult: Identifiable, Equatable {
+struct ScanResult: Identifiable, Equatable, Codable {
     let id: UUID
     let path: String
     let threatName: String
@@ -73,7 +74,7 @@ enum ScanAction: String, Codable {
     case ignored = "Ignored"
 }
 
-struct ScanReport: Equatable {
+struct ScanReport: Equatable, Codable {
     let startTime: Date
     let endTime: Date
     let filesScanned: Int
@@ -82,6 +83,8 @@ struct ScanReport: Equatable {
     let scanPaths: [URL]
     let exitCode: Int32
     let completionState: ScanCompletionState
+    // A progress-only backend may know the count without retaining individual detections.
+    let observedThreatCount: Int?
 
     init(
         startTime: Date,
@@ -91,7 +94,8 @@ struct ScanReport: Equatable {
         errors: [String],
         scanPaths: [URL],
         exitCode: Int32 = 0,
-        completionState: ScanCompletionState? = nil
+        completionState: ScanCompletionState? = nil,
+        observedThreatCount: Int? = nil
     ) {
         self.startTime = startTime
         self.endTime = endTime
@@ -100,18 +104,27 @@ struct ScanReport: Equatable {
         self.errors = errors
         self.scanPaths = scanPaths
         self.exitCode = exitCode
+        self.observedThreatCount = observedThreatCount.map { max(infectedFiles.count, $0) }
         self.completionState = completionState ?? ClamAVRunner.completionState(
             forExitCode: exitCode,
             infectedCount: infectedFiles.count
         )
     }
 
+    var threatsFound: Int { max(infectedFiles.count, observedThreatCount ?? 0) }
+
     var duration: TimeInterval {
         endTime.timeIntervalSince(startTime)
     }
 
+    var completedWithoutErrors: Bool {
+        let hasUsableOutcome = completionState == .success
+            || (completionState == .infectedFound && !infectedFiles.isEmpty)
+        return hasUsableOutcome && errors.isEmpty && filesScanned > 0
+    }
+
     var isClean: Bool {
-        infectedFiles.isEmpty
+        completedWithoutErrors && threatsFound == 0
     }
 
     static func == (lhs: ScanReport, rhs: ScanReport) -> Bool {
@@ -119,8 +132,11 @@ struct ScanReport: Equatable {
         lhs.endTime == rhs.endTime &&
         lhs.filesScanned == rhs.filesScanned &&
         lhs.infectedFiles == rhs.infectedFiles &&
+        lhs.errors == rhs.errors &&
+        lhs.scanPaths == rhs.scanPaths &&
         lhs.exitCode == rhs.exitCode &&
-        lhs.completionState == rhs.completionState
+        lhs.completionState == rhs.completionState &&
+        lhs.observedThreatCount == rhs.observedThreatCount
     }
 }
 
@@ -305,6 +321,10 @@ enum ScanOutcome: Equatable {
     var scheduledResultMessage: String {
         switch self {
         case .completed(let report):
+            if report.completionState == .cancelled { return "cancelled" }
+            guard report.completedWithoutErrors else {
+                return "incomplete: \(report.filesScanned) files scanned, \(report.infectedFiles.count) threat(s) found"
+            }
             return report.infectedFiles.isEmpty ? "success" : "success: \(report.infectedFiles.count) threat(s) found"
         case .failed(let message):
             return "failed: \(message)"
@@ -344,6 +364,13 @@ struct ScanSchedule: Codable, Equatable {
     var dayOfWeek: Int? // 1-7, Sunday = 1
     var dayOfMonth: Int? // 1-31
 
+    func nextRunDate(after date: Date = Date(), calendar: Calendar = .current) -> Date? {
+        var matching = DateComponents(hour: time.hour ?? 9, minute: time.minute ?? 0, second: 0)
+        if frequency == .weekly { matching.weekday = dayOfWeek ?? 2 }
+        if frequency == .monthly { matching.day = dayOfMonth ?? 1 }
+        return calendar.nextDate(after: date, matching: matching, matchingPolicy: .strict)
+    }
+
     static var daily9am: ScanSchedule {
         ScanSchedule(frequency: .daily, time: DateComponents(hour: 9, minute: 0))
     }
@@ -353,4 +380,30 @@ enum ScheduleFrequency: String, Codable, CaseIterable {
     case daily = "Daily"
     case weekly = "Weekly"
     case monthly = "Monthly"
+}
+
+// Exports preserve a complete result even when there are no detections.
+extension ScanReport {
+    func exportJSONData() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(self)
+    }
+
+    func exportCSVData() -> Data {
+        let formatter = ISO8601DateFormatter()
+        let header = ["Record", "Started", "Finished", "Outcome", "Files scanned", "Detections", "Locations", "Warnings", "Path", "Threat", "Severity", "Action"]
+        let summary = ["Summary", formatter.string(from: startTime), formatter.string(from: endTime), completionState.rawValue, String(filesScanned), String(threatsFound), scanPaths.map(\.path).joined(separator: "; "), errors.joined(separator: "; "), "", "", "", ""]
+        let detections = infectedFiles.map { ["Detection", "", "", "", "", "", "", "", $0.path, $0.threatName, $0.severity.rawValue, $0.actionTaken.rawValue] }
+        let rows = [header, summary] + detections
+        return Data((rows.map { $0.map(Self.csvField).joined(separator: ",") }.joined(separator: "\r\n") + "\r\n").utf8)
+    }
+
+    private static func csvField(_ value: String) -> String {
+        let first = value.trimmingCharacters(in: .whitespacesAndNewlines).first
+        let safeValue = first.map { "=+-@".contains($0) } == true || value.first == "\t" || value.first == "\r"
+            ? "'" + value : value
+        return "\"" + safeValue.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
 }

@@ -112,6 +112,10 @@ final class ExternalScanRequestStore {
         let claimURL = queueURL.appendingPathComponent("\(id.uuidString).claim")
         let isNewClaim = fileManager.fileExists(atPath: requestURL.path)
         if isNewClaim {
+            guard (try? isSafeRequestFile(requestURL)) == true else {
+                discardInvalidRequestFile(requestURL)
+                return []
+            }
             try fileManager.moveItem(at: requestURL, to: claimURL)
         }
         guard fileManager.fileExists(atPath: claimURL.path) else { return [] }
@@ -169,7 +173,7 @@ final class ExternalScanRequestStore {
         for file in files {
             do {
                 guard try isSafeRequestFile(file) else {
-                    try? fileManager.removeItem(at: file)
+                    discardInvalidRequestFile(file)
                     continue
                 }
                 let data = try Data(contentsOf: file)
@@ -193,10 +197,18 @@ final class ExternalScanRequestStore {
                     )
                 )
             } catch {
-                try? fileManager.removeItem(at: file)
+                discardInvalidRequestFile(file)
             }
         }
         return requests.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    private func discardInvalidRequestFile(_ url: URL) {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              let type = attributes[.type] as? FileAttributeType,
+              type == .typeRegular || type == .typeSymbolicLink else { return }
+        // Invalid queue entries may be links, but never recursively remove directories.
+        try? fileManager.removeItem(at: url)
     }
 
     private func resolvedQueueURL() throws -> URL {
@@ -247,7 +259,11 @@ final class ExternalScanRequestStore {
             includingPropertiesForKeys: [.creationDateKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         )
-        .filter { $0.pathExtension == pathExtension }
+        .filter {
+            guard $0.pathExtension == pathExtension else { return false }
+            let attributes = try? fileManager.attributesOfItem(atPath: $0.path)
+            return attributes?[.type] as? FileAttributeType != .typeDirectory
+        }
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
         .map { $0 }
     }
@@ -269,15 +285,15 @@ final class ExternalScanRequestStore {
     }
 
     private static func normalizedPaths(_ paths: [String]) throws -> [String] {
-        let trimmedPaths = paths.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        guard !trimmedPaths.isEmpty else {
+        let nonemptyPaths = paths.filter { !$0.isEmpty }
+        guard !nonemptyPaths.isEmpty else {
             throw ExternalScanRequestStoreError.invalidPaths
         }
-        guard trimmedPaths.count <= maxPathsPerRequest else {
+        guard nonemptyPaths.count <= maxPathsPerRequest else {
             throw ExternalScanRequestStoreError.tooManyPaths
         }
 
-        let normalizedPaths = try trimmedPaths.map { path in
+        let normalizedPaths = try nonemptyPaths.map { path in
             guard path.first == "/", path.count <= maxPathLength, !path.contains("\0") else {
                 throw ExternalScanRequestStoreError.invalidPaths
             }

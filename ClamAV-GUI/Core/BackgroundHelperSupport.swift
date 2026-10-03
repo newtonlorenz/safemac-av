@@ -165,6 +165,22 @@ enum BackgroundHelperBundle {
     }
 }
 
+/// Read-only setup inspection. Missing selected configuration is not a launch
+/// error: freshclam can still resolve its installation's default configuration.
+enum FreshclamConfigurationStatus: Equatable {
+    case ready, missing, example, unreadable
+
+    static func inspect(directory: String, fileManager: FileManager = .default) -> Self {
+        let url = URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent("freshclam.conf")
+        guard fileManager.fileExists(atPath: url.path) else { return .missing }
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return .unreadable }
+        let hasExample = content.components(separatedBy: .newlines).contains {
+            $0.trimmingCharacters(in: .whitespaces) == "Example"
+        }
+        return hasExample ? .example : .ready
+    }
+}
+
 enum FreshclamInvocationError: Error, Equatable {
     case unsafeExecutable
     case unsafePath
@@ -261,6 +277,13 @@ enum FreshclamUpdateOutcome: Equatable {
         // nonzero exits as failures even if stdout contains stale success
         // lines before a later transport or verification failure.
         if exitCode != 0 {
+            let diagnostic = output.lowercased()
+            if diagnostic.contains("please edit the example config file") {
+                return .failed(message: "ClamAV is still using an example configuration. Edit freshclam.conf and comment out or remove the standalone Example line, then try again.")
+            }
+            if diagnostic.contains("can't open/parse the config file") {
+                return .failed(message: "ClamAV could not read its update configuration. Check the existing configuration, freshclam.conf, for errors and read permissions. If it is missing, copy freshclam.conf.sample to freshclam.conf and comment out or remove the standalone Example line.")
+            }
             return .failed(message: errorMessage ?? "Update failed with exit code \(exitCode)")
         }
         if isUpToDate && !didUpdate { return .upToDate }
@@ -554,6 +577,7 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
     private var helperEnabled = false
     private var keepsMenuDuringInteractiveLaunch: Bool
     private var nextRecoveryAttempt = Date.distantFuture
+    private let ownershipNotificationCenter: NotificationCenter
     private var ownershipHintObserver: NSObjectProtocol?
     private var recoveryTimer: DispatchSourceTimer?
     private var launchAtLoginStatusObservation: AnyCancellable?
@@ -563,19 +587,24 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
         now: @escaping () -> Date = Date.init,
         startupGrace: TimeInterval = 5,
         keepsMenuDuringInteractiveLaunch: Bool = false,
-        startsRecoveryTimer: Bool = true
+        startsRecoveryTimer: Bool = true,
+        observesOwnershipHints: Bool = true,
+        ownershipNotificationCenter: NotificationCenter = DistributedNotificationCenter.default()
     ) {
         self.makeLease = makeLease
+        self.ownershipNotificationCenter = ownershipNotificationCenter
         self.now = now
         self.startupGrace = startupGrace
         self.keepsMenuDuringInteractiveLaunch = keepsMenuDuringInteractiveLaunch
         mainShouldPresentMenuBar = keepsMenuDuringInteractiveLaunch
-        ownershipHintObserver = DistributedNotificationCenter.default().addObserver(
-            forName: Self.helperWillAcquireNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.prepareForHelperOwnership() }
+        if observesOwnershipHints {
+            ownershipHintObserver = ownershipNotificationCenter.addObserver(
+                forName: Self.helperWillAcquireNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.prepareForHelperOwnership() }
+            }
         }
         if startsRecoveryTimer {
             let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -590,7 +619,7 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
 
     deinit {
         if let ownershipHintObserver {
-            DistributedNotificationCenter.default().removeObserver(ownershipHintObserver)
+            ownershipNotificationCenter.removeObserver(ownershipHintObserver)
         }
         recoveryTimer?.cancel()
     }
@@ -670,5 +699,38 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
             object: nil,
             userInfo: nil
         )
+    }
+}
+
+/// Serialises each pipe's reads with the final drain, so termination cannot
+/// snapshot output while a readability callback is still consuming its bytes.
+final class ProcessOutputReader: @unchecked Sendable {
+    private let handle: FileHandle
+    private let consume: (Data) -> Void
+    private let lock = NSLock()
+
+    init(handle: FileHandle, consume: @escaping (Data) -> Void) {
+        self.handle = handle
+        self.consume = consume
+    }
+
+    func start() {
+        handle.readabilityHandler = { [weak self] _ in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.consume(self.handle.availableData)
+        }
+    }
+
+    func stop() {
+        handle.readabilityHandler = nil
+    }
+
+    func finish() {
+        stop()
+        lock.lock()
+        defer { lock.unlock() }
+        consume(handle.readDataToEndOfFile())
     }
 }

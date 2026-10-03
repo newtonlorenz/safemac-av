@@ -6,6 +6,14 @@ All notable project changes will be documented in this file. The format follows 
 
 ### Fixed
 
+- Keep incomplete, empty or cancelled scans out of clean-result notifications and recent-scan credit; show their status in results and session history.
+- Keep scan admission exclusive until quarantine and result publication finish, honour cancellation during admission, and disable scan controls while finalising results.
+- Preserve pending monitoring batches when unrelated settings are saved and stop the watcher when it is released.
+- Use clamscan summary totals for infected-only scans, retain stdout errors, and preserve freshclam diagnostics split across UTF-8 reads.
+- Calculate signature freshness from the daily database and report invalid updater configuration accurately.
+- Preserve exact Finder filenames and unexpected directories in the request queue, and prevent re-quarantining quarantine storage contents.
+- Serialise scheduled-job metadata across app processes and restore both stored schedules and their previous loaded state when a change fails.
+- Avoid a background-helper settings watcher loop caused by rewriting an unchanged recovery cache.
 - Correct weekly scan and signature-update scheduling to use the selected weekday. Re-save existing weekly scan jobs once to update their installed LaunchAgents.
 - Preserve scanner output across UTF-8 pipe boundaries and process termination, distinguish signal failures, and honour disabled archive scanning.
 - Make cancellation of paused scans explicit and keep process state until termination completes.
@@ -18,6 +26,7 @@ All notable project changes will be documented in this file. The format follows 
 
 ### Changed
 
+- Isolate Debug unit and UI test hosts from saved user settings, quarantine, handoff queues and background services, with test-owned storage cleanup.
 - Scan history now shows completion dates, an empty state and its current-session retention policy.
 - Remove inactive idle-scan and battery-pause controls and explain the current automation limits.
 - Explain that the optional ClamAV daemon controls scan limits, exclusions and archive settings through its own configuration.

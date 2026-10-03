@@ -42,10 +42,10 @@ final class BackgroundHelperSettingsStore {
 
     @discardableResult
     func reload() -> BackgroundHelperSettings {
-        let primarySettings = decodeSettings(at: settingsURL)
-        let decoded = primarySettings ?? decodePersistedLastKnownGood()
         lock.lock()
         defer { lock.unlock() }
+        let primarySettings = decodeSettings(at: settingsURL)
+        let decoded = primarySettings ?? decodePersistedLastKnownGood()
         if let decoded {
             lastKnownGood = decoded
             if primarySettings != nil {
@@ -120,6 +120,12 @@ final class BackgroundHelperSettingsStore {
             "signatureDirectory": settings.signatureDirectory as Any,
             "showNotifications": settings.showNotifications
         ], options: [.sortedKeys]) else { return }
+        // Writing this cache emits another directory-watcher event. Preserve an
+        // identical safe cache so that reload cannot continuously trigger itself.
+        if isSafeOwnerOnlyRegularFile(at: lastKnownGoodURL),
+           (try? Data(contentsOf: lastKnownGoodURL)) == data {
+            return
+        }
         do {
             try data.write(to: lastKnownGoodURL, options: .atomic)
             try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: lastKnownGoodURL.path)

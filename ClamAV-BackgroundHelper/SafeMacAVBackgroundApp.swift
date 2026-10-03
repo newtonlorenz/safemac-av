@@ -337,9 +337,8 @@ final class BackgroundSignatureUpdater {
         process.standardOutput = outputPipe
         process.standardError = outputPipe
         let output = BackgroundFreshclamOutputBuffer(limit: 65_536)
-        outputPipe.fileHandleForReading.readabilityHandler = { handle in
-            output.append(handle.availableData)
-        }
+        let reader = ProcessOutputReader(handle: outputPipe.fileHandleForReading) { output.append($0) }
+        reader.start()
         do {
             try process.run()
             let deadline = Date().addingTimeInterval(timeout)
@@ -355,17 +354,16 @@ final class BackgroundSignatureUpdater {
                 if process.isRunning {
                     kill(process.processIdentifier, SIGKILL)
                 }
-                outputPipe.fileHandleForReading.readabilityHandler = nil
+                reader.stop()
                 return .failed(message: "Signature update timed out")
             }
-            outputPipe.fileHandleForReading.readabilityHandler = nil
-            output.append(outputPipe.fileHandleForReading.readDataToEndOfFile())
+            reader.finish()
             return FreshclamUpdateOutcome.parse(
                 output: output.text,
                 exitCode: process.terminationStatus
             )
         } catch {
-            outputPipe.fileHandleForReading.readabilityHandler = nil
+            reader.stop()
             return .failed(message: "Signature update could not start")
         }
     }

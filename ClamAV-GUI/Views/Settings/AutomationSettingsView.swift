@@ -5,79 +5,16 @@ struct AutomationSettingsView: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        VStack(spacing: 20) {
-            SettingsSection(title: "Automatic Protection", icon: "bolt.shield") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle(
-                        "Launch SafeMac AV at login",
-                        isOn: Binding(
-                            get: { appState.launchAtLoginStatus.isRequested },
-                            set: { appState.setLaunchAtLoginEnabled($0) }
-                        )
-                    )
-                    .accessibilityIdentifier("launch-at-login-toggle")
-
-                    HStack(spacing: 6) {
-                        Image(systemName: appState.launchAtLoginStatus.symbolName)
-                            .foregroundStyle(launchStatusColor)
-                        Text(appState.launchAtLoginStatus.title)
-                            .foregroundStyle(.secondary)
-                            .accessibilityIdentifier("launch-at-login-status")
-                    }
-                    .font(.caption)
-
-                    if let detail = appState.launchAtLoginStatus.detail {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if appState.launchAtLoginStatus == .requiresApproval {
-                        Button("Open Login Items Settings") {
-                            SMAppService.openSystemSettingsLoginItems()
-                        }
-                        .buttonStyle(.link)
-                    }
-
-                    if let error = appState.launchAtLoginError {
-                        Text(error)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                            .accessibilityIdentifier("launch-at-login-error")
-                    }
-                }
-
-                Divider()
-
-                Toggle("Scan new downloads immediately", isOn: savedBinding(\.autoScanDownloads))
-                Text("Scans run on battery power. Automatic idle scans and battery-based pausing are not currently supported.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("automation-availability-note")
-                Toggle("Low impact mode", isOn: savedBinding(\.lowImpactMode))
-            }
-
-            SettingsSection(title: "Menu Bar & Dock", icon: "menubar.rectangle") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Hide SafeMac AV from the Dock", isOn: savedBinding(\.hideFromDock))
-                        .accessibilityIdentifier("hide-from-dock-toggle")
-
-                    Text("SafeMac AV keeps running in the menu bar. You can scan, update signatures, or reopen the main window at any time.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    private var launchStatusColor: Color {
-        switch appState.launchAtLoginStatus {
-        case .enabled:
-            return .green
-        case .requiresApproval:
-            return .orange
-        case .disabled, .unavailable:
-            return .secondary
+        SettingsSection(title: "Automatic scanning", icon: "arrow.down.doc") {
+            Toggle("Scan new downloads", isOn: savedBinding(\.autoScanDownloads))
+                .accessibilityIdentifier("scan-downloads-toggle")
+            Text("Checks new files in Downloads while SafeMac AV is running. Other scans finish before queued downloads are checked.")
+                .font(.callout).foregroundStyle(.secondary)
+            Divider()
+            Toggle("Reduce impact on other apps", isOn: savedBinding(\.lowImpactMode))
+            Text("Runs scans at a lower priority. Scans may take longer and still run on battery power.")
+                .font(.callout).foregroundStyle(.secondary)
+                .accessibilityIdentifier("automation-availability-note")
         }
     }
 
@@ -85,11 +22,49 @@ struct AutomationSettingsView: View {
         Binding(
             get: { appState.settings[keyPath: keyPath] },
             set: {
-                var updatedSettings = appState.settings
-                updatedSettings[keyPath: keyPath] = $0
-                appState.settings = updatedSettings
-                appState.saveSettings()
+                var settings = appState.settings
+                settings[keyPath: keyPath] = $0
+                _ = appState.applySettings(settings)
             }
         )
+    }
+}
+
+struct AppBehaviourSettingsSection: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        SettingsSection(title: "Login, menu bar and Dock", icon: "menubar.rectangle") {
+            Toggle("Open SafeMac AV at login", isOn: Binding(
+                get: { appState.launchAtLoginStatus.isRequested },
+                set: { appState.setLaunchAtLoginEnabled($0) }
+            ))
+            .accessibilityIdentifier("launch-at-login-toggle")
+            Label(appState.launchAtLoginStatus.title, systemImage: appState.launchAtLoginStatus.symbolName)
+                .font(.callout).foregroundStyle(.secondary)
+                .accessibilityIdentifier("launch-at-login-status")
+            if let detail = appState.launchAtLoginStatus.detail {
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+            }
+            if appState.launchAtLoginStatus == .requiresApproval {
+                Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
+            }
+            if let error = appState.launchAtLoginError {
+                Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
+                    .accessibilityIdentifier("launch-at-login-error")
+            }
+            Divider()
+            Toggle("Hide SafeMac AV from the Dock", isOn: Binding(
+                get: { appState.settings.hideFromDock },
+                set: {
+                    var settings = appState.settings
+                    settings.hideFromDock = $0
+                    _ = appState.applySettings(settings)
+                }
+            ))
+            .accessibilityIdentifier("hide-from-dock-toggle")
+            Text("Use the menu bar to reopen SafeMac AV, start a scan or update definitions. Closing the window keeps the app running.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
     }
 }

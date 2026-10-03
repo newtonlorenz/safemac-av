@@ -3,6 +3,436 @@ import XCTest
 
 @MainActor
 final class AppStateTests: XCTestCase {
+    func testRestoreCannotMoveAQuarantinedFileDuringAnActiveScan() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("harmless.txt")
+        try Data("harmless fixture".utf8).write(to: source)
+        var settings = AppSettings.default
+        settings.quarantineDirectory = root.appendingPathComponent("quarantine").path
+        let state = AppState(configManager: AppStateMockConfigManager(settings: settings), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        try await state.quarantineManager.quarantine(file: source.path, threat: "Test.Fixture")
+        state.loadQuarantinedFiles()
+        let file = try XCTUnwrap(state.quarantinedFiles.first)
+        state.isScanning = true
+        do {
+            try await state.restoreFromQuarantine(file)
+            XCTFail("A scan must finish before a quarantined file can be restored")
+        } catch { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.quarantinePath))
+    }
+
+    func testDeleteCannotRemoveAQuarantinedFileDuringAnActiveScan() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("harmless.txt")
+        try Data("harmless fixture".utf8).write(to: source)
+        var settings = AppSettings.default
+        settings.quarantineDirectory = root.appendingPathComponent("quarantine").path
+        let state = AppState(configManager: AppStateMockConfigManager(settings: settings), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        try await state.quarantineManager.quarantine(file: source.path, threat: "Test.Fixture")
+        state.loadQuarantinedFiles()
+        let file = try XCTUnwrap(state.quarantinedFiles.first)
+        state.isScanning = true
+        do {
+            try state.deleteFromQuarantine(file)
+            XCTFail("A scan must finish before a quarantined file can be deleted")
+        } catch { }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.quarantinePath))
+        XCTAssertEqual(try state.quarantineManager.readQuarantinedFiles().count, 1)
+    }
+
+    func testRestoreFailureIsRetainedAfterNavigatingAway() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("harmless.txt")
+        try Data("harmless fixture".utf8).write(to: source)
+        var settings = AppSettings.default
+        settings.quarantineDirectory = root.appendingPathComponent("quarantine").path
+        let state = AppState(configManager: AppStateMockConfigManager(settings: settings), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        try await state.quarantineManager.quarantine(file: source.path, threat: "Test.Fixture")
+        state.loadQuarantinedFiles()
+        let file = try XCTUnwrap(state.quarantinedFiles.first)
+        try FileManager.default.removeItem(atPath: file.quarantinePath)
+        let restore = Task {
+            do { try await state.restoreFromQuarantine(file); XCTFail("Missing payload must fail") }
+            catch { }
+        }
+        state.selectedTab = .settings
+        await restore.value
+        XCTAssertEqual(state.selectedTab, .settings)
+        XCTAssertTrue(state.quarantineActionError?.message.contains("harmless.txt") == true)
+        XCTAssertTrue(state.logs.contains { $0.message.contains("Failed to restore") })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    func testManualQuarantineFailureRemainsAvailableOutsideResults() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var settings = AppSettings.default
+        settings.quarantineDirectory = root.appendingPathComponent("quarantine").path
+        let state = AppState(configManager: AppStateMockConfigManager(settings: settings), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        let detection = ScanResult(path: root.appendingPathComponent("missing.txt").path, threatName: "Test.Fixture")
+        state.lastScanResult = ScanReport(startTime: Date(), endTime: Date(), filesScanned: 1, infectedFiles: [detection], errors: [], scanPaths: [root])
+        do { try await state.quarantineDetection(detection); XCTFail("Missing source must fail") }
+        catch { }
+        state.selectedTab = .dashboard
+        XCTAssertTrue(state.quarantineActionError?.message.contains("missing.txt") == true)
+        XCTAssertEqual(state.lastScanResult?.infectedFiles.first?.actionTaken, .reported)
+        XCTAssertFalse(state.isManagingQuarantine)
+    }
+
+    func testScanDraftDeduplicatesFilesAndSurvivesNavigation() {
+        let state = AppState(configManager: AppStateMockConfigManager(settings: .default), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        state.addScanDraftPaths([URL(fileURLWithPath: "/tmp/scan/../file"), URL(fileURLWithPath: "/tmp/file")])
+        state.scanDraftOptions.quarantineInfected = false
+        state.requestCustomScan()
+        state.selectedTab = .settings
+        state.selectedTab = .scan
+        XCTAssertEqual(state.scanDraftPaths, [URL(fileURLWithPath: "/tmp/file")])
+        XCTAssertFalse(state.scanDraftOptions.quarantineInfected)
+        XCTAssertTrue(state.isPreparingNewScan)
+    }
+
+    func testPresentLastScanResultPreservesDraftAndShowsReport() {
+        let state = AppState(configManager: AppStateMockConfigManager(settings: .default), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        let paths = [URL(fileURLWithPath: "/tmp/unsent-draft")]
+        state.scanDraftPaths = paths
+        state.scanDraftOptions.quarantineInfected = false
+        let options = state.scanDraftOptions
+        state.isPreparingNewScan = true
+        state.selectedTab = .dashboard
+        state.lastScanResult = ScanReport(startTime: Date(), endTime: Date(), filesScanned: 1, infectedFiles: [], errors: [], scanPaths: [])
+        state.presentLastScanResult()
+        XCTAssertEqual(state.selectedTab, .scan)
+        XCTAssertFalse(state.isPreparingNewScan)
+        XCTAssertEqual(state.scanDraftPaths, paths)
+        XCTAssertEqual(state.scanDraftOptions, options)
+        XCTAssertNotNil(state.lastScanResult)
+    }
+
+    func testManualScanDoesNotWaitUncancellablyBehindQuarantine() async {
+        let runner = AppStateControlledRunner()
+        let state = AppState(configManager: AppStateMockConfigManager(settings: .default), fileWatcher: MockFileWatcher(), scanCoordinator: ScanCoordinator(clamAVRunner: runner), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        state.isManagingQuarantine = true
+        let outcome = await state.startScan(paths: [URL(fileURLWithPath: "/tmp/fixture")], options: .default)
+        XCTAssertEqual(outcome, .skippedAlreadyRunning(active: nil))
+        XCTAssertTrue(runner.scanPaths.isEmpty)
+        XCTAssertFalse(state.isScanning)
+        XCTAssertTrue(state.scanError?.localizedCaseInsensitiveContains("quarantine") == true)
+        state.isManagingQuarantine = false
+    }
+
+    func testAutomaticMonitoringRetainsQueuedFilesUntilQuarantineFinishes() async throws {
+        var settings = AppSettings.default
+        settings.monitoringEnabled = true
+        settings.autoScanDownloads = false
+        let watcher = MockFileWatcher()
+        let runner = AppStateControlledRunner()
+        let state = AppState(configManager: AppStateMockConfigManager(settings: settings), fileWatcher: watcher, scanCoordinator: ScanCoordinator(clamAVRunner: runner), notificationManager: AppStateMockNotificationManager())
+        state.isManagingQuarantine = true
+        let changed = URL(fileURLWithPath: "/tmp/queued-fixture")
+        watcher.detectBatch([changed])
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertTrue(runner.scanPaths.isEmpty)
+        state.isManagingQuarantine = false
+        try await waitUntil { runner.scanPaths.count == 1 }
+        XCTAssertEqual(runner.scanPaths, [[changed]])
+        runner.resumeNextScan()
+        try await waitUntil { !state.isScanning }
+    }
+
+    func testFailedAdvancedSettingsApplyDoesNotChangeActiveSettings() {
+        let config = AppStateMockConfigManager(settings: .default)
+        let state = AppState(configManager: config, fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        let original = state.settings
+        var edited = original
+        edited.clamScanPath = "/different/scanner"
+        config.saveError = AppStateTestError.settingsFailure
+        XCTAssertFalse(state.applySettings(edited))
+        XCTAssertEqual(state.settings.clamScanPath, original.clamScanPath)
+        XCTAssertEqual(config.settings.clamScanPath, original.clamScanPath)
+        XCTAssertNotNil(state.settingsSaveError)
+    }
+
+    func testForegroundScanNavigatesToProgressAndAutomaticScanDoesNot() async throws {
+        let runner = AppStateControlledRunner()
+        let state = AppState(configManager: AppStateMockConfigManager(settings: .default), fileWatcher: MockFileWatcher(), scanCoordinator: ScanCoordinator(clamAVRunner: runner), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        let path = URL(fileURLWithPath: "/tmp/ux-fixture")
+        let manual = Task { await state.startScan(paths: [path], options: .default) }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        XCTAssertEqual(state.selectedTab, .scan)
+        runner.resumeNextScan()
+        _ = await manual.value
+        state.selectedTab = .settings
+        let automatic = Task { await state.startScan(paths: [path], options: .default, source: .realtime) }
+        try await waitUntil { runner.scanPaths.count == 2 }
+        XCTAssertEqual(state.selectedTab, .settings)
+        runner.resumeNextScan()
+        _ = await automatic.value
+    }
+
+    func testCancellationKeepsProgressVisibleUntilTheProcessFinishes() async throws {
+        let runner = AppStateControlledRunner()
+        let state = AppState(configManager: AppStateMockConfigManager(settings: .default), fileWatcher: MockFileWatcher(), scanCoordinator: ScanCoordinator(clamAVRunner: runner), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        let scan = Task { await state.startScan(paths: [URL(fileURLWithPath: "/tmp/ux-fixture")], options: .default) }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        state.cancelScan()
+        XCTAssertTrue(state.isScanning, "Do not jump back to an older result while termination is pending")
+        XCTAssertNotNil(state.currentScanProgress)
+        runner.resumeNextScan(completionState: .cancelled)
+        _ = await scan.value
+        XCTAssertFalse(state.isScanning)
+        XCTAssertEqual(state.lastScanResult?.completionState, .cancelled)
+    }
+
+    func testCancelledScanPreservesActualPartialDetectionsAndHistory() async throws {
+        let runner = AppStateControlledRunner()
+        let state = AppState(configManager: AppStateMockConfigManager(settings: .default), fileWatcher: MockFileWatcher(), scanCoordinator: ScanCoordinator(clamAVRunner: runner), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        let path = URL(fileURLWithPath: "/tmp/partial-fixture")
+        let detection = ScanResult(path: path.path, threatName: "Test.Signature")
+        let scan = Task { await state.startScan(paths: [path], options: .default) }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.interruptedReport = ScanReport(startTime: Date(), endTime: Date(), filesScanned: 4, infectedFiles: [detection], errors: ["Stopped"], scanPaths: [path], exitCode: -1, completionState: .cancelled)
+        state.cancelScan()
+        runner.failNextScan(ClamAVError.cancelled)
+        _ = await scan.value
+        XCTAssertEqual(state.lastScanResult?.infectedFiles, [detection])
+        XCTAssertEqual(state.scanHistoryManager.entries.first?.threatsFound, 1)
+        XCTAssertEqual(state.scanHistoryManager.entries.first?.report.infectedFiles.first?.actionTaken, .reported)
+        XCTAssertEqual(state.lastScanResult?.filesScanned, 4)
+    }
+
+    func testCancelledScanPreservesObservedCountWhenDetectionDetailsAreUnavailable() async throws {
+        let runner = AppStateControlledRunner()
+        let state = AppState(configManager: AppStateMockConfigManager(settings: .default), fileWatcher: MockFileWatcher(), scanCoordinator: ScanCoordinator(clamAVRunner: runner), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        let scan = Task { await state.startScan(paths: [URL(fileURLWithPath: "/tmp/partial-fixture")], options: .default) }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        state.currentScanProgress = ScanProgress(status: .scanning, filesScanned: 8, infectedCount: 3, startTime: Date())
+        state.cancelScan()
+        runner.failNextScan(ClamAVError.cancelled)
+        _ = await scan.value
+        let report = try XCTUnwrap(state.lastScanResult)
+        XCTAssertTrue(report.infectedFiles.isEmpty, "Do not invent paths for missing detection details")
+        XCTAssertEqual(state.scanHistoryManager.entries.first?.threatsFound, 3)
+        XCTAssertTrue(report.errors.joined().localizedCaseInsensitiveContains("unavailable"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: report.exportJSONData()) as? [String: Any])
+        XCTAssertEqual(json["observedThreatCount"] as? Int, 3)
+        XCTAssertTrue(String(decoding: report.exportCSVData(), as: UTF8.self).contains("\"8\",\"3\""))
+    }
+
+    func testManualQuarantineUpdatesHistoricalReportAndKeepsEntryIdentity() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("fixture.txt")
+        try Data("harmless fixture".utf8).write(to: source)
+        var settings = AppSettings.default
+        settings.quarantineDirectory = directory.appendingPathComponent("quarantine").path
+        let state = AppState(configManager: AppStateMockConfigManager(settings: settings), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        let detection = ScanResult(path: source.path, threatName: "Test.Signature")
+        let report = ScanReport(startTime: Date(), endTime: Date(), filesScanned: 1, infectedFiles: [detection], errors: [], scanPaths: [source], completionState: .infectedFound)
+        state.lastScanResult = report
+        let entry = ScanHistoryEntry(from: report, scanType: .custom)
+        state.scanHistoryManager.addEntry(entry)
+        try await state.quarantineDetection(detection)
+        let updated = try XCTUnwrap(state.scanHistoryManager.entries.first)
+        XCTAssertEqual(updated.id, entry.id)
+        XCTAssertEqual(updated.report.infectedFiles.first?.actionTaken, .quarantined)
+        XCTAssertTrue(String(decoding: try updated.report.exportJSONData(), as: UTF8.self).contains("Quarantined"))
+        XCTAssertTrue(String(decoding: updated.report.exportCSVData(), as: UTF8.self).contains("Quarantined"))
+    }
+
+    func testPauseCannotReenterPausedStateWhileCancellationIsPending() async throws {
+        let runner = AppStateControlledRunner()
+        runner.currentProcessPID = 123
+        let state = AppState(configManager: AppStateMockConfigManager(settings: .default), fileWatcher: MockFileWatcher(), scanCoordinator: ScanCoordinator(clamAVRunner: runner), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        let scan = Task { await state.startScan(paths: [URL(fileURLWithPath: "/tmp/fixture")], options: .default) }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        state.cancelScan()
+        state.pauseScan()
+        state.resumeScan()
+        XCTAssertFalse(runner.scanIsPaused)
+        XCTAssertEqual(state.currentScanProgress?.status, .cancelling)
+        runner.failNextScan(ClamAVError.cancelled)
+        _ = await scan.value
+    }
+
+    func testPauseAndResumeDoNotChangePreparingScanBeforeProcessLaunch() async throws {
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        notifications.blockScheduledNotification = true
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications,
+            startsInteractiveBackgroundServices: false
+        )
+        let scan = Task {
+            await appState.runScheduledScan(jobID: nil, paths: [URL(fileURLWithPath: "/tmp/fixture")])
+        }
+        try await waitUntil { notifications.scheduledJobNames.count == 1 }
+        XCTAssertTrue(runner.scanPaths.isEmpty)
+        appState.pauseScan()
+        XCTAssertFalse(appState.isScanPaused)
+        XCTAssertEqual(appState.currentScanProgress?.status, .preparing)
+        appState.resumeScan()
+        XCTAssertEqual(appState.currentScanProgress?.status, .preparing)
+        notifications.resumeScheduledNotification()
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan()
+        await scan.value
+    }
+
+    func testScanControlsCannotInterruptResultFinalisation() async throws {
+        var settings = AppSettings.default
+        settings.showNotifications = true
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        notifications.blockCompletionNotification = true
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: settings),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications,
+            startsInteractiveBackgroundServices: false
+        )
+        let scan = Task {
+            await appState.startScan(paths: [URL(fileURLWithPath: "/tmp/fixture")], options: .default)
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan()
+        try await waitUntil { notifications.scanCompleteReports.count == 1 }
+        XCTAssertEqual(appState.currentScanProgress?.status, .completing)
+        appState.pauseScan()
+        XCTAssertFalse(appState.isScanPaused)
+        XCTAssertEqual(appState.currentScanProgress?.status, .completing)
+        appState.resumeScan()
+        XCTAssertEqual(appState.currentScanProgress?.status, .completing)
+        appState.cancelScan()
+        XCTAssertTrue(appState.isScanning)
+        XCTAssertEqual(appState.currentScanProgress?.status, .completing)
+        notifications.resumeCompletionNotification()
+        _ = await scan.value
+        XCTAssertFalse(appState.isScanning)
+        XCTAssertNotNil(appState.lastScanResult)
+    }
+
+    func testAutomaticScanWaitsUntilPreviousScanFinalisationCompletes() async throws {
+        var settings = AppSettings.default
+        settings.monitoringEnabled = true
+        settings.autoScanDownloads = false
+        settings.showNotifications = true
+        let watcher = MockFileWatcher()
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        notifications.blockCompletionNotification = true
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: settings),
+            fileWatcher: watcher,
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications
+        )
+        let firstPath = URL(fileURLWithPath: "/tmp/first-fixture")
+        let changedPath = URL(fileURLWithPath: "/tmp/changed-fixture")
+        let first = Task { await appState.startScan(paths: [firstPath], options: .default) }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan()
+        try await waitUntil { notifications.scanCompleteReports.count == 1 }
+        watcher.detectBatch([changedPath])
+        for _ in 0..<30 { await Task.yield() }
+        let prematureScan = runner.scanPaths.count > 1
+        XCTAssertFalse(prematureScan, "The previous scan must finish publishing its result before admitting queued work")
+        if prematureScan { runner.resumeNextScan() }
+        notifications.resumeCompletionNotification()
+        _ = await first.value
+        if !prematureScan {
+            try await waitUntil { runner.scanPaths.count == 2 }
+            runner.resumeNextScan()
+        }
+        try await waitUntil { !appState.isScanning }
+        XCTAssertEqual(runner.scanPaths, [[firstPath], [changedPath]])
+    }
+
+    func testIncompleteOrEmptyDownloadNeverReceivesCleanNotificationOrRecentScanCredit() async throws {
+        var settings = AppSettings.default
+        settings.showNotifications = true
+        settings.notifyOnCleanFiles = true
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: settings),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications,
+            startsInteractiveBackgroundServices: false
+        )
+        let cases: [(Int, [String], ScanCompletionState)] = [
+            (0, [], .success), (1, ["Skipped unreadable file"], .success),
+            (1, [], .scanError), (1, [], .cancelled), (1, [], .infectedFound)
+        ]
+        for (index, value) in cases.enumerated() {
+            let scan = Task {
+                await appState.startScan(paths: [URL(fileURLWithPath: "/tmp/download-fixture")], options: .default, source: .download)
+            }
+            try await waitUntil { runner.scanPaths.count == index + 1 }
+            runner.resumeNextScan(filesScanned: value.0, errors: value.1, completionState: value.2)
+            _ = await scan.value
+            XCTAssertTrue(notifications.cleanFileURLs.isEmpty)
+            XCTAssertFalse(appState.protectionScore.components.first { $0.title == "Recent Scan" }?.isComplete ?? true)
+        }
+    }
+
+    func testScheduledOutcomeDoesNotCallIncompleteReportSuccessful() {
+        let now = Date()
+        let threat = ScanResult(path: "/tmp/fixture", threatName: "Test.Fixture")
+        for report in [
+            ScanReport(startTime: now, endTime: now, filesScanned: 0, infectedFiles: [], errors: [], scanPaths: []),
+            ScanReport(startTime: now, endTime: now, filesScanned: 1, infectedFiles: [], errors: ["Unreadable file"], scanPaths: []),
+            ScanReport(startTime: now, endTime: now, filesScanned: 1, infectedFiles: [threat], errors: ["Quarantine failed"], scanPaths: [])
+        ] {
+            XCTAssertTrue(ScanOutcome.completed(report).scheduledResultMessage.hasPrefix("incomplete:"))
+        }
+        let cancelled = ScanReport(startTime: now, endTime: now, filesScanned: 1, infectedFiles: [], errors: [], scanPaths: [], completionState: .cancelled)
+        XCTAssertEqual(ScanOutcome.completed(cancelled).scheduledResultMessage, "cancelled")
+        let completed = ScanReport(startTime: now, endTime: now, filesScanned: 1, infectedFiles: [], errors: [], scanPaths: [])
+        XCTAssertEqual(ScanOutcome.completed(completed).scheduledResultMessage, "success")
+    }
+
+    func testIncompleteReportsAreNotClean() {
+        for (files, errors, completion) in [(0, [String](), ScanCompletionState.success), (1, ["Unreadable file"], .success), (1, [], .scanError), (1, [], .cancelled), (1, [], .infectedFound)] {
+            let report = ScanReport(startTime: Date(), endTime: Date(), filesScanned: files, infectedFiles: [], errors: errors, scanPaths: [], completionState: completion)
+            XCTAssertFalse(report.isClean)
+        }
+    }
+
+    func testBatchedDownloadsDoNotAttributeCleanResultToAnUnverifiedFirstFile() async throws {
+        var settings = AppSettings.default
+        settings.showNotifications = true
+        settings.notifyOnCleanFiles = true
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: settings),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications,
+            startsInteractiveBackgroundServices: false
+        )
+        let scan = Task {
+            await appState.startScan(paths: [URL(fileURLWithPath: "/tmp/excluded-download"), URL(fileURLWithPath: "/tmp/scanned-download")], options: .default, source: .download)
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan(filesScanned: 1)
+        _ = await scan.value
+        XCTAssertTrue(notifications.cleanFileURLs.isEmpty)
+    }
+
     func testQuarantineResultRecordsSuccessfulActionAndPreservesIdentity() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1689,6 +2119,7 @@ private final class AppStateControlledRunner: ClamAVRunnerProtocol {
     private var storedProgressHandlers: [(ScanProgress) -> Void] = []
     private var continuations: [(CheckedContinuation<ScanReport, Error>, [URL])] = []
     var nextScanReportInfectedFiles: [ScanResult] = []
+    var interruptedReport: ScanReport?
 
     var scanPaths: [[URL]] { lock.withLock { storedScanPaths } }
     var progressHandlers: [(ScanProgress) -> Void] { lock.withLock { storedProgressHandlers } }
@@ -1706,7 +2137,7 @@ private final class AppStateControlledRunner: ClamAVRunnerProtocol {
         }
     }
 
-    func resumeNextScan() {
+    func resumeNextScan(filesScanned: Int = 1, errors: [String] = [], completionState: ScanCompletionState = .success) {
         let pending = lock.withLock {
             continuations.isEmpty ? nil : continuations.removeFirst()
         }
@@ -1716,13 +2147,20 @@ private final class AppStateControlledRunner: ClamAVRunnerProtocol {
         continuation.resume(returning: ScanReport(
             startTime: Date(),
             endTime: Date(),
-            filesScanned: 1,
+            filesScanned: filesScanned,
             infectedFiles: infectedFiles,
-            errors: [],
+            errors: errors,
             scanPaths: paths,
             exitCode: 0,
-            completionState: .success
+            completionState: completionState
         ))
+    }
+
+    func failNextScan(_ error: Error) {
+        let pending = lock.withLock {
+            continuations.isEmpty ? nil : continuations.removeFirst()
+        }
+        pending?.0.resume(throwing: error)
     }
 
     func cancelCurrentScan() {}
@@ -1742,6 +2180,8 @@ private final class AppStateMockNotificationManager: NotificationManaging {
     var permissionError: String?
     var statusAfterRequest: NotificationPermissionStatus?
     var blockScheduledNotification = false
+    var blockCompletionNotification = false
+    private var completionContinuation: CheckedContinuation<Void, Never>?
     private(set) var threatNotifications: [[ScanResult]] = []
     private(set) var scanCompleteReports: [ScanReport] = []
     private(set) var cleanFileURLs: [URL] = []
@@ -1760,6 +2200,15 @@ private final class AppStateMockNotificationManager: NotificationManaging {
 
     func sendScanComplete(report: ScanReport, settings: AppSettings) async {
         scanCompleteReports.append(report)
+        if blockCompletionNotification {
+            blockCompletionNotification = false
+            await withCheckedContinuation { completionContinuation = $0 }
+        }
+    }
+
+    func resumeCompletionNotification() {
+        completionContinuation?.resume()
+        completionContinuation = nil
     }
 
     func sendThreatDetected(threats: [ScanResult], settings: AppSettings) async {
