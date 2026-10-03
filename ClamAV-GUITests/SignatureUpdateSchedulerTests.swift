@@ -369,6 +369,26 @@ final class SignatureUpdateSchedulerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.plistURL.path))
     }
 
+    func testFailedLegacyRemovalRestoresDeletedUnloadedCurrentPlist() throws {
+        let fixture = try makeFixture()
+        let current = Data("current schedule".utf8)
+        let legacy = Data("legacy schedule".utf8)
+        try current.write(to: fixture.plistURL)
+        try legacy.write(to: fixture.legacyPlistURL)
+        var operations: [SignatureUpdateLaunchctlOperation] = []
+        let scheduler = SignatureUpdateScheduler(
+            fileManager: LegacyRemovalFailureFileManager(failingURL: fixture.legacyPlistURL),
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            loadedStatusProvider: { false },
+            legacyLoadedStatusProvider: { false },
+            launchctlRunner: { operations.append($0) }
+        )
+        XCTAssertThrowsError(try scheduler.reconcile(enabled: false, schedule: .daily9am))
+        XCTAssertEqual(try Data(contentsOf: fixture.plistURL), current)
+        XCTAssertEqual(try Data(contentsOf: fixture.legacyPlistURL), legacy)
+        XCTAssertTrue(operations.isEmpty)
+    }
+
     func testDisablingWithoutDiskOrRuntimeAgentIsNoOp() throws {
         let fixture = try makeFixture()
         var operations: [SignatureUpdateLaunchctlOperation] = []
@@ -589,5 +609,21 @@ private struct SignatureSchedulerFixture {
         launchAgentsDirectory.appendingPathComponent(
             "com.newtonlorenz.ClamAV-GUI.signature-update.plist"
         )
+    }
+}
+
+private final class LegacyRemovalFailureFileManager: FileManager, @unchecked Sendable {
+    let failingURL: URL
+
+    init(failingURL: URL) {
+        self.failingURL = failingURL
+        super.init()
+    }
+
+    override func removeItem(at URL: URL) throws {
+        if URL == failingURL {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError)
+        }
+        try super.removeItem(at: URL)
     }
 }

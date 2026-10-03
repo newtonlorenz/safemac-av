@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 protocol ScanSchedulerProtocol {
     func createScheduledScan(_ job: ScanJob) throws
@@ -75,64 +76,82 @@ final class ScanScheduler: ScanSchedulerProtocol {
     func createScheduledScan(_ job: ScanJob) throws {
         try rejectNoncanonicalLegacyMutation(for: job)
         try postLegacyMutationPreflightHook()
-        let jobs = try loadStoredJobsStrictly()
-        let updatedJobs = replacing(job, in: jobs)
-        try apply(job: job, storedJobs: updatedJobs, installLaunchAgent: job.isEnabled)
+        try withStorageLock {
+            let jobs = try loadStoredJobsStrictly()
+            let updatedJobs = replacing(job, in: jobs)
+            try apply(job: job, storedJobs: updatedJobs, installLaunchAgent: job.isEnabled)
+        }
     }
 
     func updateScheduledScan(_ job: ScanJob) throws {
         try rejectNoncanonicalLegacyMutation(for: job)
         try postLegacyMutationPreflightHook()
-        let jobs = try loadStoredJobsStrictly()
-        let updatedJobs = replacing(job, in: jobs)
-        try apply(job: job, storedJobs: updatedJobs, installLaunchAgent: job.isEnabled)
+        try withStorageLock {
+            let jobs = try loadStoredJobsStrictly()
+            let updatedJobs = replacing(job, in: jobs)
+            try apply(job: job, storedJobs: updatedJobs, installLaunchAgent: job.isEnabled)
+        }
     }
 
     func removeScheduledScan(_ job: ScanJob) throws {
         try rejectNoncanonicalLegacyMutation(for: job)
         try postLegacyMutationPreflightHook()
-        let jobs = try loadStoredJobsStrictly()
-        let plistURL = launchAgentURL(for: job)
-        let legacyPlistURL = legacyLaunchAgentURL(for: job)
-        let snapshot = try launchAgentSnapshot(at: plistURL)
-        let legacySnapshot = try legacyLaunchAgentSnapshotForMutation(at: legacyPlistURL)
-        let legacyWasLoaded = try legacySnapshot.map { _ in
-            try launchAgentLoadedStatusProvider(legacyLaunchAgentLabel(for: job))
-        } ?? false
-        var unloadedExistingAgent = false
-        var unloadedLegacyAgent = false
-        var removedLegacyAgent = false
+        try withStorageLock {
+            let jobs = try loadStoredJobsStrictly()
+            let plistURL = launchAgentURL(for: job)
+            let legacyPlistURL = legacyLaunchAgentURL(for: job)
+            let snapshot = try launchAgentSnapshot(at: plistURL)
+            let legacySnapshot = try legacyLaunchAgentSnapshotForMutation(at: legacyPlistURL)
+            let legacyWasLoaded = try legacySnapshot.map { _ in
+                try launchAgentLoadedStatusProvider(legacyLaunchAgentLabel(for: job))
+            } ?? false
+            let existingWasLoaded = try snapshot.map { _ in
+                try launchAgentLoadedStatusProvider(launchAgentLabel(for: job))
+            } ?? false
+            var unloadedExistingAgent = false
+            var removedExistingAgent = false
+            var unloadedLegacyAgent = false
+            var removedLegacyAgent = false
 
-        do {
-            if snapshot != nil {
-                try unloadLaunchAgent(at: plistURL)
-                unloadedExistingAgent = true
-                try fileManager.removeItem(at: plistURL)
-            }
-            if legacySnapshot != nil {
-                if legacyWasLoaded {
-                    try unloadLaunchAgent(at: legacyPlistURL)
-                    unloadedLegacyAgent = true
+            do {
+                if snapshot != nil {
+                    if existingWasLoaded {
+                        try unloadLaunchAgent(at: plistURL)
+                        unloadedExistingAgent = true
+                    }
+                    try fileManager.removeItem(at: plistURL)
+                    removedExistingAgent = true
                 }
-                try fileManager.removeItem(at: legacyPlistURL)
-                removedLegacyAgent = true
-            }
+                if legacySnapshot != nil {
+                    if legacyWasLoaded {
+                        try unloadLaunchAgent(at: legacyPlistURL)
+                        unloadedLegacyAgent = true
+                    }
+                    try fileManager.removeItem(at: legacyPlistURL)
+                    removedLegacyAgent = true
+                }
 
-            let updatedJobs = jobs.filter { $0.id != job.id }
-            try saveStoredJobs(updatedJobs)
-        } catch {
-            if unloadedExistingAgent {
-                rollbackLaunchAgent(at: plistURL, to: snapshot, unloadCurrentAgent: false)
+                let updatedJobs = jobs.filter { $0.id != job.id }
+                try saveStoredJobs(updatedJobs)
+            } catch {
+                if unloadedExistingAgent || removedExistingAgent {
+                    rollbackLaunchAgent(
+                        at: plistURL,
+                        to: snapshot,
+                        unloadCurrentAgent: false,
+                        reloadSnapshot: existingWasLoaded
+                    )
+                }
+                if unloadedLegacyAgent || removedLegacyAgent {
+                    rollbackLaunchAgent(
+                        at: legacyPlistURL,
+                        to: legacySnapshot,
+                        unloadCurrentAgent: false,
+                        reloadSnapshot: legacyWasLoaded
+                    )
+                }
+                throw error
             }
-            if unloadedLegacyAgent || removedLegacyAgent {
-                rollbackLaunchAgent(
-                    at: legacyPlistURL,
-                    to: legacySnapshot,
-                    unloadCurrentAgent: false,
-                    reloadSnapshot: legacyWasLoaded
-                )
-            }
-            throw error
         }
     }
 
@@ -141,13 +160,15 @@ final class ScanScheduler: ScanSchedulerProtocol {
     }
 
     func loadScheduledScans() throws -> [ScanJob] {
-        try loadStoredJobsStrictly()
+        try withStorageLock { try loadStoredJobsStrictly() }
     }
 
     func migrateLegacyState() throws {
         guard isCanonicalInstalledApplication else { return }
-        let jobs = try loadStoredJobsStrictly()
-        try migrateLegacyLaunchAgents(for: jobs)
+        try withStorageLock {
+            let jobs = try loadStoredJobsStrictly()
+            try migrateLegacyLaunchAgents(for: jobs)
+        }
     }
 
     func scheduledScan(jobID: UUID) -> ScanJob? {
@@ -156,12 +177,14 @@ final class ScanScheduler: ScanSchedulerProtocol {
 
     func markScheduledScanRun(jobID: UUID, result: String, at date: Date) {
         do {
-            let jobs = try loadStoredJobsStrictly()
-            guard let existingJob = jobs.first(where: { $0.id == jobID }) else { return }
-            var updatedJob = existingJob
-            updatedJob.lastRun = date
-            updatedJob.lastResult = result
-            try saveStoredJobs(replacing(updatedJob, in: jobs))
+            try withStorageLock {
+                let jobs = try loadStoredJobsStrictly()
+                guard let existingJob = jobs.first(where: { $0.id == jobID }) else { return }
+                var updatedJob = existingJob
+                updatedJob.lastRun = date
+                updatedJob.lastResult = result
+                try saveStoredJobs(replacing(updatedJob, in: jobs))
+            }
         } catch {
             NSLog("Unable to persist scheduled scan result: %@", error.localizedDescription)
         }
@@ -328,14 +351,18 @@ final class ScanScheduler: ScanSchedulerProtocol {
         let legacyWasLoaded = try legacySnapshot.map { _ in
             try launchAgentLoadedStatusProvider(legacyLaunchAgentLabel(for: job))
         } ?? false
+        let existingWasLoaded = try snapshot.map { _ in
+            try launchAgentLoadedStatusProvider(launchAgentLabel(for: job))
+        } ?? false
         var unloadedExistingAgent = false
         var unloadedLegacyAgent = false
         var removedLegacyAgent = false
+        var attemptedPlistMutation = false
         var attemptedReplacementLoad = false
         var loadedReplacementAgent = false
 
         do {
-            if snapshot != nil {
+            if existingWasLoaded {
                 try unloadLaunchAgent(at: plistURL)
                 unloadedExistingAgent = true
             }
@@ -348,6 +375,7 @@ final class ScanScheduler: ScanSchedulerProtocol {
 
             if installLaunchAgent {
                 try ensureDirectoryExists(at: launchAgentsDir)
+                attemptedPlistMutation = true
                 try writeLaunchAgent(for: job, to: plistURL)
                 attemptedReplacementLoad = true
                 try loadLaunchAgent(at: plistURL)
@@ -357,6 +385,7 @@ final class ScanScheduler: ScanSchedulerProtocol {
                     removedLegacyAgent = true
                 }
             } else if snapshot != nil {
+                attemptedPlistMutation = true
                 try fileManager.removeItem(at: plistURL)
             }
             if !installLaunchAgent, legacySnapshot != nil {
@@ -366,11 +395,12 @@ final class ScanScheduler: ScanSchedulerProtocol {
 
             try saveStoredJobs(storedJobs)
         } catch {
-            if unloadedExistingAgent || attemptedReplacementLoad || loadedReplacementAgent {
+            if unloadedExistingAgent || attemptedPlistMutation || attemptedReplacementLoad || loadedReplacementAgent {
                 rollbackLaunchAgent(
                     at: plistURL,
                     to: snapshot,
-                    unloadCurrentAgent: attemptedReplacementLoad
+                    unloadCurrentAgent: attemptedReplacementLoad,
+                    reloadSnapshot: existingWasLoaded
                 )
             } else if snapshot == nil, fileManager.fileExists(atPath: plistURL.path) {
                 performRollbackStep("remove incomplete launch agent file") {
@@ -496,8 +526,32 @@ final class ScanScheduler: ScanSchedulerProtocol {
         throw ScanSchedulerError.launchctlFailed(command: "print", status: status)
     }
 
+    private func withStorageLock<T>(_ operation: () throws -> T) throws -> T {
+        try ensureDirectoryExists(at: jobsStorageURL.deletingLastPathComponent())
+        let lockURL = jobsStorageURL.appendingPathExtension("lock")
+        let descriptor = open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, mode_t(0o600))
+        guard descriptor >= 0 else { throw ScanSchedulerError.storageLockUnavailable }
+        defer { close(descriptor) }
+        var attributes = stat()
+        guard fstat(descriptor, &attributes) == 0,
+              attributes.st_uid == geteuid(),
+              attributes.st_nlink == 1,
+              (attributes.st_mode & S_IFMT) == S_IFREG,
+              fchmod(descriptor, mode_t(0o600)) == 0 else {
+            throw ScanSchedulerError.storageLockUnavailable
+        }
+        // Separate GUI and scheduled launches must reload metadata only after acquiring
+        // the same storage lock, so a run result cannot overwrite a concurrent job edit.
+        while flock(descriptor, LOCK_EX) != 0 {
+            guard errno == EINTR else { throw ScanSchedulerError.storageLockUnavailable }
+        }
+        defer { flock(descriptor, LOCK_UN) }
+        // Keep the lock file so concurrent processes always coordinate on one inode.
+        return try operation()
+    }
+
     private func loadStoredJobs() -> [ScanJob] {
-        (try? loadStoredJobsStrictly()) ?? []
+        (try? loadScheduledScans()) ?? []
     }
 
     private func loadStoredJobsStrictly() throws -> [ScanJob] {
@@ -585,11 +639,14 @@ final class ScanScheduler: ScanSchedulerProtocol {
 enum ScanSchedulerError: LocalizedError {
     case launchctlFailed(command: String, status: Int32)
     case legacyAgentMutationRequiresCanonicalApplication
+    case storageLockUnavailable
 
     var errorDescription: String? {
         switch self {
         case .launchctlFailed(let command, let status):
             return "launchctl \(command) failed with exit status \(status)."
+        case .storageLockUnavailable:
+            return "SafeMac AV could not safely lock scheduled scan storage. Try again after checking storage permissions."
         case .legacyAgentMutationRequiresCanonicalApplication:
             return "Open SafeMac AV from /Applications to update a legacy scheduled scan."
         }

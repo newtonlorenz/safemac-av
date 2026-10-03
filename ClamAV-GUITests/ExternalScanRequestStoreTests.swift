@@ -40,6 +40,28 @@ final class ExternalScanRequestStoreTests: XCTestCase {
         XCTAssertTrue(try store.loadRequests().isEmpty)
     }
 
+    func testFinderRequestPreservesTrailingFilenameWhitespace() throws {
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+        let paths = ["/tmp/file ", "/tmp/file\n"]
+        let request = try store.enqueue(paths: paths, source: "finder")
+        XCTAssertEqual(Set(request.paths), Set(paths))
+        XCTAssertEqual(Set(try XCTUnwrap(store.loadRequests().first).paths), Set(paths))
+    }
+
+    func testInvalidRequestDirectoryIsNeverMovedOrRecursivelyDeleted() throws {
+        let store = ExternalScanRequestStore(baseURL: tempDirectory)
+        let id = UUID()
+        let directory = requestFileURL(id: id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.deletingLastPathComponent().path)
+        let child = directory.appendingPathComponent("keep.txt")
+        try Data("must survive".utf8).write(to: child)
+        XCTAssertTrue(try store.loadRequests().isEmpty)
+        XCTAssertTrue(try store.claimRequest(id: id).isEmpty)
+        XCTAssertTrue(try store.claimRequests().isEmpty)
+        XCTAssertEqual(try Data(contentsOf: child), Data("must survive".utf8))
+    }
+
     func testEnqueueRejectsRelativePaths() throws {
         let store = ExternalScanRequestStore(baseURL: tempDirectory)
 

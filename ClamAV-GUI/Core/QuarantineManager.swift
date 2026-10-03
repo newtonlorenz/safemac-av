@@ -36,6 +36,13 @@ final class QuarantineManager: QuarantineManagerProtocol {
             throw QuarantineError.fileNotFound(file)
         }
 
+        let sourcePath = sourceURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let storagePath = directoryURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let storagePrefix = storagePath.hasSuffix("/") ? storagePath : storagePath + "/"
+        guard sourcePath != storagePath, !sourcePath.hasPrefix(storagePrefix) else {
+            throw QuarantineError.invalidPayload("Files already inside quarantine storage cannot be quarantined again.")
+        }
+
         let storageLock = try acquireStorageLock(in: directoryURL)
         defer { releaseStorageLock(storageLock) }
         var metadata = try loadMetadata(at: metadataURL(in: directoryURL))

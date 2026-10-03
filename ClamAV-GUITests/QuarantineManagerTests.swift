@@ -30,6 +30,21 @@ final class QuarantineManagerTests: XCTestCase {
 
     // MARK: - Quarantine Tests
 
+    func testQuarantineRejectsItsOwnPayloadWithoutLosingExistingRecord() async throws {
+        let source = tempDirectory.appendingPathComponent("already-quarantined.txt")
+        try Data("payload".utf8).write(to: source)
+        try await quarantineManager.quarantine(file: source.path, threat: "Test")
+        let record = try XCTUnwrap(quarantineManager.readQuarantinedFiles().first)
+        do {
+            try await quarantineManager.quarantine(file: record.quarantinePath, threat: "Test")
+            XCTFail("Quarantine storage must not be quarantined again")
+        } catch {
+            XCTAssertTrue(error is QuarantineError)
+        }
+        XCTAssertEqual(try quarantineManager.readQuarantinedFiles(), [record])
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: record.quarantinePath)), Data("payload".utf8))
+    }
+
     func testQuarantineFile() async throws {
         // Create a test file
         let testFile = tempDirectory.appendingPathComponent("infected.txt")
