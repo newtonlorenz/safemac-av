@@ -8,6 +8,11 @@ protocol ClamAVRunnerProtocol {
     func resumeScan()
     var currentProcessPID: Int32? { get }
     var scanIsPaused: Bool { get }
+    var interruptedReport: ScanReport? { get }
+}
+
+extension ClamAVRunnerProtocol {
+    var interruptedReport: ScanReport? { nil }
 }
 
 final class ClamAVRunner: ClamAVRunnerProtocol {
@@ -17,9 +22,11 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
     private var isCancelled = false
     private var processPID: Int32?
     private var isPaused = false
+    private var storedInterruptedReport: ScanReport?
 
     var currentProcessPID: Int32? { withProcessLock { processPID } }
     var scanIsPaused: Bool { withProcessLock { isPaused } }
+    var interruptedReport: ScanReport? { withProcessLock { storedInterruptedReport } }
 
     private func withProcessLock<T>(_ operation: () throws -> T) rethrows -> T {
         processLock.lock()
@@ -32,7 +39,10 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
     }
 
     func scan(paths: [URL], options: ScanOptions, progressHandler: @escaping (ScanProgress) -> Void) async throws -> ScanReport {
-        withProcessLock { isCancelled = false }
+        withProcessLock {
+            isCancelled = false
+            storedInterruptedReport = nil
+        }
         let settings = configManager.loadSettings()
         let startTime = Date()
         let backend = scannerBackend(for: settings, paths: paths, options: options)
@@ -78,15 +88,24 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
                     return self?.isCancelled == true
                 } ?? false
 
+                outputState.flushStdout(startTime: startTime, progressHandler: progressHandler)
+                let snapshot = outputState.snapshot()
+                let recordInterruption: (ScanCompletionState, String) -> Void = { state, message in
+                    let report = ScanReport(
+                        startTime: startTime, endTime: Date(), filesScanned: snapshot.0,
+                        infectedFiles: snapshot.1, errors: snapshot.2 + [message], scanPaths: paths,
+                        exitCode: proc.terminationStatus, completionState: state
+                    )
+                    self?.withProcessLock { self?.storedInterruptedReport = report }
+                }
                 if cancelled {
+                    recordInterruption(.cancelled, "The scan stopped before completion. Run it again to check all selected items.")
                     continuation.resume(throwing: ClamAVError.cancelled)
                     return
                 }
 
-                outputState.flushStdout(startTime: startTime, progressHandler: progressHandler)
-                let snapshot = outputState.snapshot()
-
                 guard proc.terminationReason == .exit else {
+                    recordInterruption(.scanError, "Scanner terminated by signal \(proc.terminationStatus).")
                     continuation.resume(throwing: ClamAVError.scanFailed(
                         exitCode: proc.terminationStatus,
                         message: "Scanner terminated by signal \(proc.terminationStatus)."
@@ -100,6 +119,7 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
                 )
                 guard completionState != .scanError else {
                     let message = (snapshot.2.first ?? "clamscan exited with status \(proc.terminationStatus)")
+                    recordInterruption(.scanError, message)
                     continuation.resume(throwing: ClamAVError.scanFailed(exitCode: proc.terminationStatus, message: message))
                     return
                 }

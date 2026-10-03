@@ -8,6 +8,7 @@ final class ScanCoordinator {
 
     private(set) var isScanning = false
     private(set) var activeScanSource: ScanSource?
+    private(set) var interruptedReport: ScanReport?
 
     var currentProcessPID: Int32? {
         clamAVRunner.currentProcessPID
@@ -32,6 +33,7 @@ final class ScanCoordinator {
         }
 
         isScanning = true
+        interruptedReport = nil
         cancellationRequested = false
         activeScanSource = request.source
         defer {
@@ -62,8 +64,10 @@ final class ScanCoordinator {
             )
             return .completed(report)
         } catch ClamAVError.cancelled {
+            interruptedReport = clamAVRunner.interruptedReport
             return .cancelled
         } catch {
+            interruptedReport = clamAVRunner.interruptedReport
             return .failed(error.localizedDescription)
         }
     }

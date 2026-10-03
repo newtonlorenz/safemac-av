@@ -472,6 +472,52 @@ final class ConfigManagerTests: XCTestCase {
         XCTAssertTrue(exclusions.contains("__pycache__"), "Should exclude Python cache")
     }
 
+    func testEngineDraftAppliesOnlyEditedFieldsToFreshSettings() {
+        let original = AppSettings.default
+        var draft = EngineSettingsDraft(settings: original)
+        draft.settings.clamScanPath = "/tmp/edited-scanner"
+        var current = original
+        current.showNotifications.toggle()
+        current.freshclamPath = "/tmp/new-updater"
+        current.customExclusions = ["recent-exclusion"]
+
+        let merged = draft.merging(into: current)
+
+        XCTAssertEqual(merged.clamScanPath, "/tmp/edited-scanner")
+        XCTAssertEqual(merged.freshclamPath, current.freshclamPath)
+        XCTAssertEqual(merged.showNotifications, current.showNotifications)
+        XCTAssertEqual(merged.customExclusions, current.customExclusions)
+        XCTAssertEqual(original.clamScanPath, AppSettings.default.clamScanPath)
+        XCTAssertTrue(draft.hasChanges)
+    }
+
+    func testEngineDraftPreservesUneditedDaemonFieldsAndCanBeDiscarded() {
+        let original = AppSettings.default
+        var draft = EngineSettingsDraft(settings: original)
+        draft.settings.clamdSettings.clamdScanPath = "/tmp/edited-daemon-client"
+        var current = original
+        current.clamdSettings.socketPath = "/tmp/new-daemon.sock"
+        current.clamdSettings.isEnabled = true
+
+        let merged = draft.merging(into: current)
+        XCTAssertEqual(merged.clamdSettings.clamdScanPath, "/tmp/edited-daemon-client")
+        XCTAssertEqual(merged.clamdSettings.socketPath, current.clamdSettings.socketPath)
+        XCTAssertTrue(merged.clamdSettings.isEnabled)
+
+        draft = EngineSettingsDraft(settings: current)
+        XCTAssertFalse(draft.hasChanges)
+        XCTAssertEqual(draft.merging(into: current), current)
+    }
+
+    func testEngineDraftRejectsRelativeOrEmptyStoragePaths() {
+        var draft = EngineSettingsDraft(settings: .default)
+        XCTAssertNil(draft.validationMessage)
+        draft.settings.quarantineDirectory = "relative/path"
+        XCTAssertNotNil(draft.validationMessage)
+        draft.settings.quarantineDirectory = ""
+        XCTAssertNotNil(draft.validationMessage)
+    }
+
     // MARK: - Settings Merge Tests
 
     func testAllExclusionsCombinesDefaultAndCustom() {

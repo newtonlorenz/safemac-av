@@ -32,7 +32,7 @@ struct MenuBarPopoverView: View {
                     Label("Quick Scan", systemImage: "bolt.shield")
                         .frame(maxWidth: .infinity)
                 }
-                .adaptiveGlassButton(prominent: true)
+                .buttonStyle(.borderedProminent)
                 .disabled(appState.isScanning)
                 .accessibilityIdentifier("menu-bar-quick-scan")
                 .accessibilityLabel(appState.isScanning ? "Quick Scan, scan already in progress" : "Start Quick Scan")
@@ -40,7 +40,7 @@ struct MenuBarPopoverView: View {
                 Button {
                     Task { await appState.updateSignatures() }
                 } label: {
-                    Label("Update", systemImage: "arrow.triangle.2.circlepath")
+                    Label("Definitions", systemImage: "arrow.triangle.2.circlepath")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -87,7 +87,7 @@ struct MenuBarPopoverView: View {
         }
         .padding(16)
         .frame(width: 330)
-        .background(GlassCanvasBackground())
+        .background(Color(nsColor: .windowBackgroundColor))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("menu-bar-popover")
     }
@@ -103,42 +103,48 @@ struct MenuBarPopoverView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("SafeMac AV")
                     .font(.headline)
-                Text("Protection at a glance")
+                Text("Local malware scanning")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
-
-            Text("\(appState.protectionScore.score)%")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(protectionColor)
-                .accessibilityLabel("Protection score \(appState.protectionScore.score) percent")
         }
     }
 
     private var statusCard: some View {
         VStack(alignment: .leading, spacing: 9) {
-            MenuBarStatusRow(
-                icon: scanStatus.icon,
-                tint: scanStatus.tint,
-                title: "Scan",
-                detail: scanStatus.detail,
-                accessibilityIdentifier: "menu-bar-scan-status"
-            )
+            Button {
+                if appState.lastScanResult != nil { appState.presentLastScanResult() }
+                showMainWindow(tab: appState.scanOverviewStatus.kind == .setupNeeded ? .dashboard : .scan)
+            } label: {
+                MenuBarStatusRow(
+                    icon: scanStatus.icon,
+                    tint: scanStatus.tint,
+                    title: "Scan",
+                    detail: scanStatus.detail,
+                    accessibilityIdentifier: "menu-bar-scan-status"
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("View scan: \(scanStatus.detail)")
 
             Divider()
 
-            MenuBarStatusRow(
-                icon: updateStatus.icon,
-                tint: updateStatus.tint,
-                title: "Signatures",
-                detail: updateStatus.detail,
-                accessibilityIdentifier: "menu-bar-update-status"
-            )
+            Button { showMainWindow(tab: .updates) } label: {
+                MenuBarStatusRow(
+                    icon: updateStatus.icon,
+                    tint: updateStatus.tint,
+                    title: "Definitions",
+                    detail: updateStatus.detail,
+                    accessibilityIdentifier: "menu-bar-update-status"
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("View definition updates: \(updateStatus.detail)")
         }
         .padding(12)
-        .adaptiveGlassSurface(cornerRadius: GlassDesign.compactCornerRadius)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var scanStatus: MenuBarStatus {
@@ -155,12 +161,12 @@ struct MenuBarPopoverView: View {
         }
 
         if let report = appState.lastScanResult {
-            if report.infectedFiles.isEmpty && !report.completedWithoutErrors {
+            if report.threatsFound == 0 && !report.completedWithoutErrors {
                 return MenuBarStatus(icon: "exclamationmark.triangle.fill", tint: .orange, detail: "Last scan needs attention · \(report.filesScanned) files")
             }
             let detail = report.isClean
-                ? "Last scan clean · \(report.filesScanned) files"
-                : "\(report.infectedFiles.count) threat\(report.infectedFiles.count == 1 ? "" : "s") found"
+                ? "No threats detected · \(report.filesScanned) files"
+                : "\(report.threatsFound) threat\(report.threatsFound == 1 ? "" : "s") found"
             return MenuBarStatus(
                 icon: report.isClean ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
                 tint: report.isClean ? .green : .red,
@@ -168,12 +174,12 @@ struct MenuBarPopoverView: View {
             )
         }
 
-        return MenuBarStatus(icon: "circle.dashed", tint: .secondary, detail: "Ready for a quick scan")
+        return MenuBarStatus(icon: "circle.dashed", tint: .secondary, detail: appState.scanOverviewStatus.title)
     }
 
     private var updateStatus: MenuBarStatus {
         if appState.isUpdatingSignatures {
-            return MenuBarStatus(icon: "arrow.triangle.2.circlepath", tint: .blue, detail: "Updating signatures…")
+            return MenuBarStatus(icon: "arrow.triangle.2.circlepath", tint: .blue, detail: "Updating definitions…")
         }
 
         if let result = appState.lastUpdateResult {
@@ -185,12 +191,6 @@ struct MenuBarPopoverView: View {
         }
 
         return MenuBarStatus(icon: "shield.checkered", tint: .secondary, detail: "No update run this session")
-    }
-
-    private var protectionColor: Color {
-        if appState.protectionScore.score >= 80 { return .green }
-        if appState.protectionScore.score >= 50 { return .orange }
-        return .red
     }
 
     private var updateAccessibilityLabel: String {

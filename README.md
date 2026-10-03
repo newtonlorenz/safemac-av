@@ -30,13 +30,21 @@ SafeMac AV turns ClamAV's command-line engine into a complete local malware-scan
 - **Watch important folders.** Monitor selected locations and automatically scan new downloads while the app runs.
 - **Respond to detections.** Review findings, quarantine suspicious files, verify restores, and confirm permanent deletion.
 - **Automate routine checks.** Schedule daily, weekly, or monthly scans and keep signatures current with `freshclam`.
-- **Work from the menu bar.** Check protection, scan, update signatures, reopen the app, or quit even after closing the main window.
+- **Work from the menu bar.** Check scan status, scan, update signatures, reopen the app, or quit even after closing the main window.
 - **Start protection with your Mac.** Enable SafeMac AV as a login item from Settings, with its current macOS approval status shown in the app.
 - **Receive local alerts.** Get scan, detection, signature-update, and scheduled-scan notifications, with optional clean-download notices.
 - **Stay in control.** Configure exclusions and limits, inspect history and logs, and pause, resume, or cancel scans.
 - **Use your preferred engine mode.** Run `clamscan` directly or connect to an optional local `clamdscan` service.
 
-Everything the app stores stays on your Mac. There are no analytics or telemetry SDKs. `freshclam` only contacts ClamAV's infrastructure when you request a signature update.
+Everything the app stores stays on your Mac. There are no analytics or telemetry SDKs. `freshclam` contacts its configured update servers during manual or scheduled definition updates.
+
+## Everyday workflow
+
+The overview shows engine readiness, definition freshness and the latest scan outcome. Choose files or folders for a custom scan, or use Quick Scan for Downloads and Desktop. These statuses describe the checks performed; they are not a guarantee that the entire Mac is safe.
+
+Scan selections stay in place when you navigate between screens. Stopping a scan waits for the scanner to finish stopping and keeps an explicitly incomplete report. You can review detections, quarantine reported files and export full JSON or CSV reports, including scan locations and warnings. History keeps the latest 200 reports for the current app session; export anything you need to retain after quitting.
+
+Everyday automation and notification controls appear first in Settings. Engine paths and scanner options are under Advanced, with explicit Apply Changes and Cancel controls. Scheduled scans show their next planned run; the Mac must be available at that time.
 
 ## Requirements
 

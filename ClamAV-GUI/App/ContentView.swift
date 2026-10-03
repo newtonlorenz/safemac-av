@@ -7,21 +7,23 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            GlassCanvasBackground()
+            Color(nsColor: .windowBackgroundColor)
 
             NavigationSplitView {
                 Sidebar()
-                    .navigationSplitViewColumnWidth(min: 200, ideal: 232, max: 280)
+                    .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
             } detail: {
                 VStack(spacing: GlassDesign.canvasPadding) {
                     DetailHeader(tab: appState.selectedTab)
+
+                    ActiveOperationBanner()
 
                     DetailView()
                         .id(appState.selectedTab)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .padding(GlassDesign.canvasPadding)
-                .background(GlassCanvasBackground())
+                .background(Color(nsColor: .windowBackgroundColor))
             }
             .navigationSplitViewStyle(.balanced)
         }
@@ -122,7 +124,7 @@ struct SidebarButton: View {
                     .font(.system(size: 15, weight: .medium))
                     .frame(width: 22)
 
-                Text(tab.rawValue)
+                Text(tab.displayTitle)
                     .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
 
                 Spacer()
@@ -162,29 +164,18 @@ private struct SidebarProtectionSummary: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        let score = appState.protectionScore.score
-
-        HStack(spacing: 10) {
-            Image(systemName: score >= 80 ? "checkmark.shield.fill" : "shield.lefthalf.filled")
-                .foregroundStyle(score >= 80 ? Color.green : Color.orange)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Protection")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("\(score)%")
-                    .font(.subheadline.weight(.semibold))
-            }
-
-            Spacer()
+        Button {
+            appState.selectedTab = .dashboard
+        } label: {
+            Label(appState.scanOverviewStatus.title, systemImage: appState.scanOverviewStatus.symbol)
+                .font(.caption)
+                .foregroundStyle(appState.scanOverviewStatus.tint)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(12)
-        .background {
-            RoundedRectangle(cornerRadius: GlassDesign.compactCornerRadius, style: .continuous)
-                .fill(Color.primary.opacity(0.045))
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Protection score \(score) percent")
+        .buttonStyle(.plain)
+        .padding(8)
+        .accessibilityLabel("Overview: \(appState.scanOverviewStatus.title)")
     }
 }
 
@@ -192,26 +183,67 @@ struct DetailHeader: View {
     let tab: NavigationTab
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: tab.icon)
-                .font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 40, height: 40)
-                .background(Color.accentColor.opacity(0.12), in: Circle())
-
-            Text(tab.rawValue)
+        HStack {
+            Text(tab.displayTitle)
                 .font(.title2.weight(.semibold))
                 .accessibilityIdentifier("screen-title-\(tab.accessibilitySlug)")
-
             Spacer()
-
-            InstallationStatusBadge()
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .adaptiveGlassSurface(cornerRadius: GlassDesign.chromeCornerRadius)
-        .accessibilityElement(children: .contain)
+        .padding(.horizontal, GlassDesign.contentPadding)
+        .padding(.top, 12)
         .accessibilityIdentifier("detail-header")
+    }
+}
+
+private struct ActiveOperationBanner: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if appState.isScanning && appState.selectedTab != .scan {
+                operationRow(
+                    title: appState.isScanPaused ? "Scan paused" : "Scan in progress",
+                    detail: "\(appState.currentScanProgress?.filesScanned ?? 0) files checked",
+                    action: "View scan", tab: .scan,
+                    running: !appState.isScanPaused
+                )
+            }
+            if appState.isUpdatingSignatures && appState.selectedTab != .updates {
+                operationRow(title: "Updating malware definitions", detail: nil, action: "View update", tab: .updates, running: true)
+            } else if appState.lastUpdateResult?.status == .failed && appState.selectedTab != .updates {
+                operationRow(title: "Definitions update failed", detail: "Open updates to review the error and try again.", action: "Review update", tab: .updates, running: false)
+            }
+        }
+    }
+
+    private func operationRow(title: String, detail: String?, action: String, tab: NavigationTab, running: Bool) -> some View {
+        HStack(spacing: 10) {
+            if running {
+                ProgressView().controlSize(.small)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.callout.weight(.medium))
+                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+            }
+            Spacer(minLength: 4)
+            Button(action) { appState.selectedTab = tab }.buttonStyle(.bordered)
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, GlassDesign.contentPadding)
+        .accessibilityIdentifier(tab == .scan ? "active-scan-banner" : "active-update-banner")
+    }
+}
+
+extension NavigationTab {
+    var displayTitle: String {
+        switch self {
+        case .dashboard: return "Overview"
+        case .scheduler: return "Scheduled scans"
+        case .updates: return "Definition updates"
+        case .logs: return "Diagnostics"
+        default: return rawValue
+        }
     }
 }
 

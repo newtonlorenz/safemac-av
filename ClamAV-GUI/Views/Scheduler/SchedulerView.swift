@@ -284,6 +284,16 @@ struct ScheduledJobRow: View {
                     Text(pathsDescription)
                         .font(.caption)
                         .lineLimit(1)
+                    if job.isEnabled, let next = job.schedule.nextRunDate() {
+                        Text("Next planned: \(next.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                    }
+                    if let result = job.lastResult {
+                        Text(result == "success" ? "Last result: completed, no threats detected" : "Last result: \(result)")
+                            .font(.caption)
+                            .foregroundStyle(result.hasPrefix("success") ? Color.secondary : Color.orange)
+                            .lineLimit(2).help(result)
+                    }
                 }
                 .foregroundColor(.secondary)
             }
@@ -312,6 +322,7 @@ struct ScheduledJobRow: View {
             }
             .menuStyle(.borderlessButton)
             .frame(width: 24)
+            .accessibilityLabel("Actions for \(job.name)")
         }
         .padding(.vertical, 8)
         .opacity(job.isEnabled ? 1 : 0.6)
@@ -356,8 +367,8 @@ struct ScheduleJobEditor: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var name: String = ""
-    @State private var paths: [String] = []
-    @State private var frequency: ScheduleFrequency = .daily
+    @State private var paths: [String] = [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads").path]
+    @State private var frequency: ScheduleFrequency = .weekly
     @State private var hour: Int = 9
     @State private var minute: Int = 0
     @State private var dayOfWeek: Int = 2
@@ -381,9 +392,16 @@ struct ScheduleJobEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(existingJob == nil ? "New Scheduled Scan" : "Edit Scheduled Scan")
+                    .font(.title2.weight(.semibold))
+                Text("Choose what to check and when. Your Mac must be on and you must be logged in.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading).padding()
             Form {
                 Section("Schedule Details") {
-                    TextField("Name", text: $name)
+                    TextField("Name (optional)", text: $name, prompt: Text(suggestedName))
                         .textFieldStyle(.roundedBorder)
 
                     Picker("Frequency", selection: $frequency) {
@@ -406,28 +424,23 @@ struct ScheduleJobEditor: View {
 
                     if frequency == .monthly {
                         Picker("Day of Month", selection: $dayOfMonth) {
-                            ForEach(1...28, id: \.self) { day in
+                            ForEach(1...31, id: \.self) { day in
                                 Text("\(day)").tag(day)
                             }
                         }
                     }
 
-                    HStack {
-                        Picker("Hour", selection: $hour) {
-                            ForEach(0..<24, id: \.self) { h in
-                                Text(String(format: "%02d", h)).tag(h)
-                            }
-                        }
-                        .frame(width: 80)
+                    if frequency == .monthly && dayOfMonth > 28 {
+                        Text("Months without the selected day skip this scan.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
 
-                        Text(":")
-
-                        Picker("Minute", selection: $minute) {
-                            ForEach([0, 15, 30, 45], id: \.self) { m in
-                                Text(String(format: "%02d", m)).tag(m)
-                            }
-                        }
-                        .frame(width: 80)
+                    DatePicker("Time", selection: scheduleTime, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.field)
+                        .accessibilityIdentifier("scheduled-scan-time")
+                    if let next = draftSchedule.nextRunDate() {
+                        Text("Next planned: \(next.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
 
@@ -444,6 +457,7 @@ struct ScheduleJobEditor: View {
                                     .foregroundColor(.secondary)
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Remove \((path as NSString).lastPathComponent) from schedule")
                         }
                     }
 
@@ -466,39 +480,57 @@ struct ScheduleJobEditor: View {
                     saveJob()
                 }
                 .keyboardShortcut(.return)
-                .disabled(name.isEmpty || paths.isEmpty)
+                .disabled(paths.isEmpty)
                 .adaptiveGlassButton(prominent: true)
             }
             .padding()
         }
-        .frame(width: 450, height: 500)
+        .frame(minWidth: 480, idealWidth: 540, minHeight: 540, idealHeight: 620)
         .fileImporter(
             isPresented: $showingFolderPicker,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
-                paths.append(contentsOf: urls.map { $0.path })
+                for url in urls where !paths.contains(url.standardizedFileURL.path) {
+                    paths.append(url.standardizedFileURL.path)
+                }
             }
         }
     }
 
+    private var draftSchedule: ScanSchedule {
+        ScanSchedule(frequency: frequency, time: DateComponents(hour: hour, minute: minute),
+                     dayOfWeek: frequency == .weekly ? dayOfWeek : nil,
+                     dayOfMonth: frequency == .monthly ? dayOfMonth : nil)
+    }
+
+    private var suggestedName: String {
+        "\(frequency.rawValue) \(paths.count == 1 ? (paths[0] as NSString).lastPathComponent : "scan")"
+    }
+
+    private var scheduleTime: Binding<Date> {
+        Binding(get: {
+            Calendar.current.date(from: DateComponents(year: 2001, month: 1, day: 1, hour: hour, minute: minute)) ?? Date()
+        }, set: { value in
+            hour = Calendar.current.component(.hour, from: value)
+            minute = Calendar.current.component(.minute, from: value)
+        })
+    }
+
     private func saveJob() {
-        let schedule = ScanSchedule(
-            frequency: frequency,
-            time: DateComponents(hour: hour, minute: minute),
-            dayOfWeek: frequency == .weekly ? dayOfWeek : nil,
-            dayOfMonth: frequency == .monthly ? dayOfMonth : nil
-        )
+        let schedule = draftSchedule
+        let enteredName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = enteredName.isEmpty ? suggestedName : enteredName
 
         var job: ScanJob
         if let existing = existingJob {
             job = existing
-            job.name = name
+            job.name = resolvedName
             job.paths = paths
             job.schedule = schedule
         } else {
-            job = ScanJob(name: name, paths: paths, schedule: schedule)
+            job = ScanJob(name: resolvedName, paths: paths, schedule: schedule)
         }
 
         if onSave(job) {

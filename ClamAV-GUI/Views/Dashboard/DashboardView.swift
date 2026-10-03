@@ -5,377 +5,179 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            AdaptiveGlassEffectContainer(spacing: 20) {
-                VStack(spacing: 20) {
-                    ProtectionScoreView(score: appState.protectionScore) { component in
-                        DashboardScoreActionHandler.handle(component, appState: appState)
-                    }
+            VStack(alignment: .leading, spacing: 28) {
+                ScanOverviewStatusView(status: appState.scanOverviewStatus) {
+                    appState.performOverviewAction()
+                }
 
-                    StatusCardsSection()
-
-                    QuickActionsSection()
-
-                    if let lastScan = appState.lastScanResult {
-                        LastScanSection(report: lastScan)
+                if case .notInstalled = appState.configManager.validateClamAVInstallation(using: appState.settings) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Install ClamAV using Homebrew in Terminal:")
+                            .font(.callout)
+                        Text("brew install clamav")
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                        Text("Already installed? Open engine settings and choose Auto-detect Paths.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .frame(maxWidth: GlassDesign.contentMaxWidth)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, GlassDesign.contentPadding)
-                .padding(.vertical, 16)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    ViewThatFits(in: .horizontal) {
+                        scanActions
+                        VStack(alignment: .leading, spacing: 10) { scanButtons }
+                    }
+                    Text("Quick Scan checks Downloads and Desktop. Detected files are moved to quarantine.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Divider()
+
+                VStack(spacing: 0) {
+                    OverviewDetailRow(title: "Malware definitions", detail: definitionStatus, actionTitle: "View updates") {
+                        appState.selectedTab = .updates
+                    }
+                    Divider()
+                    OverviewDetailRow(title: "Automatic scanning", detail: automaticScanningStatus, actionTitle: "Configure") {
+                        appState.selectedTab = .settings
+                    }
+                    Divider()
+                    OverviewDetailRow(title: "Quarantine", detail: quarantineStatus, actionTitle: "Review files") {
+                        appState.selectedTab = .quarantine
+                    }
+                    Divider()
+                    OverviewDetailRow(title: "Last scan", detail: lastScanStatus, actionTitle: appState.lastScanResult == nil ? "Choose files" : "View results") {
+                        if appState.lastScanResult == nil { appState.requestCustomScan() }
+                        else { appState.presentLastScanResult() }
+                    }
+                }
+                Text("Folder and download scanning run while SafeMac AV is open, including in the menu bar.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: 820, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, GlassDesign.contentPadding)
+            .padding(.vertical, 24)
         }
         .accessibilityIdentifier("dashboard-content")
+    }
+
+    private var scanActions: some View {
+        HStack(spacing: 12) { scanButtons }
+    }
+
+    @ViewBuilder
+    private var scanButtons: some View {
+        Button("Choose Files or Folders…") { appState.requestCustomScan() }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(appState.isScanning)
+            .accessibilityIdentifier("overview-choose-files")
+        Button("Quick Scan") {
+            appState.selectedTab = .scan
+            Task { await appState.startQuickScan() }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .disabled(appState.isScanning || !appState.configManager.validateClamAVInstallation(using: appState.settings).isReady)
+        .accessibilityIdentifier("overview-quick-scan")
+    }
+
+    private var definitionStatus: String {
+        if appState.isUpdatingSignatures { return "Updating…" }
+        if appState.lastUpdateResult?.status == .failed { return "Last update failed. Open updates for details." }
+        guard let date = appState.configManager.getSignatureInfo().lastUpdated else { return "Not available on this Mac" }
+        return "Updated \(date.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private var automaticScanningStatus: String {
+        let downloads = appState.settings.autoScanDownloads
+            ? (appState.fileWatcher.isWatching ? "New downloads: on" : "New downloads: unavailable")
+            : "New downloads: off"
+        let folders = appState.settings.monitoringEnabled
+            ? (appState.isMonitoringActive ? "Selected folders: watching" : "Selected folders: unavailable")
+            : "Selected folders: off"
+        return "\(downloads) · \(folders)"
+    }
+
+    private var quarantineStatus: String {
+        if appState.quarantineLoadError != nil { return "Could not load quarantined files" }
+        let count = appState.quarantinedFiles.count
+        return count == 0 ? "No files in quarantine" : "\(count) file\(count == 1 ? "" : "s") isolated"
+    }
+
+    private var lastScanStatus: String {
+        guard let report = appState.lastScanResult else { return "No scans completed this session" }
+        let outcome = report.isClean ? "No threats detected" : (report.threatsFound > 0 ? "\(report.threatsFound) detections" : "Needs attention")
+        return "\(outcome) · \(report.filesScanned) files · \(report.endTime.formatted(date: .abbreviated, time: .shortened))"
+    }
+}
+
+private struct OverviewDetailRow: View {
+    let title: String
+    let detail: String
+    let actionTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.headline)
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button(actionTitle, action: action).buttonStyle(.link)
+                .fixedSize()
+                .accessibilityLabel("\(actionTitle): \(title)")
+        }
+        .padding(.vertical, 15)
     }
 }
 
 @MainActor
+extension AppState {
+    var scanOverviewStatus: ScanOverviewStatus {
+        ScanOverviewStatus.resolve(
+            installation: configManager.validateClamAVInstallation(using: settings),
+            isScanning: isScanning, isPaused: isScanPaused,
+            isUpdating: isUpdatingSignatures, report: lastScanResult, scanError: scanError
+        )
+    }
+
+    func presentLastScanResult() {
+        isPreparingNewScan = false
+        selectedTab = .scan
+    }
+
+    func performOverviewAction() {
+        switch scanOverviewStatus.action {
+        case .configureEngine: selectedTab = .settings
+        case .updateDefinitions:
+            selectedTab = .updates
+            Task { await updateSignatures() }
+        case .reviewScan: presentLastScanResult()
+        case nil: break
+        }
+    }
+}
+
+/// Retained for compatibility with existing command tests. Review never enables a service.
+@MainActor
 enum DashboardScoreActionHandler {
     static func handle(_ component: ScoreComponent, appState: AppState) {
         switch component.action {
-        case .configureClamAV:
-            appState.selectedTab = .settings
+        case .configureClamAV, .enableMonitoring: appState.selectedTab = .settings
         case .updateSignatures:
+            appState.selectedTab = .updates
             Task { await appState.updateSignatures() }
-        case .reviewScan:
-            appState.selectedTab = .scan
-        case .enableMonitoring:
-            appState.settings.monitoringEnabled = true
-            appState.saveSettings()
-        case .openFinderSettings:
-            FinderExtensionManager.openSystemSettings()
-        case nil:
-            break
+        case .reviewScan: appState.presentLastScanResult()
+        case .openFinderSettings: FinderExtensionManager.openSystemSettings()
+        case nil: break
         }
     }
-}
-
-struct StatusCardsSection: View {
-    @EnvironmentObject var appState: AppState
-
-    var body: some View {
-        LazyVGrid(columns: [
-            GridItem(.adaptive(minimum: 180, maximum: 320), spacing: 16)
-        ], spacing: 16) {
-            StatusCard(
-                title: "ClamAV Status",
-                value: installationStatus.message,
-                icon: "checkmark.shield",
-                color: installationStatus.isReady ? .green : .orange
-            )
-
-            StatusCard(
-                title: "Signatures",
-                value: signatureStatus,
-                icon: "doc.text",
-                color: .blue
-            )
-
-            StatusCard(
-                title: "Quarantine",
-                value: appState.quarantineLoadError == nil ? "\(appState.quarantinedFiles.count) files" : "Needs attention",
-                icon: "lock.shield",
-                color: appState.quarantineLoadError == nil && appState.quarantinedFiles.isEmpty ? .gray : .orange
-            )
-
-            StatusCard(
-                title: "Last Scan",
-                value: lastScanStatus,
-                icon: "magnifyingglass",
-                color: lastScanColor
-            )
-
-            StatusCard(
-                title: "Last Update",
-                value: lastUpdateStatus,
-                icon: "arrow.down.circle",
-                color: .blue
-            )
-
-            StatusCard(
-                title: "Monitoring",
-                value: appState.settings.monitoringEnabled ? (appState.isMonitoringActive ? "Watching folders" : "Not watching") : "Disabled",
-                icon: "eye",
-                color: appState.isMonitoringActive ? .green : (appState.settings.monitoringEnabled ? .orange : .gray)
-            )
-        }
-    }
-
-    private var installationStatus: ClamAVInstallationStatus {
-        appState.configManager.validateClamAVInstallation()
-    }
-
-    private var signatureStatus: String {
-        let info = appState.configManager.getSignatureInfo()
-        if let date = info.lastUpdated {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .abbreviated
-            return formatter.localizedString(for: date, relativeTo: Date())
-        }
-        return "Not available"
-    }
-
-    private var lastScanStatus: String {
-        guard let scan = appState.lastScanResult else { return "Never" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: scan.endTime, relativeTo: Date())
-    }
-
-    private var lastScanColor: Color {
-        guard let scan = appState.lastScanResult else { return .gray }
-        return scan.infectedFiles.isEmpty ? (scan.isClean ? .green : .orange) : .red
-    }
-
-    private var lastUpdateStatus: String {
-        guard let update = appState.lastUpdateResult else { return "Never" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: update.timestamp, relativeTo: Date())
-    }
-}
-
-struct StatusCard: View {
-    let title: String
-    let value: String
-    let icon: String
-    let color: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(color)
-                    .frame(width: 34, height: 34)
-                    .background(color.opacity(0.12), in: Circle())
-
-                Text(title)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Text(value)
-                .font(.headline)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .adaptiveGlassSurface(tint: color.opacity(0.08))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title), \(value)")
-    }
-}
-
-struct QuickActionsSection: View {
-    @EnvironmentObject var appState: AppState
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Quick Actions")
-                .font(.headline)
-
-            LazyVGrid(columns: [
-                GridItem(.adaptive(minimum: 150, maximum: 260), spacing: 12)
-            ], spacing: 12) {
-                QuickActionButton(
-                    title: "Scan Downloads",
-                    icon: "arrow.down.doc",
-                    color: .blue
-                ) {
-                    Task {
-                        let downloadsURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
-                        await appState.startScan(paths: [downloadsURL], options: .default)
-                    }
-                }
-
-                QuickActionButton(
-                    title: "Scan Home",
-                    icon: "house",
-                    color: .purple
-                ) {
-                    Task {
-                        let homeURL = FileManager.default.homeDirectoryForCurrentUser
-                        await appState.startScan(paths: [homeURL], options: .default)
-                    }
-                }
-
-                QuickActionButton(
-                    title: "Update Signatures",
-                    icon: "arrow.clockwise",
-                    color: .green
-                ) {
-                    Task {
-                        await appState.updateSignatures()
-                    }
-                }
-
-                QuickActionButton(
-                    title: "View Quarantine",
-                    icon: "lock.shield",
-                    color: .orange
-                ) {
-                    appState.selectedTab = .quarantine
-                }
-            }
-        }
-    }
-}
-
-struct QuickActionButton: View {
-    let title: String
-    let icon: String
-    let color: Color
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 34, height: 34)
-                    .background(color.opacity(0.12), in: Circle())
-                Text(title)
-                    .font(.subheadline.weight(.medium))
-
-                Spacer(minLength: 4)
-
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(12)
-            .foregroundColor(color)
-            .adaptiveGlassSurface(
-                tint: color.opacity(0.10),
-                interactive: true,
-                cornerRadius: GlassDesign.compactCornerRadius
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-struct LastScanSection: View {
-    let report: ScanReport
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Last Scan Results")
-                    .font(.headline)
-                Spacer()
-                Text(report.endTime, style: .relative)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            HStack(spacing: 20) {
-                ScanStatView(title: "Files Scanned", value: "\(report.filesScanned)", color: .blue)
-                ScanStatView(title: "Threats Found", value: "\(report.infectedFiles.count)", color: report.infectedFiles.isEmpty ? (report.isClean ? .green : .orange) : .red)
-                ScanStatView(title: "Duration", value: formatDuration(report.duration), color: .gray)
-            }
-
-            if !report.completedWithoutErrors {
-                Label("Scan needs attention", systemImage: "exclamationmark.triangle")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-            }
-
-            if !report.infectedFiles.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Detected Threats:")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    ForEach(report.infectedFiles.prefix(5)) { file in
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.red)
-                            Text(file.threatName)
-                                .font(.caption)
-                            Spacer()
-                            Text((file.path as NSString).lastPathComponent)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-
-                    if report.infectedFiles.count > 5 {
-                        Text("... and \(report.infectedFiles.count - 5) more")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-        }
-        .padding(18)
-        .adaptiveGlassSurface()
-    }
-
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        if minutes > 0 {
-            return "\(minutes)m \(seconds)s"
-        }
-        return "\(seconds)s"
-    }
-}
-
-struct ScanStatView: View {
-    let title: String
-    let value: String
-    let color: Color
-
-    var body: some View {
-        VStack {
-            Text(value)
-                .font(.title2)
-                .fontWeight(.semibold)
-                .foregroundColor(color)
-            Text(title)
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-    }
-}
-
-struct InstallationStatusBadge: View {
-    @EnvironmentObject var appState: AppState
-
-    var body: some View {
-        let status = appState.configManager.validateClamAVInstallation()
-
-        HStack(spacing: 4) {
-            Circle()
-                .fill(status.isReady ? Color.green : Color.orange)
-                .frame(width: 8, height: 8)
-            Text(status.isReady ? "Ready" : "Setup Required")
-                .font(.caption)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            (status.isReady ? Color.green : Color.orange).opacity(0.11),
-            in: Capsule()
-        )
-        .overlay {
-            Capsule()
-                .strokeBorder(
-                    (status.isReady ? Color.green : Color.orange).opacity(0.20),
-                    lineWidth: 0.75
-                )
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(status.isReady ? "ClamAV is ready" : "ClamAV setup required")
-    }
-}
-
-#Preview {
-    DashboardView()
-        .environmentObject(AppState())
-        .frame(width: 800, height: 600)
 }

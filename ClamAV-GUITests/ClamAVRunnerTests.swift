@@ -38,6 +38,49 @@ final class ClamAVRunnerTests: XCTestCase {
         XCTAssertEqual(report.filesScanned, 1)
     }
 
+    @MainActor
+    func testCancellationRetainsDetectedFilesAndClearsPartialReportOnNextRun() async throws {
+        let fixture = try makeRunner(script: "printf '/tmp/partial-fixture: Test.Signature FOUND\\n'; exec /bin/sleep 30")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let detected = expectation(description: "Partial detection received")
+        let task = Task {
+            do {
+                _ = try await fixture.runner.scan(paths: [], options: .default) { progress in
+                    if progress.infectedCount == 1 { detected.fulfill() }
+                }
+                XCTFail("Cancelled scan must throw cancellation")
+            } catch ClamAVError.cancelled {
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+        await fulfillment(of: [detected], timeout: 3)
+        fixture.runner.cancelCurrentScan()
+        await task.value
+        let partial = try XCTUnwrap(fixture.runner.interruptedReport)
+        XCTAssertEqual(partial.completionState, .cancelled)
+        XCTAssertEqual(partial.infectedFiles.map(\.path), ["/tmp/partial-fixture"])
+        XCTAssertEqual(partial.threatsFound, 1)
+        XCTAssertFalse(partial.isClean)
+        try Data("#!/bin/sh\nprintf '/tmp/clean: OK\\n'\n".utf8).write(to: fixture.executable)
+        _ = try await fixture.runner.scan(paths: [], options: .default) { _ in }
+        XCTAssertNil(fixture.runner.interruptedReport)
+    }
+
+    func testScannerFailureRetainsFinalUnterminatedDetection() async throws {
+        let fixture = try makeRunner(script: "printf '/tmp/final-fixture: Test.Signature FOUND'; exit 2")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        do {
+            _ = try await fixture.runner.scan(paths: [], options: .default) { _ in }
+            XCTFail("Exit 2 must remain an error")
+        } catch ClamAVError.scanFailed {
+        }
+        let partial = try XCTUnwrap(fixture.runner.interruptedReport)
+        XCTAssertEqual(partial.completionState, .scanError)
+        XCTAssertEqual(partial.infectedFiles.map(\.path), ["/tmp/final-fixture"])
+        XCTAssertEqual(partial.exitCode, 2)
+    }
+
     func testSignalTerminationIsAnErrorRatherThanAnInfection() async throws {
         let fixture = try makeRunner(script: "kill -HUP $$")
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -317,6 +360,47 @@ final class ClamAVRunnerTests: XCTestCase {
 }
 
 final class FreshclamRunnerTests: XCTestCase {
+    func testConfigurationInspectionDistinguishesMissingSampleAndActiveConfigWithoutWriting() throws {
+        let fixture = try makeUpdater(script: "exit 0")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let config = fixture.directory.appendingPathComponent("freshclam.conf")
+        let sample = fixture.directory.appendingPathComponent("freshclam.conf.sample")
+        try "Example\n".write(to: sample, atomically: true, encoding: .utf8)
+        XCTAssertEqual(FreshclamConfigurationStatus.inspect(directory: fixture.directory.path), .missing)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: config.path))
+
+        let example = "# Sample configuration\n  Example  \nDatabaseMirror database.clamav.net\n"
+        try example.write(to: config, atomically: true, encoding: .utf8)
+        XCTAssertEqual(FreshclamConfigurationStatus.inspect(directory: fixture.directory.path), .example)
+        XCTAssertEqual(try String(contentsOf: config), example)
+
+        let custom = "# Example\nDatabaseMirror example.internal\n"
+        try custom.write(to: config, atomically: true, encoding: .utf8)
+        XCTAssertEqual(FreshclamConfigurationStatus.inspect(directory: fixture.directory.path), .ready)
+        XCTAssertEqual(try String(contentsOf: config), custom)
+        try FileManager.default.removeItem(at: config)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: false)
+        XCTAssertEqual(FreshclamConfigurationStatus.inspect(directory: fixture.directory.path), .unreadable)
+    }
+
+    func testMissingSelectedConfigurationPreservesInstallationDefaultFallback() throws {
+        let fixture = try makeUpdater(script: "exit 0")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let invocation = try FreshclamInvocation.make(executablePath: fixture.settings.freshclamPath,
+            configDirectory: fixture.settings.configDirectory, signatureDirectory: fixture.settings.signatureDirectory)
+        XCTAssertFalse(invocation.arguments.contains { $0.hasPrefix("--config-file=") })
+    }
+
+    func testConfigurationFailuresExplainTheRequiredRecovery() {
+        let example = FreshclamRunner.parseUpdateOutput(
+            "ERROR: Please edit the example config file /tmp/freshclam.conf\nERROR: Can't open/parse the config file /tmp/freshclam.conf", exitCode: 56)
+        XCTAssertTrue(example.message.contains("standalone Example line"))
+        let missing = FreshclamRunner.parseUpdateOutput(
+            "ERROR: Can't open/parse the config file /tmp/freshclam.conf", exitCode: 56)
+        XCTAssertTrue(missing.message.contains("freshclam.conf.sample"))
+        XCTAssertTrue(missing.message.contains("existing configuration"))
+    }
+
     func testUpdatePreservesDiagnosticSplitAcrossUTF8PipeReads() async throws {
         let fixture = try makeUpdater(script: """
         printf 'ERROR: cannot update caf\\303'

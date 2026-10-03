@@ -3,6 +3,39 @@ import XCTest
 
 @MainActor
 final class ScanCoordinatorTests: XCTestCase {
+    func testNextScheduledDateKeepsSelectedWeekdayAndExactMinute() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 3, hour: 12)))
+        let schedule = ScanSchedule(frequency: .weekly, time: DateComponents(hour: 9, minute: 7), dayOfWeek: 2)
+        let next = try XCTUnwrap(schedule.nextRunDate(after: now, calendar: calendar))
+        let parts = calendar.dateComponents([.weekday, .hour, .minute], from: next)
+        XCTAssertEqual(parts.weekday, 2)
+        XCTAssertEqual(parts.hour, 9)
+        XCTAssertEqual(parts.minute, 7)
+        XCTAssertGreaterThan(next, now)
+    }
+
+    func testCleanScanExportRetainsScopeAndSummary() throws {
+        let report = ScanReport(startTime: Date(timeIntervalSince1970: 0), endTime: Date(timeIntervalSince1970: 60), filesScanned: 12, infectedFiles: [], errors: [], scanPaths: [URL(fileURLWithPath: "/tmp/checked-folder")])
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(try decoder.decode(ScanReport.self, from: report.exportJSONData()), report)
+        let csv = String(decoding: report.exportCSVData(), as: UTF8.self)
+        XCTAssertTrue(csv.contains("checked-folder"))
+        XCTAssertTrue(csv.contains("success"))
+        XCTAssertTrue(csv.contains("12"))
+    }
+
+    func testIncompleteScanExportRetainsWarningsAndNeutralisesSpreadsheetFormulas() throws {
+        let report = ScanReport(startTime: Date(), endTime: Date(), filesScanned: 1, infectedFiles: [ScanResult(path: "/tmp/file", threatName: "=untrusted")], errors: ["permission denied"], scanPaths: [URL(fileURLWithPath: "/tmp")], completionState: .scanError)
+        let json = try JSONSerialization.jsonObject(with: report.exportJSONData()) as? [String: Any]
+        XCTAssertEqual(json?["errors"] as? [String], ["permission denied"])
+        let csv = String(decoding: report.exportCSVData(), as: UTF8.self)
+        XCTAssertTrue(csv.contains("permission denied"))
+        XCTAssertTrue(csv.contains("'=untrusted"))
+    }
+
     func testCancellationDuringAdmissionPreventsLaunchAndDoesNotCancelNextScan() async {
         let runner = MockCoordinatorRunner()
         let coordinator = ScanCoordinator(clamAVRunner: runner)

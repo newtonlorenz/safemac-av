@@ -14,4 +14,8 @@ final class LogManager {
             entries.removeFirst(entries.count - maxEntries)
         }
     }
+
+    func clear() {
+        entries.removeAll()
+    }
 }

@@ -10,6 +10,10 @@ enum SignatureUpdateScheduleState: Equatable {
 @MainActor
 final class AppState: ObservableObject {
     @Published var selectedTab: NavigationTab = .dashboard
+    // A scan draft belongs to the session, not a view recreated by navigation.
+    @Published var scanDraftPaths: [URL] = []
+    @Published var scanDraftOptions: ScanOptions = .default
+    @Published var isPreparingNewScan = false
     @Published var isScanning: Bool = false
     @Published var currentScanProgress: ScanProgress?
     @Published var isScanPaused = false
@@ -17,6 +21,15 @@ final class AppState: ObservableObject {
     @Published var lastUpdateResult: UpdateResult?
     @Published var isUpdatingSignatures = false
     @Published var quarantinedFiles: [QuarantinedFile] = []
+    @Published var isManagingQuarantine = false {
+        didSet {
+            if !isManagingQuarantine {
+                let waiters = quarantineIdleWaiters
+                quarantineIdleWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
+        }
+    }
     @Published private(set) var quarantineLoadError: String?
     @Published var settings: AppSettings
     @Published var logs: [LogEntry] = []
@@ -58,6 +71,7 @@ final class AppState: ObservableObject {
     private var activeScanGeneration: UUID?
     private var scanLifecycleSource: ScanSource?
     private var scanLifecycleWaiters: [CheckedContinuation<Void, Never>] = []
+    private var quarantineIdleWaiters: [CheckedContinuation<Void, Never>] = []
     private var pendingAutomaticMonitoringPaths: [URL] = []
     private var isProcessingAutomaticMonitoring = false
     private var pendingExternalScanRequestIDs = Set<UUID>()
@@ -160,8 +174,7 @@ final class AppState: ObservableObject {
 
         NotificationCenter.default.publisher(for: .startCustomScan)
             .sink { [weak self] _ in
-                self?.selectedTab = .scan
-                self?.shouldOpenCustomScanPicker = true
+                self?.requestCustomScan()
             }
             .store(in: &cancellables)
 
@@ -242,6 +255,22 @@ final class AppState: ObservableObject {
         addLog(.warning, FinderScanRequestHandoff.genericFailureMessage)
     }
 
+    func requestCustomScan() {
+        guard !isScanning else { selectedTab = .scan; return }
+        selectedTab = .scan
+        isPreparingNewScan = true
+        shouldOpenCustomScanPicker = true
+    }
+
+    func addScanDraftPaths(_ paths: [URL]) {
+        for path in paths where path.isFileURL {
+            let normalised = path.standardizedFileURL
+            if !scanDraftPaths.contains(where: { $0.standardizedFileURL == normalised }) {
+                scanDraftPaths.append(normalised)
+            }
+        }
+    }
+
     func startQuickScan() async {
         let quickScanPaths = [
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads"),
@@ -259,10 +288,20 @@ final class AppState: ObservableObject {
         jobID: UUID? = nil,
         onAdmitted: (() async throws -> Void)? = nil
     ) async -> ScanOutcome {
+        if [.manual, .quick, .custom, .finder].contains(source) {
+            selectedTab = .scan
+        }
         guard !paths.isEmpty else {
             scanError = "No scan paths selected."
             addLog(.warning, "Skipped scan: no paths selected")
             return .failed("No scan paths selected.")
+        }
+
+        guard !isManagingQuarantine else {
+            let message = "Wait for the current quarantine action to finish before starting a scan."
+            scanError = message
+            addLog(.info, message)
+            return .skippedAlreadyRunning(active: nil)
         }
 
         let status = configManager.validateClamAVInstallation(using: settings)
@@ -279,6 +318,7 @@ final class AppState: ObservableObject {
             return outcome
         }
 
+        isPreparingNewScan = false
         scanLifecycleSource = source
         defer {
             scanLifecycleSource = nil
@@ -346,10 +386,12 @@ final class AppState: ObservableObject {
             addLog(.info, "Scan completed: \(report.filesScanned) files scanned, \(report.infectedFiles.count) threats found")
             await sendScanNotification(report: finalReport, source: source, requestedPaths: paths)
         case .failed(let message):
+            recordInterruptedScan(paths: paths, scanType: scanType, completion: .scanError, message: message)
             scanError = message
             addLog(.error, "Scan failed: \(message)")
         case .cancelled:
-            scanError = "Scan was cancelled."
+            recordInterruptedScan(paths: paths, scanType: scanType, completion: .cancelled, message: "The scan stopped before completion. Run it again to check all selected items.")
+            scanError = nil
             addLog(.info, "Scan cancelled")
         case .skippedAlreadyRunning:
             scanError = outcome.errorMessage
@@ -365,18 +407,38 @@ final class AppState: ObservableObject {
         return outcome
     }
 
+    private func recordInterruptedScan(paths: [URL], scanType: ScanType, completion: ScanCompletionState, message: String) {
+        let report: ScanReport
+        if let partial = scanCoordinator.interruptedReport {
+            report = partial
+        } else {
+            let observedCount = currentScanProgress?.infectedCount ?? 0
+            let warnings = [message] + (observedCount > 0
+                ? ["\(observedCount) detection(s) were reported before the scan stopped, but individual file details are unavailable. Scan these locations again to review them."]
+                : [])
+            report = ScanReport(
+                startTime: currentScanProgress?.startTime ?? Date(), endTime: Date(),
+                filesScanned: currentScanProgress?.filesScanned ?? 0, infectedFiles: [],
+                errors: warnings, scanPaths: paths, exitCode: -1, completionState: completion,
+                observedThreatCount: observedCount
+            )
+        }
+        lastScanResult = report
+        scanHistoryManager.addEntry(ScanHistoryEntry(from: report, scanType: scanType))
+    }
+
     func cancelScan() {
-        guard scanCoordinator.isScanning else { return }
+        guard scanCoordinator.isScanning, currentScanProgress?.status != .cancelling else { return }
         activeScanGeneration = nil
         scanCoordinator.cancelCurrentScan()
-        isScanning = false
         isScanPaused = false
-        currentScanProgress = nil
-        addLog(.info, "Scan cancelled by user")
+        currentScanProgress?.status = .cancelling
+        addLog(.info, "Stopping scan at the user's request")
     }
 
     func pauseScan() {
-        guard scanCoordinator.isScanning, scanCoordinator.currentProcessPID != nil else { return }
+        guard scanCoordinator.isScanning, scanCoordinator.currentProcessPID != nil,
+              currentScanProgress?.status != .cancelling else { return }
         scanCoordinator.pauseScan()
         isScanPaused = scanCoordinator.scanIsPaused
         guard isScanPaused else { return }
@@ -388,7 +450,8 @@ final class AppState: ObservableObject {
     }
 
     func resumeScan() {
-        guard scanCoordinator.isScanning, scanCoordinator.currentProcessPID != nil else { return }
+        guard scanCoordinator.isScanning, scanCoordinator.currentProcessPID != nil,
+              currentScanProgress?.status != .cancelling else { return }
         scanCoordinator.resumeScan()
         isScanPaused = scanCoordinator.scanIsPaused
         guard !isScanPaused else { return }
@@ -454,6 +517,62 @@ final class AppState: ObservableObject {
         try quarantineManager.delete(file: file)
         loadQuarantinedFiles()
         addLog(.info, "Deleted file from quarantine: \(file.originalPath)")
+    }
+
+    @discardableResult
+    func applySettings(_ updated: AppSettings) -> Bool {
+        let engineChanged = updated.clamScanPath != settings.clamScanPath
+            || updated.freshclamPath != settings.freshclamPath
+            || updated.configDirectory != settings.configDirectory
+            || updated.signatureDirectory != settings.signatureDirectory
+            || updated.quarantineDirectory != settings.quarantineDirectory
+            || updated.scannerBackend != settings.scannerBackend
+            || updated.clamdSettings != settings.clamdSettings
+        guard !engineChanged || (!isScanning && !isUpdatingSignatures && !isManagingQuarantine) else {
+            settingsSaveError = "Wait for the current scan, definition update or quarantine action to finish before changing engine settings."
+            return false
+        }
+        do {
+            try configManager.saveSettings(updated)
+            settings = updated
+            settingsSaveError = nil
+            if !settings.autoScanDownloads { pendingAutomaticDownloadPaths.removeAll() }
+            if !settings.monitoringEnabled { pendingAutomaticMonitoringPaths.removeAll() }
+            configureMonitoring()
+            refreshProtectionScore()
+            if engineChanged { loadQuarantinedFiles() }
+            return true
+        } catch {
+            settingsSaveError = "Your settings could not be saved. Check that the app can write to Application Support, then try again."
+            addLog(.error, "Failed to save engine settings: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    func quarantineDetection(_ file: ScanResult) async throws {
+        guard !isManagingQuarantine, !isScanning,
+              let report = lastScanResult,
+              report.infectedFiles.contains(where: { $0.id == file.id && $0.actionTaken == .reported }) else {
+            throw QuarantineError.moveFailed("This detection is no longer available. Review the latest scan result.")
+        }
+        isManagingQuarantine = true
+        defer { isManagingQuarantine = false }
+        try await quarantineManager.quarantine(file: file.path, threat: file.threatName)
+        var results = report.infectedFiles
+        if let index = results.firstIndex(where: { $0.id == file.id }) { results[index].actionTaken = .quarantined }
+        let updatedReport = ScanReport(startTime: report.startTime, endTime: report.endTime, filesScanned: report.filesScanned, infectedFiles: results, errors: report.errors, scanPaths: report.scanPaths, exitCode: report.exitCode, completionState: report.completionState, observedThreatCount: report.observedThreatCount)
+        scanHistoryManager.updateReport(updatedReport, matching: report)
+        // Do not replace a newer scan if background work finished while this action awaited I/O.
+        if lastScanResult?.startTime == report.startTime && lastScanResult?.endTime == report.endTime {
+            lastScanResult = updatedReport
+        }
+        loadQuarantinedFiles()
+        addLog(.info, "Moved the selected detection to quarantine")
+    }
+
+    func clearLogs() {
+        logManager.clear()
+        logs = logManager.entries
     }
 
     func saveSettings() {
@@ -779,8 +898,10 @@ final class AppState: ObservableObject {
 
     /// Scanning remains exclusive while quarantine and result publication finish.
     private func waitUntilScanLifecycleIdle() async {
-        while scanLifecycleSource != nil || scanCoordinator.isScanning {
-            if scanLifecycleSource != nil {
+        while scanLifecycleSource != nil || scanCoordinator.isScanning || isManagingQuarantine {
+            if isManagingQuarantine {
+                await withCheckedContinuation { quarantineIdleWaiters.append($0) }
+            } else if scanLifecycleSource != nil {
                 await withCheckedContinuation { scanLifecycleWaiters.append($0) }
             } else {
                 await scanCoordinator.waitUntilIdle()

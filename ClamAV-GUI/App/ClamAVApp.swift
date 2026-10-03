@@ -248,7 +248,7 @@ struct ClamAVApp: App {
         if appState.isScanning || appState.isUpdatingSignatures {
             return "shield.lefthalf.filled"
         }
-        return appState.protectionScore.score >= 80 ? "checkmark.shield.fill" : "shield.fill"
+        return appState.scanOverviewStatus.kind == .detections || appState.scanOverviewStatus.kind == .incomplete ? "exclamationmark.shield.fill" : "shield"
     }
 
     private static func uiTestColorScheme(arguments: [String]) -> ColorScheme? {

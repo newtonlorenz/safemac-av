@@ -3,11 +3,8 @@ import UniformTypeIdentifiers
 
 struct ScanView: View {
     @EnvironmentObject var appState: AppState
-    @State private var selectedPaths: [URL] = []
-    @State private var scanOptions: ScanOptions = .default
     @State private var showingFilePicker = false
     @State private var isDragOver = false
-    @State private var showingSetup = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,16 +23,18 @@ struct ScanView: View {
                         appState.cancelScan()
                     }
                 )
-            } else if !showingSetup, let report = appState.lastScanResult {
+            } else if !appState.isPreparingNewScan, let report = appState.lastScanResult {
                 ScanResultsView(report: report) {
-                    showingSetup = true
+                    appState.isPreparingNewScan = true
                 }
             } else {
                 ScanSetupView(
-                    selectedPaths: $selectedPaths,
-                    scanOptions: $scanOptions,
+                    selectedPaths: $appState.scanDraftPaths,
+                    scanOptions: $appState.scanDraftOptions,
                     showingFilePicker: $showingFilePicker,
-                    isDragOver: $isDragOver
+                    isDragOver: $isDragOver,
+                    onQuickScan: { Task { await appState.startQuickScan() } },
+                    onHomeScan: { Task { await appState.startScan(paths: [FileManager.default.homeDirectoryForCurrentUser], options: .default, scanType: .full) } }
                 ) {
                     startScan()
                 }
@@ -52,7 +51,7 @@ struct ScanView: View {
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
-                selectedPaths.append(contentsOf: urls)
+                appState.addScanDraftPaths(urls)
             }
         }
         .alert("Scan Failed", isPresented: Binding(
@@ -68,54 +67,90 @@ struct ScanView: View {
     private func consumeCustomScanRequest() {
         guard appState.shouldOpenCustomScanPicker else { return }
         appState.shouldOpenCustomScanPicker = false
-        showingSetup = true
+        appState.isPreparingNewScan = true
         showingFilePicker = true
     }
 
     private func startScan() {
-        guard !selectedPaths.isEmpty else { return }
+        guard !appState.scanDraftPaths.isEmpty else { return }
         Task {
-            let outcome = await appState.startScan(paths: selectedPaths, options: scanOptions)
+            let outcome = await appState.startScan(paths: appState.scanDraftPaths, options: appState.scanDraftOptions)
             if case .completed = outcome {
-                selectedPaths = []
-                showingSetup = false
+                appState.scanDraftPaths = []
+                appState.isPreparingNewScan = false
             }
         }
     }
 }
 
 struct ScanSetupView: View {
+    @EnvironmentObject var appState: AppState
     @Binding var selectedPaths: [URL]
     @Binding var scanOptions: ScanOptions
     @Binding var showingFilePicker: Bool
     @Binding var isDragOver: Bool
+    let onQuickScan: () -> Void
+    let onHomeScan: () -> Void
     let onStartScan: () -> Void
+
+    private var installation: ClamAVInstallationStatus {
+        appState.configManager.validateClamAVInstallation(using: appState.settings)
+    }
 
     var body: some View {
         ScrollView {
             AdaptiveGlassEffectContainer(spacing: 20) {
                 VStack(spacing: 20) {
+                    if !installation.isReady {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(installation.isInstalled ? "Update malware definitions before scanning" : "Finish setting up the scanner", systemImage: "exclamationmark.triangle")
+                                .font(.headline)
+                            Text(installation.message)
+                                .foregroundStyle(.secondary)
+                            Button(installation.isInstalled ? "Open Definition Updates" : "Open Engine Settings") {
+                                appState.selectedTab = installation.isInstalled ? .updates : .settings
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
                     DropZoneView(
                         selectedPaths: $selectedPaths,
                         isDragOver: $isDragOver,
-                        onBrowse: { showingFilePicker = true }
+                        onBrowse: { showingFilePicker = true },
+                        onQuickScan: onQuickScan
                     )
 
                     if !selectedPaths.isEmpty {
                         SelectedPathsList(paths: $selectedPaths)
                     }
 
+                    if !selectedPaths.isEmpty {
+                        Label(scanOptions.quarantineInfected ? "Detected files will be moved to quarantine." : "Detections will be reported. Files will stay in their original locations.", systemImage: scanOptions.quarantineInfected ? "lock.shield" : "doc.text.magnifyingglass")
+                            .font(.callout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     ScanOptionsView(options: $scanOptions)
 
-                    Button(action: onStartScan) {
-                        Label("Start Scan", systemImage: "magnifyingglass")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
+                    if !selectedPaths.isEmpty {
+                        Button(action: onStartScan) {
+                            Label("Start Scan", systemImage: "magnifyingglass")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                        }
+                        .adaptiveGlassButton(prominent: true)
+                        .disabled(!installation.isReady)
+                        .accessibilityIdentifier("start-custom-scan")
+                        .keyboardShortcut(.return, modifiers: .command)
                     }
-                    .adaptiveGlassButton(prominent: true)
-                    .disabled(selectedPaths.isEmpty)
-                    .accessibilityIdentifier("start-custom-scan")
+                    HStack {
+                        Button("Scan Home Folder", action: onHomeScan)
+                            .disabled(!installation.isReady)
+                        Text("Checks your user folder. This can take a while.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxWidth: 820)
                 .frame(maxWidth: .infinity)
@@ -130,6 +165,8 @@ struct DropZoneView: View {
     @Binding var selectedPaths: [URL]
     @Binding var isDragOver: Bool
     let onBrowse: () -> Void
+    let onQuickScan: () -> Void
+    @EnvironmentObject var appState: AppState
 
     var body: some View {
         VStack(spacing: 16) {
@@ -140,23 +177,17 @@ struct DropZoneView: View {
             Text("Drop files or folders to scan")
                 .font(.headline)
 
-            Text("or")
-                .foregroundColor(.secondary)
-
-            HStack(spacing: 12) {
-                Button("Browse...") {
-                    onBrowse()
-                }
+            Button("Choose Files or Folders…", action: onBrowse)
+                .adaptiveGlassButton(prominent: true)
                 .accessibilityIdentifier("browse-scan-files")
 
-                Button("Quick Scan") {
-                    let home = FileManager.default.homeDirectoryForCurrentUser
-                    selectedPaths = [
-                        home.appendingPathComponent("Downloads"),
-                        home.appendingPathComponent("Desktop")
-                    ]
-                }
-                .buttonStyle(.bordered)
+            Divider().padding(.horizontal, 30)
+            HStack {
+                Button("Quick Scan", action: onQuickScan)
+                    .disabled(!appState.configManager.validateClamAVInstallation(using: appState.settings).isReady)
+                    .accessibilityIdentifier("start-quick-scan")
+                Text("Checks Downloads and Desktop.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity)
@@ -181,9 +212,7 @@ struct DropZoneView: View {
                 guard let data = item as? Data,
                       let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
                 DispatchQueue.main.async {
-                    if !selectedPaths.contains(url) {
-                        selectedPaths.append(url)
-                    }
+                    appState.addScanDraftPaths([url])
                 }
             }
         }
@@ -223,6 +252,7 @@ struct SelectedPathsList: View {
                             .foregroundColor(.secondary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Remove \(url.lastPathComponent) from scan")
                 }
                 .padding(.vertical, 4)
             }
@@ -238,24 +268,28 @@ struct ScanOptionsView: View {
     @State private var isExpanded = false
 
     var body: some View {
-        DisclosureGroup("Scan Options", isExpanded: $isExpanded) {
+        DisclosureGroup("Scan Options (Advanced)", isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 12) {
                 if appState.settings.scannerBackend == .clamdscan {
                     Text("The ClamAV daemon controls scan limits, exclusions and archive settings through clamd.conf. These per-scan options apply to clamscan.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Toggle("Scan subdirectories", isOn: $options.recursive)
+                Group {
+                Toggle("Include subfolders", isOn: $options.recursive)
                 Toggle("Follow symbolic links", isOn: $options.followSymlinks)
                 Toggle("Scan archives (ZIP, TAR, etc.)", isOn: $options.scanArchives)
                 Toggle("Detect potentially unwanted apps", isOn: $options.detectPUA)
-                Toggle("Quarantine infected files", isOn: $options.quarantineInfected)
+                }
+                .disabled(appState.settings.scannerBackend == .clamdscan)
+                Toggle("Move detected files to quarantine", isOn: $options.quarantineInfected)
 
                 Divider()
+                Group {
 
                 HStack {
-                    Text("Max file size:")
-                    Picker("", selection: $options.maxFileSize) {
+                    Text("Maximum file size:")
+                    Picker("Maximum file size", selection: $options.maxFileSize) {
                         Text("25 MB").tag(25)
                         Text("50 MB").tag(50)
                         Text("100 MB").tag(100)
@@ -267,7 +301,7 @@ struct ScanOptionsView: View {
 
                 HStack {
                     Text("Max recursion depth:")
-                    Picker("", selection: $options.maxRecursionDepth) {
+                    Picker("Maximum folder depth", selection: $options.maxRecursionDepth) {
                         Text("5").tag(5)
                         Text("10").tag(10)
                         Text("15").tag(15)
@@ -276,6 +310,8 @@ struct ScanOptionsView: View {
                     }
                     .frame(width: 100)
                 }
+                }
+                .disabled(appState.settings.scannerBackend == .clamdscan)
             }
             .padding(.top, 8)
         }
@@ -291,75 +327,77 @@ struct ScanProgressView: View {
     let onCancel: () -> Void
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            VStack(spacing: 24) {
+                Spacer()
 
-            ProgressView()
-                .scaleEffect(2)
+                ProgressView()
+                    .scaleEffect(2)
 
-            VStack(spacing: 8) {
-                Text(progress.status.rawValue)
-                    .font(.headline)
+                VStack(spacing: 8) {
+                    Text(progress.status.rawValue)
+                        .font(.headline)
 
-                if let currentFile = progress.currentFile {
-                    Text(currentFile)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    if let currentFile = progress.currentFile {
+                        Text(currentFile)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
+
+                HStack(spacing: 40) {
+                    VStack {
+                        Text("\(progress.filesScanned)")
+                            .font(.title)
+                            .fontWeight(.semibold)
+                        Text("Files Scanned")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack {
+                        Text("\(progress.infectedCount)")
+                            .font(.title)
+                            .fontWeight(.semibold)
+                            .foregroundColor(progress.infectedCount > 0 ? .red : .primary)
+                        Text("Threats Found")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack {
+                        Text(formatElapsedTime(progress.elapsedTime))
+                            .font(.title)
+                            .fontWeight(.semibold)
+                        Text("Elapsed Time")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Button(action: onPauseResume) {
+                        Label(isPaused ? "Resume" : "Pause", systemImage: isPaused ? "play.fill" : "pause.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(progress.status == .preparing)
+
+                    Button(action: onCancel) {
+                        Label("Cancel", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .disabled(progress.status == .completing || progress.status == .cancelling)
+
+                Spacer()
             }
-
-            HStack(spacing: 40) {
-                VStack {
-                    Text("\(progress.filesScanned)")
-                        .font(.title)
-                        .fontWeight(.semibold)
-                    Text("Files Scanned")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                VStack {
-                    Text("\(progress.infectedCount)")
-                        .font(.title)
-                        .fontWeight(.semibold)
-                        .foregroundColor(progress.infectedCount > 0 ? .red : .primary)
-                    Text("Threats Found")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                VStack {
-                    Text(formatElapsedTime(progress.elapsedTime))
-                        .font(.title)
-                        .fontWeight(.semibold)
-                    Text("Elapsed Time")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            HStack(spacing: 12) {
-                Button(action: onPauseResume) {
-                    Label(isPaused ? "Resume" : "Pause", systemImage: isPaused ? "play.fill" : "pause.fill")
-                }
-                .buttonStyle(.bordered)
-                .disabled(progress.status == .preparing)
-
-                Button(action: onCancel) {
-                    Label("Cancel", systemImage: "xmark.circle")
-                }
-                .buttonStyle(.bordered)
-            }
-            .disabled(progress.status == .completing)
-
-            Spacer()
+            .frame(maxWidth: 720, maxHeight: 520)
+            .padding(30)
+            .adaptiveGlassSurface(tint: Color.blue.opacity(0.06), cornerRadius: 28)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: 720, maxHeight: 520)
-        .padding(30)
-        .adaptiveGlassSurface(tint: Color.blue.opacity(0.06), cornerRadius: 28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func formatElapsedTime(_ interval: TimeInterval) -> String {
@@ -370,13 +408,22 @@ struct ScanProgressView: View {
 }
 
 struct ScanResultsView: View {
+    @EnvironmentObject var appState: AppState
     let report: ScanReport
+    var dismissTitle: String = "New Scan"
     let onDismiss: () -> Void
     @State private var exportError: ScanExportError?
 
     var body: some View {
         VStack(spacing: 0) {
             ScanSummaryHeader(report: report)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Finished \(report.endTime.formatted(date: .abbreviated, time: .shortened))")
+                Text(report.scanPaths.map(\.path).joined(separator: " • "))
+                    .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal).padding(.vertical, 8)
 
             if !report.errors.isEmpty {
                 ScrollView {
@@ -400,7 +447,18 @@ struct ScanResultsView: View {
             } else if report.infectedFiles.isEmpty {
                 IncompleteResultView(report: report)
             } else {
-                InfectedFilesList(files: report.infectedFiles)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(report.infectedFiles.contains { $0.actionTaken == .reported }
+                         ? "Some detections are still at their original locations. Quarantine them before opening them."
+                         : "Detected files have been handled. Review isolated files in Quarantine; you can leave them there.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Button("Review Quarantine") {
+                        onDismiss()
+                        appState.selectedTab = .quarantine
+                    }
+                    InfectedFilesList(files: report.infectedFiles)
+                }
+                .padding(.horizontal)
             }
 
             HStack {
@@ -411,7 +469,7 @@ struct ScanResultsView: View {
 
                 Spacer()
 
-                Button("New Scan", action: onDismiss)
+                Button(dismissTitle, action: onDismiss)
                     .adaptiveGlassButton(prominent: true)
             }
             .padding()
@@ -440,41 +498,13 @@ struct ScanResultsView: View {
     }
 
     private func exportJSON(to url: URL) {
-        let data: [[String: Any]] = report.infectedFiles.map { file in
-            [
-                "path": file.path,
-                "threat": file.threatName,
-                "severity": file.severity.rawValue,
-                "action": file.actionTaken.rawValue
-            ]
-        }
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: data, options: .prettyPrinted)
-            try jsonData.write(to: url, options: .atomic)
-        } catch {
-            showExportError(for: url)
-        }
+        do { try report.exportJSONData().write(to: url, options: .atomic) }
+        catch { showExportError(for: url) }
     }
 
     private func exportCSV(to url: URL) {
-        let header = ["Path", "Threat", "Severity", "Action"].map(csvField).joined(separator: ",")
-        let rows = report.infectedFiles.map { file in
-            [file.path, file.threatName, file.severity.rawValue, file.actionTaken.rawValue]
-                .map(csvField)
-                .joined(separator: ",")
-        }
-        let csv = ([header] + rows).joined(separator: "\r\n") + "\r\n"
-
-        do {
-            try csv.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            showExportError(for: url)
-        }
-    }
-
-    private func csvField(_ value: String) -> String {
-        let escapedValue = value.replacingOccurrences(of: "\"", with: "\"\"")
-        return "\"\(escapedValue)\""
+        do { try report.exportCSVData().write(to: url, options: .atomic) }
+        catch { showExportError(for: url) }
     }
 
     private func showExportError(for url: URL) {
@@ -504,7 +534,7 @@ struct ScanSummaryHeader: View {
             }
 
             VStack {
-                Text("\(report.infectedFiles.count)")
+                Text("\(report.threatsFound)")
                     .font(.title)
                     .fontWeight(.semibold)
                     .foregroundColor(report.infectedFiles.isEmpty ? (report.isClean ? .green : .orange) : .red)
@@ -570,7 +600,7 @@ struct CleanResultView: View {
             Text("No Threats Found")
                 .font(.title2)
                 .fontWeight(.semibold)
-            Text("Your scanned files are clean.")
+            Text("No threats were detected in the files checked by this scan.")
                 .foregroundColor(.secondary)
             Spacer()
         }
@@ -605,9 +635,9 @@ struct InfectedFilesList: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                TextField("Search...", text: $searchText)
+                TextField("Search detections", text: $searchText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 200)
+                    .frame(minWidth: 100, maxWidth: 220)
 
                 Picker("Sort by:", selection: $sortOrder) {
                     Text("Severity").tag(SortOrder.severity)
@@ -623,25 +653,37 @@ struct InfectedFilesList: View {
             }
             .padding()
 
-            List(sortedFiles) { file in
-                InfectedFileRow(file: file)
+            if sortedFiles.isEmpty {
+                VStack(spacing: 10) {
+                    Text("No detections match your search").font(.headline)
+                    Button("Clear Search") { searchText = "" }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(sortedFiles) { file in
+                    InfectedFileRow(file: file)
+                }
             }
         }
     }
 }
 
 struct InfectedFileRow: View {
+    @EnvironmentObject var appState: AppState
+    @State private var quarantineError: String?
     let file: ScanResult
 
     var body: some View {
         HStack {
-            Circle()
-                .fill(severityColor)
-                .frame(width: 10, height: 10)
+            Image(systemName: "exclamationmark.shield")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading) {
-                Text(file.threatName)
+                Text((file.path as NSString).lastPathComponent)
                     .fontWeight(.medium)
+                Text(file.threatName)
+                    .font(.caption)
                 Text(file.path)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -650,18 +692,21 @@ struct InfectedFileRow: View {
 
             Spacer()
 
-            Text(file.severity.rawValue)
+            Text(currentFile.actionTaken == .reported ? "At original location" : currentFile.actionTaken.rawValue)
                 .font(.caption)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(severityColor.opacity(0.2))
-                .foregroundColor(severityColor)
-                .cornerRadius(4)
+                .foregroundColor(currentFile.actionTaken == .reported ? .orange : .secondary)
 
-            Text(file.actionTaken.rawValue)
-                .font(.caption)
-                .foregroundColor(.secondary)
-
+            if currentFile.actionTaken == .reported,
+               appState.lastScanResult?.infectedFiles.contains(where: { $0.id == file.id }) == true {
+                Button("Quarantine") {
+                    Task {
+                        do { try await appState.quarantineDetection(currentFile) }
+                        catch { quarantineError = error.localizedDescription }
+                    }
+                }
+                .disabled(appState.isManagingQuarantine || appState.isScanning)
+                .accessibilityLabel("Quarantine \((file.path as NSString).lastPathComponent)")
+            }
             Menu {
                 Button("Show in Finder") {
                     NSWorkspace.shared.selectFile(file.path, inFileViewerRootedAtPath: "")
@@ -675,17 +720,18 @@ struct InfectedFileRow: View {
             }
             .menuStyle(.borderlessButton)
             .frame(width: 24)
+            .accessibilityLabel("Actions for \((file.path as NSString).lastPathComponent)")
         }
+        .alert("File Couldn’t Be Quarantined", isPresented: Binding(get: { quarantineError != nil }, set: { if !$0 { quarantineError = nil } })) {
+            Button("OK", role: .cancel) { quarantineError = nil }
+        } message: { Text(quarantineError ?? "Try again after reviewing the file location.") }
     }
 
-    private var severityColor: Color {
-        switch file.severity {
-        case .low: return .yellow
-        case .medium: return .orange
-        case .high: return .red
-        case .critical: return .purple
-        }
+    private var currentFile: ScanResult {
+        appState.lastScanResult?.infectedFiles.first(where: { $0.id == file.id }) ?? file
     }
+
+
 }
 
 #Preview {

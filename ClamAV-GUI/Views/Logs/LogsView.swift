@@ -18,6 +18,10 @@ struct LogsView: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            Text("Diagnostic activity from this app session. Logs are cleared when SafeMac AV quits. Export them if you need to share a problem with support.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             LogsToolbar(
                 selectedLevel: $selectedLevel,
                 searchText: $searchText,
@@ -27,7 +31,19 @@ struct LogsView: View {
             )
 
             if filteredLogs.isEmpty {
-                EmptyLogsView()
+                if appState.logs.isEmpty {
+                    EmptyLogsView()
+                } else {
+                    VStack(spacing: 12) {
+                        Text("No matching activity").font(.headline)
+                        Text("Try another search or include all log levels.").foregroundStyle(.secondary)
+                        Button("Clear Filters") {
+                            searchText = ""
+                            selectedLevel = nil
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             } else {
                 LogsList(logs: filteredLogs, autoScroll: autoScroll)
             }
@@ -45,7 +61,7 @@ struct LogsView: View {
     }
 
     private func clearLogs() {
-        appState.logs.removeAll()
+        appState.clearLogs()
     }
 
     private func exportLogs() {
@@ -82,21 +98,51 @@ struct LogsToolbar: View {
     let onExport: () -> Void
 
     var body: some View {
-        HStack {
-            TextField("Search logs...", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 200)
-
-            Picker("Level", selection: $selectedLevel) {
-                Text("All Levels").tag(nil as LogLevel?)
-                ForEach(LogLevel.allCases, id: \.self) { level in
-                    Text(level.rawValue).tag(level as LogLevel?)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                searchField
+                levelPicker
+                actions
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                searchField
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        levelPicker
+                        actions
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        levelPicker
+                        actions
+                    }
                 }
             }
-            .frame(width: 120)
+        }
+        .padding(14)
+        .adaptiveGlassSurface(cornerRadius: GlassDesign.compactCornerRadius)
+    }
 
-            Toggle("Auto-scroll", isOn: $autoScroll)
+    private var searchField: some View {
+        TextField("Search logs...", text: $searchText)
+            .textFieldStyle(.roundedBorder)
+            .frame(minWidth: 140, idealWidth: 200, maxWidth: .infinity)
+            .accessibilityLabel("Search diagnostic activity")
+    }
 
+    private var levelPicker: some View {
+        Picker("Level", selection: $selectedLevel) {
+            Text("All Levels").tag(nil as LogLevel?)
+            ForEach(LogLevel.allCases, id: \.self) { level in
+                Text(level.rawValue).tag(level as LogLevel?)
+            }
+        }
+        .frame(minWidth: 120)
+    }
+
+    private var actions: some View {
+        HStack(spacing: 12) {
+            Toggle("Follow latest", isOn: $autoScroll)
+                .help("Scroll to new activity as it arrives")
             Spacer()
 
             Button("Export...") {
@@ -109,8 +155,6 @@ struct LogsToolbar: View {
             }
             .buttonStyle(.bordered)
         }
-        .padding(14)
-        .adaptiveGlassSurface(cornerRadius: GlassDesign.compactCornerRadius)
     }
 }
 

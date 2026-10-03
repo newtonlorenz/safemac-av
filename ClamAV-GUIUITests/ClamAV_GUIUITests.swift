@@ -26,6 +26,38 @@ final class ClamAV_GUIUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testScanSelectionSurvivesSidebarNavigation() throws {
+        let app = try makeApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launch()
+        openMainWindow(in: app)
+        app.buttons["sidebar-scan"].click()
+        app.buttons["browse-scan-files"].click()
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        app.typeText(ownedRoots.last!.path + "\n")
+        let open = app.buttons["Open"].firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 3))
+        open.click()
+        XCTAssertTrue(app.buttons["Clear All"].waitForExistence(timeout: 3))
+        app.buttons["sidebar-history"].click()
+        app.buttons["sidebar-scan"].click()
+        XCTAssertTrue(app.buttons["Clear All"].exists, "Navigating away must keep selected scan locations")
+        app.buttons["Clear All"].click()
+        XCTAssertTrue(app.buttons["browse-scan-files"].exists)
+    }
+
+    func testDefinitionSetupExplainsMissingConfiguration() throws {
+        let app = try makeApplication()
+        app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
+        app.launch()
+        openMainWindow(in: app)
+        app.buttons["sidebar-scan"].click()
+        app.buttons["Open Definition Updates"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["definition-configuration-setup"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Definitions are not installed"].exists)
+        XCTAssertTrue(app.buttons["update-definitions-button"].exists)
+    }
+
     func testHistoryExplainsItsSessionScopeAndEmptyState() throws {
         let app = try makeApplication()
         app.launchArguments = ["--ui-testing", "-ApplePersistenceIgnoreState", "YES", "-hasCompletedOnboarding", "YES"]
