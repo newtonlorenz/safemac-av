@@ -205,6 +205,60 @@ final class ClamAVRunnerTests: XCTestCase {
         return (ClamAVRunner(configManager: config), directory, executable)
     }
 
+    /// Opt-in real-engine coverage; ordinary CI requires no external ClamAV installation.
+    /// Signature format: https://docs.clamav.net/manual/Signatures/ExtendedSignatures.html
+    func testInstalledEngineDetectsHarmlessFixtureAndQuarantineRoundTrips() async throws {
+        guard let executable = ProcessInfo.processInfo.environment["SAFEMAC_CLAMSCAN_PATH"] else {
+            throw XCTSkip("Set TEST_RUNNER_SAFEMAC_CLAMSCAN_PATH to a local clamscan executable for the real-engine smoke test.")
+        }
+        XCTAssertTrue(FreshclamInvocation.isTrustedExecutable(at: executable))
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = root.appendingPathComponent("files")
+        let database = root.appendingPathComponent("database")
+        try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: database, withIntermediateDirectories: true)
+        // This harmless text matches only our temporary test signature; no malware is used.
+        let bytes = Data("SafeMac harmless integration fixture 2026".utf8)
+        let hex = bytes.map { String(format: "%02x", $0) }.joined()
+        try Data("SafeMac.Test.Harmless:0:*:\(hex)\n".utf8).write(to: database.appendingPathComponent("fixture.ndb"))
+        let detected = files.appendingPathComponent("sample : draft.txt")
+        let clean = files.appendingPathComponent("clean.txt")
+        try bytes.write(to: detected)
+        try Data("Ordinary clean fixture".utf8).write(to: clean)
+        let config = ConfigManager(appSupportURL: root.appendingPathComponent("config"))
+        var settings = AppSettings.default
+        settings.clamScanPath = executable
+        settings.signatureDirectory = database.path
+        settings.quarantineDirectory = root.appendingPathComponent("quarantine").path
+        settings.lowImpactMode = false
+        try config.saveSettings(settings)
+        let runner = ClamAVRunner(configManager: config)
+        let report = try await runner.scan(paths: [files], options: .default) { _ in }
+        XCTAssertEqual(report.filesScanned, 2)
+        XCTAssertEqual(report.completionState, .infectedFound)
+        XCTAssertTrue(report.completedWithoutErrors)
+        XCTAssertEqual(report.infectedFiles.count, 1)
+        let finding = try XCTUnwrap(report.infectedFiles.first)
+        // ClamAV reports POSIX canonical paths; Foundation may retain the /var alias.
+        let canonicalPath = try XCTUnwrap(realpath(detected.path, nil))
+        defer { free(canonicalPath) }
+        XCTAssertEqual(finding.path, String(cString: canonicalPath))
+        XCTAssertTrue(finding.threatName.hasPrefix("SafeMac.Test.Harmless"))
+        let quarantine = QuarantineManager(configManager: config)
+        try await quarantine.quarantine(file: finding.path, threat: finding.threatName)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: detected.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: clean.path))
+        let isolated = try XCTUnwrap(try quarantine.readQuarantinedFiles().first)
+        try await quarantine.restore(file: isolated)
+        XCTAssertEqual(try Data(contentsOf: detected), bytes)
+        XCTAssertTrue(try quarantine.readQuarantinedFiles().isEmpty)
+        let cleanReport = try await runner.scan(paths: [clean], options: .default) { _ in }
+        XCTAssertTrue(cleanReport.isClean)
+        XCTAssertEqual(cleanReport.filesScanned, 1)
+    }
+
     // MARK: - Output Parsing Tests
 
     func testParseCleanFile() {

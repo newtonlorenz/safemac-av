@@ -457,6 +457,9 @@ struct ScanResultsView: View {
                         appState.selectedTab = .quarantine
                     }
                     InfectedFilesList(files: report.infectedFiles)
+                        .alert(item: $appState.quarantineActionError) { error in
+                            Alert(title: Text(error.title), message: Text(error.message), dismissButton: .default(Text("OK")))
+                        }
                 }
                 .padding(.horizontal)
             }
@@ -670,7 +673,6 @@ struct InfectedFilesList: View {
 
 struct InfectedFileRow: View {
     @EnvironmentObject var appState: AppState
-    @State private var quarantineError: String?
     let file: ScanResult
 
     var body: some View {
@@ -701,7 +703,7 @@ struct InfectedFileRow: View {
                 Button("Quarantine") {
                     Task {
                         do { try await appState.quarantineDetection(currentFile) }
-                        catch { quarantineError = error.localizedDescription }
+                        catch { /* AppState retains the failure and exposes it across navigation. */ }
                     }
                 }
                 .disabled(appState.isManagingQuarantine || appState.isScanning)
@@ -722,9 +724,7 @@ struct InfectedFileRow: View {
             .frame(width: 24)
             .accessibilityLabel("Actions for \((file.path as NSString).lastPathComponent)")
         }
-        .alert("File Couldn’t Be Quarantined", isPresented: Binding(get: { quarantineError != nil }, set: { if !$0 { quarantineError = nil } })) {
-            Button("OK", role: .cancel) { quarantineError = nil }
-        } message: { Text(quarantineError ?? "Try again after reviewing the file location.") }
+
     }
 
     private var currentFile: ScanResult {

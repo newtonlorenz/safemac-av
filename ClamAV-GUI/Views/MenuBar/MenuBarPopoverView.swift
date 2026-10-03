@@ -115,8 +115,12 @@ struct MenuBarPopoverView: View {
     private var statusCard: some View {
         VStack(alignment: .leading, spacing: 9) {
             Button {
-                if appState.lastScanResult != nil { appState.presentLastScanResult() }
-                showMainWindow(tab: appState.scanOverviewStatus.kind == .setupNeeded ? .dashboard : .scan)
+                let destination = MenuBarScanStatusRoute.resolve(
+                    isScanning: appState.isScanning, hasReport: appState.lastScanResult != nil,
+                    hasScanError: appState.scanError != nil, overviewKind: appState.scanOverviewStatus.kind
+                )
+                if destination == .scan { appState.presentLastScanResult() }
+                showMainWindow(tab: destination)
             } label: {
                 MenuBarStatusRow(
                     icon: scanStatus.icon,
@@ -238,5 +242,17 @@ private struct MenuBarStatusRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title): \(detail)")
         .accessibilityIdentifier(accessibilityIdentifier)
+    }
+}
+
+/// Match the destination to the outcome shown by the scan status row.
+enum MenuBarScanStatusRoute {
+    static func resolve(isScanning: Bool, hasReport: Bool, hasScanError: Bool, overviewKind: ScanOverviewStatus.Kind) -> NavigationTab {
+        if isScanning || hasReport || hasScanError { return .scan }
+        switch overviewKind {
+        case .setupNeeded: return .dashboard
+        case .definitionsNeeded, .updating: return .updates
+        default: return .scan
+        }
     }
 }

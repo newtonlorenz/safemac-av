@@ -49,6 +49,48 @@ final class ScanOverviewStatusTests: XCTestCase {
         XCTAssertEqual(status.kind, .updating)
     }
 
+    func testUnquarantinedDetectionsStayVisibleDuringUpdatesAndSetupFailures() {
+        let detection = report(threats: [ScanResult(path: "/fixture", threatName: "Fixture")])
+        let installations: [ClamAVInstallationStatus] = [.missingSignatures, .notInstalled, .outdatedSignatures(daysSinceUpdate: 8)]
+        for installation in installations {
+            let status = ScanOverviewStatus.resolve(installation: installation, isScanning: false, isPaused: false, isUpdating: false, report: detection)
+            XCTAssertEqual(status.kind, .detections)
+            XCTAssertEqual(status.action, .reviewScan)
+        }
+        let updating = ScanOverviewStatus.resolve(installation: .missingSignatures, isScanning: false, isPaused: false, isUpdating: true, report: detection)
+        XCTAssertEqual(updating.kind, .detections)
+        let failedRetry = ScanOverviewStatus.resolve(installation: .ready(clamscanPath: "/fixture"), isScanning: false, isPaused: false, isUpdating: false, report: detection, scanError: "Retry could not start")
+        XCTAssertEqual(failedRetry.kind, .detections)
+    }
+
+    func testDetectionsWithoutFileDetailsRemainVisibleAndExplainRecovery() {
+        let partial = ScanReport(startTime: Date(), endTime: Date(), filesScanned: 3, infectedFiles: [], errors: ["Stopped"], scanPaths: [URL(fileURLWithPath: "/fixture")], exitCode: -1, completionState: .cancelled, observedThreatCount: 2)
+        let status = ScanOverviewStatus.resolve(installation: .missingSignatures, isScanning: false, isPaused: false, isUpdating: true, report: partial)
+        XCTAssertEqual(status.kind, .detections)
+        XCTAssertTrue(status.detail.contains("unavailable"))
+        XCTAssertTrue(status.detail.contains("Scan these locations again"))
+    }
+
+    func testHandledDetectionsYieldToCurrentSetupAndUpdates() {
+        let handled = report(threats: [ScanResult(path: "/fixture", threatName: "Fixture", actionTaken: .quarantined)])
+        XCTAssertEqual(resolve(.notInstalled, report: handled).kind, .setupNeeded)
+        let updating = ScanOverviewStatus.resolve(installation: .missingSignatures, isScanning: false, isPaused: false, isUpdating: true, report: handled)
+        XCTAssertEqual(updating.kind, .updating)
+    }
+
+    func testMenuScanStatusRoutesExistingOutcomesToResultsEvenWhenEngineNeedsSetup() {
+        XCTAssertEqual(MenuBarScanStatusRoute.resolve(isScanning: false, hasReport: true, hasScanError: false, overviewKind: .setupNeeded), .scan)
+        XCTAssertEqual(MenuBarScanStatusRoute.resolve(isScanning: false, hasReport: false, hasScanError: true, overviewKind: .setupNeeded), .scan)
+        XCTAssertEqual(MenuBarScanStatusRoute.resolve(isScanning: true, hasReport: false, hasScanError: false, overviewKind: .scanning), .scan)
+    }
+
+    func testMenuScanStatusRoutesFirstRunRecoveryToMatchingScreen() {
+        XCTAssertEqual(MenuBarScanStatusRoute.resolve(isScanning: false, hasReport: false, hasScanError: false, overviewKind: .setupNeeded), .dashboard)
+        XCTAssertEqual(MenuBarScanStatusRoute.resolve(isScanning: false, hasReport: false, hasScanError: false, overviewKind: .definitionsNeeded), .updates)
+        XCTAssertEqual(MenuBarScanStatusRoute.resolve(isScanning: false, hasReport: false, hasScanError: false, overviewKind: .updating), .updates)
+        XCTAssertEqual(MenuBarScanStatusRoute.resolve(isScanning: false, hasReport: false, hasScanError: false, overviewKind: .ready), .scan)
+    }
+
     private func resolve(_ installation: ClamAVInstallationStatus, report: ScanReport? = nil) -> ScanOverviewStatus {
         ScanOverviewStatus.resolve(installation: installation, isScanning: false, isPaused: false, isUpdating: false, report: report)
     }

@@ -31,6 +31,7 @@ final class AppState: ObservableObject {
         }
     }
     @Published private(set) var quarantineLoadError: String?
+    @Published var quarantineActionError: QuarantineActionError?
     @Published var settings: AppSettings
     @Published var logs: [LogEntry] = []
     @Published var scanError: String?
@@ -508,15 +509,33 @@ final class AppState: ObservableObject {
     }
 
     func restoreFromQuarantine(_ file: QuarantinedFile) async throws {
-        try await quarantineManager.restore(file: file)
-        loadQuarantinedFiles()
-        addLog(.info, "Restored file from quarantine: \(file.originalPath)")
+        do {
+            guard !isScanning else {
+                throw QuarantineError.restoreFailed("Wait for the current scan to finish before restoring files.")
+            }
+            try await quarantineManager.restore(file: file)
+            loadQuarantinedFiles()
+            addLog(.info, "Restored file from quarantine: \(file.originalPath)")
+        } catch {
+            quarantineActionError = QuarantineActionError(title: "Restore Incomplete", message: "\(file.originalFileName): \(error.localizedDescription)")
+            addLog(.error, "Failed to restore \(file.originalPath): \(error.localizedDescription)")
+            throw error
+        }
     }
 
     func deleteFromQuarantine(_ file: QuarantinedFile) throws {
-        try quarantineManager.delete(file: file)
-        loadQuarantinedFiles()
-        addLog(.info, "Deleted file from quarantine: \(file.originalPath)")
+        do {
+            guard !isScanning else {
+                throw QuarantineError.deleteFailed("Wait for the current scan to finish before deleting quarantined files.")
+            }
+            try quarantineManager.delete(file: file)
+            loadQuarantinedFiles()
+            addLog(.info, "Deleted file from quarantine: \(file.originalPath)")
+        } catch {
+            quarantineActionError = QuarantineActionError(title: "Deletion Incomplete", message: "\(file.originalFileName): \(error.localizedDescription)")
+            addLog(.error, "Failed to delete \(file.originalPath): \(error.localizedDescription)")
+            throw error
+        }
     }
 
     @discardableResult
@@ -550,24 +569,30 @@ final class AppState: ObservableObject {
     }
 
     func quarantineDetection(_ file: ScanResult) async throws {
-        guard !isManagingQuarantine, !isScanning,
-              let report = lastScanResult,
-              report.infectedFiles.contains(where: { $0.id == file.id && $0.actionTaken == .reported }) else {
-            throw QuarantineError.moveFailed("This detection is no longer available. Review the latest scan result.")
+        do {
+            guard !isManagingQuarantine, !isScanning,
+                  let report = lastScanResult,
+                  report.infectedFiles.contains(where: { $0.id == file.id && $0.actionTaken == .reported }) else {
+                throw QuarantineError.moveFailed("This detection is no longer available. Review the latest scan result.")
+            }
+            isManagingQuarantine = true
+            defer { isManagingQuarantine = false }
+            try await quarantineManager.quarantine(file: file.path, threat: file.threatName)
+            var results = report.infectedFiles
+            if let index = results.firstIndex(where: { $0.id == file.id }) { results[index].actionTaken = .quarantined }
+            let updatedReport = ScanReport(startTime: report.startTime, endTime: report.endTime, filesScanned: report.filesScanned, infectedFiles: results, errors: report.errors, scanPaths: report.scanPaths, exitCode: report.exitCode, completionState: report.completionState, observedThreatCount: report.observedThreatCount)
+            scanHistoryManager.updateReport(updatedReport, matching: report)
+            // Do not replace a newer scan if background work finished while this action awaited I/O.
+            if lastScanResult?.startTime == report.startTime && lastScanResult?.endTime == report.endTime {
+                lastScanResult = updatedReport
+            }
+            loadQuarantinedFiles()
+            addLog(.info, "Moved the selected detection to quarantine")
+        } catch {
+            quarantineActionError = QuarantineActionError(title: "File Couldn’t Be Quarantined", message: "\((file.path as NSString).lastPathComponent): \(error.localizedDescription)")
+            addLog(.error, "Failed to quarantine \(file.path): \(error.localizedDescription)")
+            throw error
         }
-        isManagingQuarantine = true
-        defer { isManagingQuarantine = false }
-        try await quarantineManager.quarantine(file: file.path, threat: file.threatName)
-        var results = report.infectedFiles
-        if let index = results.firstIndex(where: { $0.id == file.id }) { results[index].actionTaken = .quarantined }
-        let updatedReport = ScanReport(startTime: report.startTime, endTime: report.endTime, filesScanned: report.filesScanned, infectedFiles: results, errors: report.errors, scanPaths: report.scanPaths, exitCode: report.exitCode, completionState: report.completionState, observedThreatCount: report.observedThreatCount)
-        scanHistoryManager.updateReport(updatedReport, matching: report)
-        // Do not replace a newer scan if background work finished while this action awaited I/O.
-        if lastScanResult?.startTime == report.startTime && lastScanResult?.endTime == report.endTime {
-            lastScanResult = updatedReport
-        }
-        loadQuarantinedFiles()
-        addLog(.info, "Moved the selected detection to quarantine")
     }
 
     func clearLogs() {

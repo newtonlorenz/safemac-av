@@ -41,6 +41,14 @@ Unit and integration tests:
 ./scripts/run-tests.sh unit
 ```
 
+Optional real-engine smoke test (no desktop interaction needed):
+
+```bash
+TEST_RUNNER_SAFEMAC_CLAMSCAN_PATH="$(brew --prefix)/bin/clamscan" ./scripts/run-tests.sh unit
+```
+
+This adds a real ClamAV scan and quarantine/restore round trip using harmless text, a temporary custom signature and isolated storage. It neither scans personal files nor changes the installed definition database. The test is skipped when the executable variable is absent; all other tests still run.
+
 Release build:
 
 ```bash

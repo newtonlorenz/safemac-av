@@ -3,6 +3,89 @@ import XCTest
 
 @MainActor
 final class AppStateTests: XCTestCase {
+    func testRestoreCannotMoveAQuarantinedFileDuringAnActiveScan() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("harmless.txt")
+        try Data("harmless fixture".utf8).write(to: source)
+        var settings = AppSettings.default
+        settings.quarantineDirectory = root.appendingPathComponent("quarantine").path
+        let state = AppState(configManager: AppStateMockConfigManager(settings: settings), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        try await state.quarantineManager.quarantine(file: source.path, threat: "Test.Fixture")
+        state.loadQuarantinedFiles()
+        let file = try XCTUnwrap(state.quarantinedFiles.first)
+        state.isScanning = true
+        do {
+            try await state.restoreFromQuarantine(file)
+            XCTFail("A scan must finish before a quarantined file can be restored")
+        } catch { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.quarantinePath))
+    }
+
+    func testDeleteCannotRemoveAQuarantinedFileDuringAnActiveScan() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("harmless.txt")
+        try Data("harmless fixture".utf8).write(to: source)
+        var settings = AppSettings.default
+        settings.quarantineDirectory = root.appendingPathComponent("quarantine").path
+        let state = AppState(configManager: AppStateMockConfigManager(settings: settings), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        try await state.quarantineManager.quarantine(file: source.path, threat: "Test.Fixture")
+        state.loadQuarantinedFiles()
+        let file = try XCTUnwrap(state.quarantinedFiles.first)
+        state.isScanning = true
+        do {
+            try state.deleteFromQuarantine(file)
+            XCTFail("A scan must finish before a quarantined file can be deleted")
+        } catch { }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.quarantinePath))
+        XCTAssertEqual(try state.quarantineManager.readQuarantinedFiles().count, 1)
+    }
+
+    func testRestoreFailureIsRetainedAfterNavigatingAway() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("harmless.txt")
+        try Data("harmless fixture".utf8).write(to: source)
+        var settings = AppSettings.default
+        settings.quarantineDirectory = root.appendingPathComponent("quarantine").path
+        let state = AppState(configManager: AppStateMockConfigManager(settings: settings), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        try await state.quarantineManager.quarantine(file: source.path, threat: "Test.Fixture")
+        state.loadQuarantinedFiles()
+        let file = try XCTUnwrap(state.quarantinedFiles.first)
+        try FileManager.default.removeItem(atPath: file.quarantinePath)
+        let restore = Task {
+            do { try await state.restoreFromQuarantine(file); XCTFail("Missing payload must fail") }
+            catch { }
+        }
+        state.selectedTab = .settings
+        await restore.value
+        XCTAssertEqual(state.selectedTab, .settings)
+        XCTAssertTrue(state.quarantineActionError?.message.contains("harmless.txt") == true)
+        XCTAssertTrue(state.logs.contains { $0.message.contains("Failed to restore") })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    func testManualQuarantineFailureRemainsAvailableOutsideResults() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var settings = AppSettings.default
+        settings.quarantineDirectory = root.appendingPathComponent("quarantine").path
+        let state = AppState(configManager: AppStateMockConfigManager(settings: settings), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
+        let detection = ScanResult(path: root.appendingPathComponent("missing.txt").path, threatName: "Test.Fixture")
+        state.lastScanResult = ScanReport(startTime: Date(), endTime: Date(), filesScanned: 1, infectedFiles: [detection], errors: [], scanPaths: [root])
+        do { try await state.quarantineDetection(detection); XCTFail("Missing source must fail") }
+        catch { }
+        state.selectedTab = .dashboard
+        XCTAssertTrue(state.quarantineActionError?.message.contains("missing.txt") == true)
+        XCTAssertEqual(state.lastScanResult?.infectedFiles.first?.actionTaken, .reported)
+        XCTAssertFalse(state.isManagingQuarantine)
+    }
+
     func testScanDraftDeduplicatesFilesAndSurvivesNavigation() {
         let state = AppState(configManager: AppStateMockConfigManager(settings: .default), fileWatcher: MockFileWatcher(), notificationManager: AppStateMockNotificationManager(), startsInteractiveBackgroundServices: false)
         state.addScanDraftPaths([URL(fileURLWithPath: "/tmp/scan/../file"), URL(fileURLWithPath: "/tmp/file")])

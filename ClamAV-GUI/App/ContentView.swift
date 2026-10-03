@@ -200,6 +200,19 @@ private struct ActiveOperationBanner: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if let error = appState.quarantineActionError, appState.selectedTab != .quarantine {
+                HStack(spacing: 12) {
+                    Label(error.title, systemImage: "exclamationmark.triangle")
+                        .font(.callout.weight(.medium))
+                    Spacer()
+                    Button("Review Quarantine") { appState.selectedTab = .quarantine }
+                    Button("Dismiss") { appState.quarantineActionError = nil }
+                }
+                .padding(12)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .padding(.horizontal, GlassDesign.contentPadding)
+                .accessibilityIdentifier("quarantine-action-error-banner")
+            }
             if appState.isScanning && appState.selectedTab != .scan {
                 operationRow(
                     title: appState.isScanPaused ? "Scan paused" : "Scan in progress",

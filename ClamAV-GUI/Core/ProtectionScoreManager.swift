@@ -95,6 +95,10 @@ struct ScanOverviewStatus: Equatable {
         if isScanning {
             return Self(kind: .scanning, title: isPaused ? "Scan paused" : "Scan in progress", detail: isPaused ? "Resume the scan when you are ready." : "You can continue using your Mac while selected files are checked.", action: .reviewScan)
         }
+        if let report, report.infectedFiles.contains(where: { $0.actionTaken == .reported || $0.actionTaken == .ignored })
+            || report.threatsFound > report.infectedFiles.count {
+            return detectionStatus(for: report)
+        }
         if isUpdating {
             return Self(kind: .updating, title: "Updating malware definitions", detail: "Downloading the latest detection data for ClamAV.", action: nil)
         }
@@ -114,13 +118,30 @@ struct ScanOverviewStatus: Equatable {
             return Self(kind: .incomplete, title: "Scan needs attention", detail: scanError, action: .reviewScan)
         }
         if let report, report.threatsFound > 0 {
-            let quarantined = report.infectedFiles.filter { $0.actionTaken == .quarantined }.count
-            let count = report.threatsFound
-            return Self(kind: .detections, title: "\(count) detection\(count == 1 ? "" : "s") in the last scan", detail: "\(quarantined) quarantined. Review the scan results and any files still at their original location.", action: .reviewScan)
+            return detectionStatus(for: report)
         }
         if let report, !report.isClean {
             return Self(kind: .incomplete, title: report.completionState == .cancelled ? "Scan cancelled" : "Scan needs attention", detail: "The last scan did not finish checking all selected files. Review its results before trying again.", action: .reviewScan)
         }
         return Self(kind: .ready, title: "Ready to scan", detail: "Choose files or folders to check locally with ClamAV. Files are not uploaded.", action: nil)
     }
+
+    private static func detectionStatus(for report: ScanReport) -> ScanOverviewStatus {
+        let quarantined = report.infectedFiles.filter { $0.actionTaken == .quarantined }.count
+        let unresolved = report.infectedFiles.filter { $0.actionTaken == .reported || $0.actionTaken == .ignored }.count
+        let unavailable = report.threatsFound - report.infectedFiles.count
+        var details = ["\(quarantined) quarantined."]
+        if unresolved > 0 {
+            details.append("\(unresolved) still reported at their original location. Review the scan results.")
+        }
+        if unavailable > 0 {
+            details.append("File details for \(unavailable) detection\(unavailable == 1 ? "" : "s") are unavailable. Scan these locations again to review them.")
+        }
+        if unresolved == 0 && unavailable == 0 {
+            details.append("Review the scan results for details.")
+        }
+        let count = report.threatsFound
+        return Self(kind: .detections, title: "\(count) detection\(count == 1 ? "" : "s") in the last scan", detail: details.joined(separator: " "), action: .reviewScan)
+    }
+
 }

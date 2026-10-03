@@ -307,8 +307,9 @@ struct ExclusionsSection: View {
                     FlowLayout(spacing: 8) {
                         ForEach(appState.settings.customExclusions, id: \.self) { exclusion in
                             ExclusionTag(text: exclusion, isDefault: false) {
-                                appState.settings.customExclusions.removeAll { $0 == exclusion }
-                                appState.saveSettings()
+                                var settings = appState.settings
+                                settings.customExclusions.removeAll { $0 == exclusion }
+                                _ = appState.applySettings(settings)
                             }
                         }
                     }
@@ -338,9 +339,9 @@ struct ExclusionsSection: View {
               !appState.settings.defaultExclusions.contains(trimmed) else {
             return
         }
-        appState.settings.customExclusions.append(trimmed)
-        appState.saveSettings()
-        newExclusion = ""
+        var settings = appState.settings
+        settings.customExclusions.append(trimmed)
+        if appState.applySettings(settings) { newExclusion = "" }
     }
 }
 
@@ -380,8 +381,9 @@ struct MonitoringSection: View {
                 Toggle("Scan changes in selected folders", isOn: Binding(
                     get: { appState.settings.monitoringEnabled },
                     set: {
-                        appState.settings.monitoringEnabled = $0
-                        appState.saveSettings()
+                        var settings = appState.settings
+                        settings.monitoringEnabled = $0
+                        _ = appState.applySettings(settings)
                     }
                 ))
 
@@ -399,8 +401,9 @@ struct MonitoringSection: View {
                             Text(dir).lineLimit(1).truncationMode(.middle).help(dir)
                             Spacer()
                             Button {
-                                appState.settings.monitoredDirectories.removeAll { $0 == dir }
-                                appState.saveSettings()
+                                var settings = appState.settings
+                                settings.monitoredDirectories.removeAll { $0 == dir }
+                                _ = appState.applySettings(settings)
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundColor(.secondary)
@@ -421,8 +424,9 @@ struct MonitoringSection: View {
                         Picker("", selection: Binding(
                             get: { appState.settings.batchScanIntervalMinutes },
                             set: {
-                                appState.settings.batchScanIntervalMinutes = $0
-                                appState.saveSettings()
+                                var settings = appState.settings
+                                settings.batchScanIntervalMinutes = $0
+                                _ = appState.applySettings(settings)
                             }
                         )) {
                             Text("1 minute").tag(1)
@@ -439,8 +443,9 @@ struct MonitoringSection: View {
                         Picker("", selection: Binding(
                             get: { appState.settings.batchScanFileThreshold },
                             set: {
-                                appState.settings.batchScanFileThreshold = $0
-                                appState.saveSettings()
+                                var settings = appState.settings
+                                settings.batchScanFileThreshold = $0
+                                _ = appState.applySettings(settings)
                             }
                         )) {
                             Text("5 files").tag(5)
@@ -461,8 +466,9 @@ struct MonitoringSection: View {
         .fileImporter(isPresented: $showingFolderPicker, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
                 if !appState.settings.monitoredDirectories.contains(url.path) {
-                    appState.settings.monitoredDirectories.append(url.path)
-                    appState.saveSettings()
+                    var settings = appState.settings
+                    settings.monitoredDirectories.append(url.path)
+                    _ = appState.applySettings(settings)
                 }
             }
         }
@@ -478,9 +484,9 @@ struct NotificationsSection: View {
                 Toggle("Show notifications", isOn: Binding(
                     get: { appState.settings.showNotifications },
                     set: {
-                        appState.settings.showNotifications = $0
-                        appState.saveSettings()
-                        if $0 {
+                        var settings = appState.settings
+                        settings.showNotifications = $0
+                        if appState.applySettings(settings), $0 {
                             Task { await appState.requestNotificationPermission() }
                         }
                     }
@@ -490,8 +496,9 @@ struct NotificationsSection: View {
                 Toggle("Play sound on threat detection", isOn: Binding(
                     get: { appState.settings.playSoundOnDetection },
                     set: {
-                        appState.settings.playSoundOnDetection = $0
-                        appState.saveSettings()
+                        var settings = appState.settings
+                        settings.playSoundOnDetection = $0
+                        _ = appState.applySettings(settings)
                     }
                 ))
                 .disabled(!appState.settings.showNotifications)
@@ -499,8 +506,9 @@ struct NotificationsSection: View {
                 Toggle("Notify when downloaded files are clean", isOn: Binding(
                     get: { appState.settings.notifyOnCleanFiles },
                     set: {
-                        appState.settings.notifyOnCleanFiles = $0
-                        appState.saveSettings()
+                        var settings = appState.settings
+                        settings.notifyOnCleanFiles = $0
+                        _ = appState.applySettings(settings)
                     }
                 ))
                 .disabled(!appState.settings.showNotifications)

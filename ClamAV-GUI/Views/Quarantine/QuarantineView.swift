@@ -8,7 +8,6 @@ struct QuarantineView: View {
     @State private var fileToRestore: QuarantinedFile?
     @State private var fileToDelete: QuarantinedFile?
     @State private var searchText = ""
-    @State private var actionError: QuarantineActionError?
 
     var filteredFiles: [QuarantinedFile] {
         if searchText.isEmpty {
@@ -45,8 +44,12 @@ struct QuarantineView: View {
                     onRestoreSelected: { showingRestoreConfirmation = true },
                     onDeleteSelected: { showingDeleteConfirmation = true }
                 )
-                .disabled(appState.isManagingQuarantine)
+                .disabled(appState.isManagingQuarantine || appState.isScanning)
 
+                if appState.isScanning {
+                    Text("Restore and delete actions are available after the scan finishes.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 if appState.isManagingQuarantine {
                     ProgressView("Updating quarantine…")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -67,17 +70,17 @@ struct QuarantineView: View {
                             set: { if !appState.isManagingQuarantine { selectedFiles = $0 } }
                         ),
                         onRestore: { file in
-                            guard !appState.isManagingQuarantine else { return }
+                            guard !appState.isManagingQuarantine, !appState.isScanning else { return }
                             fileToRestore = file
                             showingRestoreConfirmation = true
                         },
                         onDelete: { file in
-                            guard !appState.isManagingQuarantine else { return }
+                            guard !appState.isManagingQuarantine, !appState.isScanning else { return }
                             fileToDelete = file
                             showingDeleteConfirmation = true
                         }
                     )
-                    .disabled(appState.isManagingQuarantine)
+                    .disabled(appState.isManagingQuarantine || appState.isScanning)
                 }
             }
         }
@@ -89,7 +92,7 @@ struct QuarantineView: View {
                 fileToRestore = nil
             }
             Button("Restore", role: .destructive) {
-                guard !appState.isManagingQuarantine else { return }
+                guard !appState.isManagingQuarantine, !appState.isScanning else { return }
                 let files = filesTargetedForRestore
                 fileToRestore = nil
                 appState.isManagingQuarantine = true
@@ -110,7 +113,7 @@ struct QuarantineView: View {
                 fileToDelete = nil
             }
             Button("Delete", role: .destructive) {
-                guard !appState.isManagingQuarantine else { return }
+                guard !appState.isManagingQuarantine, !appState.isScanning else { return }
                 let files = filesTargetedForDeletion
                 fileToDelete = nil
                 appState.isManagingQuarantine = true
@@ -124,7 +127,7 @@ struct QuarantineView: View {
                 Text("Are you sure you want to permanently delete \(selectedFiles.count) file(s)? This action cannot be undone.")
             }
         }
-        .alert(item: $actionError) { error in
+        .alert(item: $appState.quarantineActionError) { error in
             Alert(
                 title: Text(error.title),
                 message: Text(error.message),
@@ -150,6 +153,7 @@ struct QuarantineView: View {
     private func restore(_ files: [QuarantinedFile]) async {
         var successfulIDs = Set<UUID>()
         var failedFiles: [QuarantinedFile] = []
+        var failureReasons: [String] = []
 
         for file in files {
             do {
@@ -157,18 +161,19 @@ struct QuarantineView: View {
                 successfulIDs.insert(file.id)
             } catch {
                 failedFiles.append(file)
+                failureReasons.append("\(file.originalFileName): \(error.localizedDescription)")
             }
         }
 
         selectedFiles.subtract(successfulIDs)
         if !failedFiles.isEmpty {
-            actionError = QuarantineActionError(
+            appState.quarantineActionError = QuarantineActionError(
                 title: "Restore Incomplete",
                 message: failureMessage(
                     failedFiles: failedFiles,
                     totalCount: files.count,
                     action: "restored"
-                )
+                ) + "\n" + failureReasons.prefix(3).joined(separator: "\n")
             )
         }
     }
@@ -176,6 +181,7 @@ struct QuarantineView: View {
     private func delete(_ files: [QuarantinedFile]) {
         var successfulIDs = Set<UUID>()
         var failedFiles: [QuarantinedFile] = []
+        var failureReasons: [String] = []
 
         for file in files {
             do {
@@ -183,18 +189,19 @@ struct QuarantineView: View {
                 successfulIDs.insert(file.id)
             } catch {
                 failedFiles.append(file)
+                failureReasons.append("\(file.originalFileName): \(error.localizedDescription)")
             }
         }
 
         selectedFiles.subtract(successfulIDs)
         if !failedFiles.isEmpty {
-            actionError = QuarantineActionError(
+            appState.quarantineActionError = QuarantineActionError(
                 title: "Deletion Incomplete",
                 message: failureMessage(
                     failedFiles: failedFiles,
                     totalCount: files.count,
                     action: "deleted"
-                )
+                ) + "\n" + failureReasons.prefix(3).joined(separator: "\n")
             )
         }
     }
@@ -210,12 +217,6 @@ struct QuarantineView: View {
         let selectionNote = totalCount > 1 ? " Only successful items were removed from the selection." : ""
         return "\(failedFiles.count) of \(totalCount) file(s) could not be \(action): \(names)\(remaining). Review the listed item(s) before retrying.\(selectionNote)"
     }
-}
-
-private struct QuarantineActionError: Identifiable {
-    let id = UUID()
-    let title: String
-    let message: String
 }
 
 struct EmptyQuarantineView: View {
