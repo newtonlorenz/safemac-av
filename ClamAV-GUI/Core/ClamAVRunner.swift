@@ -58,10 +58,10 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
 
         let outputState = ClamAVScanOutputState()
 
-        let stdoutReader = ClamAVPipeReader(handle: stdoutPipe.fileHandleForReading) { data in
+        let stdoutReader = ProcessOutputReader(handle: stdoutPipe.fileHandleForReading) { data in
             outputState.appendStdout(data, startTime: startTime, progressHandler: progressHandler)
         }
-        let stderrReader = ClamAVPipeReader(handle: stderrPipe.fileHandleForReading) { data in
+        let stderrReader = ProcessOutputReader(handle: stderrPipe.fileHandleForReading) { data in
             outputState.appendStderr(data)
         }
         stdoutReader.start()
@@ -334,39 +334,6 @@ final class ClamAVRunner: ClamAVRunnerProtocol {
     }
 }
 
-/// Serialises each pipe's reads with the final drain, so termination cannot
-/// snapshot output while a readability callback is still consuming its bytes.
-private final class ClamAVPipeReader: @unchecked Sendable {
-    private let handle: FileHandle
-    private let consume: (Data) -> Void
-    private let lock = NSLock()
-
-    init(handle: FileHandle, consume: @escaping (Data) -> Void) {
-        self.handle = handle
-        self.consume = consume
-    }
-
-    func start() {
-        handle.readabilityHandler = { [weak self] _ in
-            guard let self else { return }
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            self.consume(self.handle.availableData)
-        }
-    }
-
-    func stop() {
-        handle.readabilityHandler = nil
-    }
-
-    func finish() {
-        stop()
-        lock.lock()
-        defer { lock.unlock() }
-        consume(handle.readDataToEndOfFile())
-    }
-}
-
 private final class ClamAVScanOutputState: @unchecked Sendable {
     private let lock = NSLock()
     private var infectedFiles: [ScanResult] = []
@@ -433,11 +400,19 @@ private final class ClamAVScanOutputState: @unchecked Sendable {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        if let result = ClamAVRunner.parseInfectedLine(trimmed) {
+        if trimmed.hasPrefix("Scanned files:"),
+           let summaryCount = Int(trimmed.dropFirst("Scanned files:".count).trimmingCharacters(in: .whitespaces)),
+           summaryCount >= 0 {
+            // --infected suppresses clean-file lines, but clamscan still reports
+            // the complete total in its final summary.
+            filesScanned = max(filesScanned, summaryCount)
+        } else if let result = ClamAVRunner.parseInfectedLine(trimmed) {
             infectedFiles.append(result)
             filesScanned += 1
-        } else if trimmed.contains(": OK") || trimmed.contains(": Empty file") {
+        } else if trimmed.hasSuffix(": OK") || trimmed.hasSuffix(": Empty file") {
             filesScanned += 1
+        } else if trimmed.hasSuffix(" ERROR") || trimmed.hasPrefix("ERROR:") {
+            recordError(trimmed)
         }
 
         return ScanProgress(

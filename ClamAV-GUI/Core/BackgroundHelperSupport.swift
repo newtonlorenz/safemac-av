@@ -672,3 +672,36 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
         )
     }
 }
+
+/// Serialises each pipe's reads with the final drain, so termination cannot
+/// snapshot output while a readability callback is still consuming its bytes.
+final class ProcessOutputReader: @unchecked Sendable {
+    private let handle: FileHandle
+    private let consume: (Data) -> Void
+    private let lock = NSLock()
+
+    init(handle: FileHandle, consume: @escaping (Data) -> Void) {
+        self.handle = handle
+        self.consume = consume
+    }
+
+    func start() {
+        handle.readabilityHandler = { [weak self] _ in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.consume(self.handle.availableData)
+        }
+    }
+
+    func stop() {
+        handle.readabilityHandler = nil
+    }
+
+    func finish() {
+        stop()
+        lock.lock()
+        defer { lock.unlock() }
+        consume(handle.readDataToEndOfFile())
+    }
+}

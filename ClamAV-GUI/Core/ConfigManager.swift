@@ -169,9 +169,9 @@ final class ConfigManager: ConfigManagerProtocol {
             dailyVersion = extractCvdVersion(from: dailyPath) ?? "Installed"
             if let attrs = try? fileManager.attributesOfItem(atPath: dailyPath.path),
                let modDate = attrs[.modificationDate] as? Date {
-                if lastUpdated.map({ modDate > $0 }) ?? true {
-                    lastUpdated = modDate
-                }
+                // Daily definitions carry recent threats; refreshing the less
+                // frequently changed main database must not conceal their age.
+                lastUpdated = modDate
             }
         }
 

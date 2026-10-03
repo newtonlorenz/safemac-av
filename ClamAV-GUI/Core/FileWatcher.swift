@@ -30,14 +30,19 @@ final class FileWatcher: FileWatcherProtocol {
         queue.setSpecific(key: queueKey, value: ())
     }
 
-    func startWatching(directories: [URL], handler: @escaping ([URL]) -> Void) {
-        stopWatching()
+    deinit { stopWatching() }
 
-        let validDirectories = directories.filter { url in
+    func startWatching(directories: [URL], handler: @escaping ([URL]) -> Void) {
+        let validDirectories = Self.uniqueStandardizedDirectories(directories).filter { url in
             var isDirectory: ObjCBool = false
             return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
         }
 
+        if isWatching, Set(validDirectories) == Set(watchedDirectories) {
+            changeHandler = handler
+            return
+        }
+        stopWatching()
         guard !validDirectories.isEmpty else { return }
 
         watchedDirectories = validDirectories
@@ -119,28 +124,29 @@ final class FileWatcher: FileWatcherProtocol {
     private func handleEvents(numEvents: Int, eventPaths: UnsafeMutableRawPointer, eventFlags: UnsafePointer<FSEventStreamEventFlags>) {
         guard let paths = unsafeBitCast(eventPaths, to: NSArray.self) as? [String] else { return }
 
-        for i in 0..<numEvents {
-            let path = paths[i]
-            let flags = eventFlags[i]
+        processEvents(paths: paths, flags: Array(UnsafeBufferPointer(start: eventFlags, count: numEvents)))
+    }
 
-            let isFile = (flags & UInt32(kFSEventStreamEventFlagItemIsFile)) != 0
-            let isCreated = (flags & UInt32(kFSEventStreamEventFlagItemCreated)) != 0
-            let isModified = (flags & UInt32(kFSEventStreamEventFlagItemModified)) != 0
-            let isRenamed = (flags & UInt32(kFSEventStreamEventFlagItemRenamed)) != 0
+    // Keep event admission on the watcher queue, including deterministic callers
+    // that exercise batching without relying on FSEvents delivery timing.
+    func processEvents(paths: [String], flags: [FSEventStreamEventFlags]) {
+        performOnQueue {
+            for (path, flags) in zip(paths, flags) {
+                let isFile = (flags & UInt32(kFSEventStreamEventFlagItemIsFile)) != 0
+                let isCreated = (flags & UInt32(kFSEventStreamEventFlagItemCreated)) != 0
+                let isModified = (flags & UInt32(kFSEventStreamEventFlagItemModified)) != 0
+                let isRenamed = (flags & UInt32(kFSEventStreamEventFlagItemRenamed)) != 0
 
-            if isFile && (isCreated || isModified || isRenamed) {
-                let url = URL(fileURLWithPath: path)
-
-                if shouldScanFile(url) {
-                    if immediateScanDirectories.contains(where: { Self.contains(url, in: $0) }) {
-                        DispatchQueue.main.async { [weak self] in
-                            self?.onNewFileDetected?(url)
-                        }
-                    } else {
-                        pendingFiles.insert(url)
-
-                        if pendingFiles.count >= batchThreshold {
-                            flushPendingFiles()
+                if isFile && (isCreated || isModified || isRenamed) {
+                    let url = URL(fileURLWithPath: path)
+                    if shouldScanFile(url) {
+                        if immediateScanDirectories.contains(where: { Self.contains(url, in: $0) }) {
+                            DispatchQueue.main.async { [weak self] in
+                                self?.onNewFileDetected?(url)
+                            }
+                        } else {
+                            pendingFiles.insert(url)
+                            if pendingFiles.count >= batchThreshold { flushPendingFiles() }
                         }
                     }
                 }

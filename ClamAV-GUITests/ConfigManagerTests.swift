@@ -359,6 +359,28 @@ final class ConfigManagerTests: XCTestCase {
         XCTAssertTrue(configManager.validateClamAVInstallation(using: settings).isReady)
     }
 
+    func testFreshMainDatabaseDoesNotHideStaleDailySignatures() throws {
+        let signatureDir = tempDirectory.appendingPathComponent("db")
+        try FileManager.default.createDirectory(at: signatureDir, withIntermediateDirectories: true)
+        let main = signatureDir.appendingPathComponent("main.cvd")
+        let daily = signatureDir.appendingPathComponent("daily.cld")
+        try "ClamAV:test:123:meta".write(to: main, atomically: true, encoding: .ascii)
+        try "ClamAV:test:456:meta".write(to: daily, atomically: true, encoding: .ascii)
+        let staleDate = Date().addingTimeInterval(-20 * 24 * 60 * 60)
+        try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: daily.path)
+        var settings = AppSettings.default
+        settings.clamScanPath = "/usr/bin/true"
+        settings.freshclamPath = "/usr/bin/true"
+        settings.signatureDirectory = signatureDir.path
+        try configManager.saveSettings(settings)
+
+        let info = configManager.getSignatureInfo()
+        XCTAssertEqual(try XCTUnwrap(info.lastUpdated).timeIntervalSince1970, staleDate.timeIntervalSince1970, accuracy: 1)
+        guard case .outdatedSignatures = configManager.validateClamAVInstallation(using: settings) else {
+            return XCTFail("Refreshing main must not hide an outdated daily database")
+        }
+    }
+
     func testValidateInstallationUsesConfiguredPaths() throws {
         let testRoot = tempDirectory.appendingPathComponent("clamav-configured")
         let signatureDir = testRoot.appendingPathComponent("db")

@@ -111,6 +111,43 @@ final class ClamAVRunnerTests: XCTestCase {
         XCTAssertEqual(arguments.filter { $0.hasPrefix("--database=") }, ["--database=/tmp/scan-signatures"])
     }
 
+    func testInfectedOnlyScanUsesSummaryForTotalFilesScanned() async throws {
+        let fixture = try makeRunner(script: """
+        printf '/tmp/detected: Harmless-Test FOUND\nScanned files: 12\n'
+        exit 1
+        """)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        var options = ScanOptions.default
+        options.reportOnlyInfected = true
+
+        let report = try await fixture.runner.scan(paths: [], options: options) { _ in }
+
+        XCTAssertEqual(report.filesScanned, 12)
+        XCTAssertEqual(report.infectedFiles.count, 1)
+    }
+
+    func testStdoutErrorPreservesDiagnosticAndDoesNotCountFilenameAsClean() async throws {
+        let fixture = try makeRunner(script: "printf '/tmp/name: OK.txt: Access denied ERROR\\n'")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let report = try await fixture.runner.scan(paths: [], options: .default) { _ in }
+
+        XCTAssertEqual(report.filesScanned, 0)
+        XCTAssertEqual(report.errors, ["/tmp/name: OK.txt: Access denied ERROR"])
+    }
+
+    func testFailedScanIncludesErrorPrintedToStdout() async throws {
+        let fixture = try makeRunner(script: "printf '/tmp/unreadable: Access denied ERROR\\n'; exit 2")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        do {
+            _ = try await fixture.runner.scan(paths: [], options: .default) { _ in }
+            XCTFail("Expected scan failure")
+        } catch ClamAVError.scanFailed(_, let message) {
+            XCTAssertEqual(message, "/tmp/unreadable: Access denied ERROR")
+        }
+    }
+
     private func makeRunner(script: String) throws -> (runner: ClamAVRunner, directory: URL, executable: URL) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -280,6 +317,67 @@ final class ClamAVRunnerTests: XCTestCase {
 }
 
 final class FreshclamRunnerTests: XCTestCase {
+    func testUpdatePreservesDiagnosticSplitAcrossUTF8PipeReads() async throws {
+        let fixture = try makeUpdater(script: """
+        printf 'ERROR: cannot update caf\\303'
+        /bin/sleep 0.1
+        printf '\\251 database\\n'
+        exit 1
+        """)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try await fixture.runner.update(using: fixture.settings)
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.message, "ERROR: cannot update café database")
+    }
+
+    func testInvalidConfigurationPathIsNotReportedAsMissingExecutable() async throws {
+        let fixture = try makeUpdater(script: "exit 0")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        var settings = fixture.settings
+        settings.configDirectory = "relative/config"
+
+        do {
+            _ = try await fixture.runner.update(using: settings)
+            XCTFail("Expected invalid configuration to fail")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.localizedCaseInsensitiveContains("configuration"))
+            XCTAssertFalse(error.localizedDescription.contains("executable not found"))
+        }
+    }
+
+    func testUnwritableSignatureDirectoryIsReportedAccurately() async throws {
+        let fixture = try makeUpdater(script: "exit 0")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let blockingFile = fixture.directory.appendingPathComponent("regular-file")
+        try Data("fixture".utf8).write(to: blockingFile)
+        var settings = fixture.settings
+        settings.signatureDirectory = blockingFile.appendingPathComponent("database").path
+
+        do {
+            _ = try await fixture.runner.update(using: settings)
+            XCTFail("Expected signature directory creation to fail")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.localizedCaseInsensitiveContains("signature directory"))
+            XCTAssertFalse(error.localizedDescription.contains("executable not found"))
+        }
+    }
+
+    private func makeUpdater(script: String) throws -> (runner: FreshclamRunner, directory: URL, settings: AppSettings) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let executable = directory.appendingPathComponent("updater")
+        try Data(("#!/bin/sh\n" + script + "\n").utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let config = ConfigManager(appSupportURL: directory)
+        var settings = AppSettings.default
+        settings.freshclamPath = executable.path
+        settings.configDirectory = directory.path
+        settings.signatureDirectory = directory.appendingPathComponent("db").path
+        return (FreshclamRunner(configManager: config), directory, settings)
+    }
+
     func testParseAlreadyUpToDateOutput() {
         let output = """
         daily.cld database is up-to-date (version: 28021, sigs: 2075174, f-level: 90, builder: raynman)
