@@ -345,12 +345,14 @@ struct ScanProgressView: View {
                     Label(isPaused ? "Resume" : "Pause", systemImage: isPaused ? "play.fill" : "pause.fill")
                 }
                 .buttonStyle(.bordered)
+                .disabled(progress.status == .preparing)
 
                 Button(action: onCancel) {
                     Label("Cancel", systemImage: "xmark.circle")
                 }
                 .buttonStyle(.bordered)
             }
+            .disabled(progress.status == .completing)
 
             Spacer()
         }
@@ -393,8 +395,10 @@ struct ScanResultsView: View {
                 .accessibilityIdentifier("scan-result-warnings")
             }
 
-            if report.infectedFiles.isEmpty {
+            if report.isClean {
                 CleanResultView()
+            } else if report.infectedFiles.isEmpty {
+                IncompleteResultView(report: report)
             } else {
                 InfectedFilesList(files: report.infectedFiles)
             }
@@ -503,7 +507,7 @@ struct ScanSummaryHeader: View {
                 Text("\(report.infectedFiles.count)")
                     .font(.title)
                     .fontWeight(.semibold)
-                    .foregroundColor(report.isClean ? .green : .red)
+                    .foregroundColor(report.infectedFiles.isEmpty ? (report.isClean ? .green : .orange) : .red)
                 Text("Threats Found")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -521,7 +525,7 @@ struct ScanSummaryHeader: View {
         .padding(20)
         .frame(maxWidth: .infinity)
         .adaptiveGlassSurface(
-            tint: (report.isClean ? Color.green : Color.red).opacity(0.08)
+            tint: (report.infectedFiles.isEmpty ? (report.isClean ? Color.green : Color.orange) : Color.red).opacity(0.08)
         )
     }
 
@@ -532,6 +536,27 @@ struct ScanSummaryHeader: View {
             return "\(minutes)m \(seconds)s"
         }
         return "\(seconds)s"
+    }
+}
+
+struct IncompleteResultView: View {
+    let report: ScanReport
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 56))
+                .foregroundStyle(.orange)
+            Text(report.completionState == .cancelled ? "Scan Cancelled" : (report.filesScanned == 0 ? "No Files Scanned" : "Scan Needs Attention"))
+                .font(.title2.weight(.semibold))
+            Text("This scan did not establish a clean result. Review the warnings and scan locations, then try again.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Spacer()
+        }
+        .padding()
+        .accessibilityIdentifier("scan-incomplete-result")
     }
 }
 

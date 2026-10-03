@@ -711,7 +711,7 @@ final class ScanSchedulerTests: XCTestCase {
         XCTAssertThrowsError(try scheduler.loadScheduledScans())
     }
 
-    func testConcurrentResultPersistenceDoesNotEraseNewScheduledJob() async throws {
+    func testConcurrentResultPersistenceDoesNotEraseNewScheduledJob() throws {
         let fixture = try makeFixture()
         var existing = makeJob(name: "Existing")
         existing.isEnabled = false
@@ -724,44 +724,53 @@ final class ScanSchedulerTests: XCTestCase {
         let finished = expectation(description: "Both scheduler operations finish")
         finished.expectedFulfillmentCount = 2
         let resultDate = Date(timeIntervalSince1970: 1_700_000_000)
-        let resultWriter = ScanScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            jobsStorageURL: fixture.storageURL,
-            dataWriter: { data, url, options in
-                resultWriteStarted.signal()
-                guard releaseResultWrite.wait(timeout: .now() + 5) == .success else {
-                    throw TestError.intentionalWriteFailure
-                }
-                try data.write(to: url, options: options)
-            },
-            launchctlRunner: { _, _ in }
-        )
-        let creator = ScanScheduler(
-            launchAgentsDirectory: fixture.launchAgentsDirectory,
-            jobsStorageURL: fixture.storageURL,
-            dataWriter: { data, url, options in
-                try data.write(to: url, options: options)
-                newJobWriteStarted.signal()
-            },
-            launchctlRunner: { _, _ in }
-        )
         let existingID = existing.id
-        let addedJob = added
+        let addedJobData = try JSONEncoder().encode(added)
         DispatchQueue.global().async {
+            let resultWriter = ScanScheduler(
+                launchAgentsDirectory: fixture.launchAgentsDirectory,
+                jobsStorageURL: fixture.storageURL,
+                dataWriter: { data, url, options in
+                    resultWriteStarted.signal()
+                    guard releaseResultWrite.wait(timeout: .now() + 5) == .success else {
+                        throw TestError.intentionalWriteFailure
+                    }
+                    try data.write(to: url, options: options)
+                },
+                launchctlRunner: { _, _ in }
+            )
             resultWriter.markScheduledScanRun(jobID: existingID, result: "Completed", at: resultDate)
             finished.fulfill()
         }
         XCTAssertEqual(resultWriteStarted.wait(timeout: .now() + 2), .success)
         DispatchQueue.global().async {
-            do { try creator.createScheduledScan(addedJob) }
-            catch { XCTFail("Concurrent create failed: \(error)") }
+            let creator = ScanScheduler(
+                launchAgentsDirectory: fixture.launchAgentsDirectory,
+                jobsStorageURL: fixture.storageURL,
+                dataWriter: { data, url, options in
+                    try data.write(to: url, options: options)
+                    newJobWriteStarted.signal()
+                },
+                launchctlRunner: { _, _ in }
+            )
+            do {
+                let addedJob = try JSONDecoder().decode(ScanJob.self, from: addedJobData)
+                try creator.createScheduledScan(addedJob)
+            } catch {
+                XCTFail("Concurrent create failed: \(error)")
+            }
             finished.fulfill()
         }
         // Without transaction locking, the newer job is written before the paused stale result.
         _ = newJobWriteStarted.wait(timeout: .now() + 0.2)
         releaseResultWrite.signal()
-        await fulfillment(of: [finished], timeout: 5)
-        let jobs = try creator.loadScheduledScans()
+        wait(for: [finished], timeout: 5)
+        let reader = ScanScheduler(
+            launchAgentsDirectory: fixture.launchAgentsDirectory,
+            jobsStorageURL: fixture.storageURL,
+            launchctlRunner: { _, _ in }
+        )
+        let jobs = try reader.loadScheduledScans()
         XCTAssertEqual(Set(jobs.map(\.id)), Set([existing.id, added.id]))
         XCTAssertEqual(jobs.first { $0.id == existing.id }?.lastRun, resultDate)
     }

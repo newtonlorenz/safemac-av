@@ -554,6 +554,7 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
     private var helperEnabled = false
     private var keepsMenuDuringInteractiveLaunch: Bool
     private var nextRecoveryAttempt = Date.distantFuture
+    private let ownershipNotificationCenter: NotificationCenter
     private var ownershipHintObserver: NSObjectProtocol?
     private var recoveryTimer: DispatchSourceTimer?
     private var launchAtLoginStatusObservation: AnyCancellable?
@@ -563,19 +564,24 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
         now: @escaping () -> Date = Date.init,
         startupGrace: TimeInterval = 5,
         keepsMenuDuringInteractiveLaunch: Bool = false,
-        startsRecoveryTimer: Bool = true
+        startsRecoveryTimer: Bool = true,
+        observesOwnershipHints: Bool = true,
+        ownershipNotificationCenter: NotificationCenter = DistributedNotificationCenter.default()
     ) {
         self.makeLease = makeLease
+        self.ownershipNotificationCenter = ownershipNotificationCenter
         self.now = now
         self.startupGrace = startupGrace
         self.keepsMenuDuringInteractiveLaunch = keepsMenuDuringInteractiveLaunch
         mainShouldPresentMenuBar = keepsMenuDuringInteractiveLaunch
-        ownershipHintObserver = DistributedNotificationCenter.default().addObserver(
-            forName: Self.helperWillAcquireNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.prepareForHelperOwnership() }
+        if observesOwnershipHints {
+            ownershipHintObserver = ownershipNotificationCenter.addObserver(
+                forName: Self.helperWillAcquireNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.prepareForHelperOwnership() }
+            }
         }
         if startsRecoveryTimer {
             let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -590,7 +596,7 @@ final class BackgroundMenuBarOwnershipCoordinator: ObservableObject {
 
     deinit {
         if let ownershipHintObserver {
-            DistributedNotificationCenter.default().removeObserver(ownershipHintObserver)
+            ownershipNotificationCenter.removeObserver(ownershipHintObserver)
         }
         recoveryTimer?.cancel()
     }

@@ -612,7 +612,7 @@ private struct SignatureSchedulerFixture {
     }
 }
 
-private final class LegacyRemovalFailureFileManager: FileManager, @unchecked Sendable {
+private final class LegacyRemovalFailureFileManager: FileManager {
     let failingURL: URL
 
     init(failingURL: URL) {

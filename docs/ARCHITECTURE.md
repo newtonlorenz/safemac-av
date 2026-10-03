@@ -43,13 +43,13 @@ per-user launchd
 3. `ScanCoordinator` prevents overlapping scans and owns cancellation state.
 4. `ClamAVRunner` launches `clamscan`, or a configured local `clamdscan`, with an argument array rather than a shell command.
 5. Stdout and stderr are buffered as bytes until complete lines are available and drained before building a `ScanReport`. Normal ClamAV exit code `1` means detections were found; higher codes and signal termination are failures.
-6. When requested, detections are passed to `QuarantineManager` after the scan completes. The final report records successful quarantine actions and includes failures as visible warnings.
+6. Scan admission remains occupied through quarantine and result publication. Cancellation during admission prevents the subprocess from launching; controls are inactive once result finalisation starts. When requested, detections are passed to `QuarantineManager` after the scan completes. The final report records successful quarantine actions and includes failures as visible warnings.
 
 The optional `clamdscan` backend delegates scan limits, exclusions and archive policy to the daemon's `clamd.conf`; it does not enforce the equivalent per-scan `clamscan` options.
 
 ### Signature update
 
-`FreshclamRunner` launches the configured `freshclam` executable with the local config and signature-data paths. Its output is parsed into success, already-current, or failure status. Network access belongs to `freshclam`; the Swift application does not implement an update client.
+`FreshclamRunner` launches the configured `freshclam` executable with the local config and signature-data paths. Its output is buffered as bytes and drained serially with reader callbacks before parsing success, already-current, or failure status. Configuration and signature-directory errors remain distinct from a missing executable. Signature freshness follows the daily database timestamp when available. Network access belongs to `freshclam`; the Swift application does not implement an update client.
 
 `SignatureUpdateScheduler` owns the single per-user LaunchAgent `com.newtonlorenz.SafeMacAV.signature-update`. Its property list contains only the embedded `SafeMacAVBackground` executable and `--scheduled-signature-update`; configured ClamAV paths remain in app settings rather than launchd arguments. It validates that helper before changing the previous job. Daily and weekly calendar changes atomically replace the property list using modern per-user `launchctl bootstrap` and `bootout` operations. Reconciliation observes both the property list and launchd's loaded state, boots out the exact legacy `com.newtonlorenz.ClamAV-GUI.signature-update` service before loading the replacement, and removes its property list only after the replacement succeeds. A failed change restores the previous property list and runtime state; if restoration also fails, the app reports an indeterminate schedule instead of displaying a false enabled or disabled state.
 
@@ -67,11 +67,15 @@ Mutation ordering is transactional:
 
 Quarantine operations use a shared serial transaction queue and a persistent, user-owned `.transaction.lock` advisory lock to coordinate cooperating app processes. The lock is released after each operation but its file is retained. SHA-256 is calculated in bounded chunks rather than loading the entire file. Restore and deletion require an exact current metadata record and a regular UUID-named payload in the selected quarantine directory. Invalid storage is reported in the interface rather than appearing empty.
 
+Quarantine rejects source files already inside its storage, including metadata and existing payloads, so rescanning that directory cannot invalidate its records or transaction lock.
+
 The quarantine directory is not an encryption or privilege boundary. The current user can inspect or modify it, and external filesystem changes are outside the app's transaction guarantees.
 
 ### Scheduled scan
 
 `ScanScheduler` persists job definitions in `~/Library/Application Support/SafeMac AV/` and writes one `com.newtonlorenz.SafeMacAV.scan.<UUID>` property list per enabled job under `~/Library/LaunchAgents/`. Only canonical interactive startup from `/Applications/SafeMac AV.app` may mutate legacy LaunchAgents: it validates and atomically copies legacy metadata without deleting it, then unloads each exact loaded legacy job before ensuring its replacement is loaded. Development, translocated, downloaded, and backup copies can strictly read metadata but cannot inspect or migrate those agents; schedule updates and deletion fail without mutation when the exact legacy agent still exists. A failed replacement restores the legacy file and its exact prior loaded or unloaded state. The Schedules screen uses the scheduler's strict nonmutating load path and displays startup migration or metadata failures instead of converting them into an empty schedule list; the tolerant lookup remains available only for non-interactive best-effort callers. The LaunchAgent starts the app with a job UUID; the app loads the current stored definition rather than placing user-selected scan paths directly in the property list.
+
+Job metadata reads and mutations use the same persistent, owned `scheduled_jobs.json.lock` advisory lock. This prevents a scheduled process saving its result from overwriting a concurrent GUI edit. Rollback restores an agent’s previous loaded or unloaded state rather than treating a stored plist as proof it was loaded.
 
 Schedules run in the logged-in user's context. Moving or deleting the built app can invalidate the executable path captured in an existing LaunchAgent.
 
@@ -81,11 +85,13 @@ Calendar weekdays (Sunday = 1) are converted to launchd weekdays (Sunday = 0) wh
 
 `FileWatcher` creates an FSEvent stream for configured folders. New or changed files are filtered, deduplicated, and either scanned immediately for configured Downloads behavior or batched. Monitoring exists only for the lifetime of the app process; it is not a privileged on-access scanner.
 
-Batches wait for an active scan to finish instead of being discarded. Dashboard monitoring status reflects a successfully started watcher with a valid configured folder. Idle-triggered scans and battery-based pausing are not implemented and are not presented as working controls.
+Batches wait for the full scan lifecycle, including quarantine and result publication, instead of being discarded. Reconfiguring the same watched directory set preserves queued files; releasing the watcher stops its stream and timer. Dashboard monitoring status reflects a successfully started watcher with a valid configured folder. Idle-triggered scans and battery-based pausing are not implemented and are not presented as working controls.
 
 ### Background helper and launch at login
 
 `SafeMacAVBackground.app` is an embedded macOS 13+ `LSUIElement` login-item app. It owns the persistent menu-bar session, background lease, one-shot scheduled-signature mode, and a fixed one-shot notification-authorization mode. It has no Finder queue consumer and no app-update framework or configuration. Its fixed Open, Settings, and Check for Updates routes first verify the canonical `/Applications/SafeMac AV.app` bundle; its distributed notifications are payload-free wake hints only. The foreground app owns Finder handoff, scheduled scans, all windows, and app updates.
+
+The helper retains an unchanged recovery cache without rewriting it, so its directory watcher cannot continuously trigger itself.
 
 The helper captures at most 64 KiB of combined freshclam output, maps it through the same outcome parser as foreground updates, and never logs raw process output. Any nonzero freshclam exit fails closed even if preceding output resembles success. It checks only the helper bundle's existing notification authorization after a scheduled update. Authorized notifications use the same summary-only update outcomes; denied and not-determined status suppresses delivery. The foreground Settings action verifies the embedded helper then starts a dedicated new helper instance with only the fixed authorization flag, so an already-running login helper cannot consume the request with stale arguments. That explicit user action is the sole authorization prompt path; it does not depend on launch-at-login being enabled and never runs from login or scheduling.
 
@@ -112,6 +118,8 @@ The embedded helper owns the persistent status item. The foreground app retains 
 ### Local notifications
 
 `NotificationManager` wraps `UNUserNotificationCenter` behind an injectable protocol and installs a retained delegate during initialization so authorized alerts remain visible while the app is active. `AppState` maps completed scans, detections, signature-update results, clean automatic download scans, and scheduled-scan starts into local notification requests. The master notification preference gates every request; detection sounds and clean-download notices have separate preferences.
+
+Clean status and recent-scan credit require a nonempty report with a usable completion status and no errors. A clean-download notification additionally requires exactly one requested file and one scanned file, avoiding attribution to an unverified member of a batch. Incomplete results use neutral warnings in the dashboard, scan results, menu and session history.
 
 Notification content is intentionally summary-only. It includes counts and generic outcomes but excludes file names, filesystem paths, threat signatures, schedule names, and raw process errors. Permission state and safe delivery errors are surfaced in Settings. macOS remains the final authority on whether an authorized request is displayed.
 

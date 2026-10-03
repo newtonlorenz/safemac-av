@@ -150,6 +150,28 @@ final class NotificationManagerTests: XCTestCase {
         XCTAssertFalse(combinedContent.contains("Private finance folders"))
     }
 
+    func testIncompleteOrEmptyScansNeverNotifyAsClean() async throws {
+        let center = MockUserNotificationCenter(status: .authorized)
+        let manager = NotificationManager(center: center)
+        var settings = AppSettings.default
+        settings.showNotifications = true
+        let cases: [(ScanCompletionState, Int, [String])] = [
+            (.scanError, 3, []), (.cancelled, 3, []),
+            (.success, 3, ["Private unreadable file"]), (.success, 0, [])
+        ]
+        for (state, count, errors) in cases {
+            let report = ScanReport(
+                startTime: Date(), endTime: Date(), filesScanned: count,
+                infectedFiles: [], errors: errors, scanPaths: [], completionState: state
+            )
+            await manager.sendScanComplete(report: report, settings: settings)
+            let content = try XCTUnwrap(center.requests.last?.content)
+            XCTAssertNotEqual(content.title, "Scan complete")
+            XCTAssertFalse(content.body.contains("found no threats"))
+            XCTAssertFalse(content.body.contains("Private"))
+        }
+    }
+
     func testCategoriesAreRegistered() {
         let center = MockUserNotificationCenter(status: .authorized)
         let manager = NotificationManager(center: center)

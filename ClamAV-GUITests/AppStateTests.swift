@@ -3,6 +3,177 @@ import XCTest
 
 @MainActor
 final class AppStateTests: XCTestCase {
+    func testPauseAndResumeDoNotChangePreparingScanBeforeProcessLaunch() async throws {
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        notifications.blockScheduledNotification = true
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: .default),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications,
+            startsInteractiveBackgroundServices: false
+        )
+        let scan = Task {
+            await appState.runScheduledScan(jobID: nil, paths: [URL(fileURLWithPath: "/tmp/fixture")])
+        }
+        try await waitUntil { notifications.scheduledJobNames.count == 1 }
+        XCTAssertTrue(runner.scanPaths.isEmpty)
+        appState.pauseScan()
+        XCTAssertFalse(appState.isScanPaused)
+        XCTAssertEqual(appState.currentScanProgress?.status, .preparing)
+        appState.resumeScan()
+        XCTAssertEqual(appState.currentScanProgress?.status, .preparing)
+        notifications.resumeScheduledNotification()
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan()
+        await scan.value
+    }
+
+    func testScanControlsCannotInterruptResultFinalisation() async throws {
+        var settings = AppSettings.default
+        settings.showNotifications = true
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        notifications.blockCompletionNotification = true
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: settings),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications,
+            startsInteractiveBackgroundServices: false
+        )
+        let scan = Task {
+            await appState.startScan(paths: [URL(fileURLWithPath: "/tmp/fixture")], options: .default)
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan()
+        try await waitUntil { notifications.scanCompleteReports.count == 1 }
+        XCTAssertEqual(appState.currentScanProgress?.status, .completing)
+        appState.pauseScan()
+        XCTAssertFalse(appState.isScanPaused)
+        XCTAssertEqual(appState.currentScanProgress?.status, .completing)
+        appState.resumeScan()
+        XCTAssertEqual(appState.currentScanProgress?.status, .completing)
+        appState.cancelScan()
+        XCTAssertTrue(appState.isScanning)
+        XCTAssertEqual(appState.currentScanProgress?.status, .completing)
+        notifications.resumeCompletionNotification()
+        _ = await scan.value
+        XCTAssertFalse(appState.isScanning)
+        XCTAssertNotNil(appState.lastScanResult)
+    }
+
+    func testAutomaticScanWaitsUntilPreviousScanFinalisationCompletes() async throws {
+        var settings = AppSettings.default
+        settings.monitoringEnabled = true
+        settings.autoScanDownloads = false
+        settings.showNotifications = true
+        let watcher = MockFileWatcher()
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        notifications.blockCompletionNotification = true
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: settings),
+            fileWatcher: watcher,
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications
+        )
+        let firstPath = URL(fileURLWithPath: "/tmp/first-fixture")
+        let changedPath = URL(fileURLWithPath: "/tmp/changed-fixture")
+        let first = Task { await appState.startScan(paths: [firstPath], options: .default) }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan()
+        try await waitUntil { notifications.scanCompleteReports.count == 1 }
+        watcher.detectBatch([changedPath])
+        for _ in 0..<30 { await Task.yield() }
+        let prematureScan = runner.scanPaths.count > 1
+        XCTAssertFalse(prematureScan, "The previous scan must finish publishing its result before admitting queued work")
+        if prematureScan { runner.resumeNextScan() }
+        notifications.resumeCompletionNotification()
+        _ = await first.value
+        if !prematureScan {
+            try await waitUntil { runner.scanPaths.count == 2 }
+            runner.resumeNextScan()
+        }
+        try await waitUntil { !appState.isScanning }
+        XCTAssertEqual(runner.scanPaths, [[firstPath], [changedPath]])
+    }
+
+    func testIncompleteOrEmptyDownloadNeverReceivesCleanNotificationOrRecentScanCredit() async throws {
+        var settings = AppSettings.default
+        settings.showNotifications = true
+        settings.notifyOnCleanFiles = true
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: settings),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications,
+            startsInteractiveBackgroundServices: false
+        )
+        let cases: [(Int, [String], ScanCompletionState)] = [
+            (0, [], .success), (1, ["Skipped unreadable file"], .success),
+            (1, [], .scanError), (1, [], .cancelled), (1, [], .infectedFound)
+        ]
+        for (index, value) in cases.enumerated() {
+            let scan = Task {
+                await appState.startScan(paths: [URL(fileURLWithPath: "/tmp/download-fixture")], options: .default, source: .download)
+            }
+            try await waitUntil { runner.scanPaths.count == index + 1 }
+            runner.resumeNextScan(filesScanned: value.0, errors: value.1, completionState: value.2)
+            _ = await scan.value
+            XCTAssertTrue(notifications.cleanFileURLs.isEmpty)
+            XCTAssertFalse(appState.protectionScore.components.first { $0.title == "Recent Scan" }?.isComplete ?? true)
+        }
+    }
+
+    func testScheduledOutcomeDoesNotCallIncompleteReportSuccessful() {
+        let now = Date()
+        let threat = ScanResult(path: "/tmp/fixture", threatName: "Test.Fixture")
+        for report in [
+            ScanReport(startTime: now, endTime: now, filesScanned: 0, infectedFiles: [], errors: [], scanPaths: []),
+            ScanReport(startTime: now, endTime: now, filesScanned: 1, infectedFiles: [], errors: ["Unreadable file"], scanPaths: []),
+            ScanReport(startTime: now, endTime: now, filesScanned: 1, infectedFiles: [threat], errors: ["Quarantine failed"], scanPaths: [])
+        ] {
+            XCTAssertTrue(ScanOutcome.completed(report).scheduledResultMessage.hasPrefix("incomplete:"))
+        }
+        let cancelled = ScanReport(startTime: now, endTime: now, filesScanned: 1, infectedFiles: [], errors: [], scanPaths: [], completionState: .cancelled)
+        XCTAssertEqual(ScanOutcome.completed(cancelled).scheduledResultMessage, "cancelled")
+        let completed = ScanReport(startTime: now, endTime: now, filesScanned: 1, infectedFiles: [], errors: [], scanPaths: [])
+        XCTAssertEqual(ScanOutcome.completed(completed).scheduledResultMessage, "success")
+    }
+
+    func testIncompleteReportsAreNotClean() {
+        for (files, errors, completion) in [(0, [String](), ScanCompletionState.success), (1, ["Unreadable file"], .success), (1, [], .scanError), (1, [], .cancelled), (1, [], .infectedFound)] {
+            let report = ScanReport(startTime: Date(), endTime: Date(), filesScanned: files, infectedFiles: [], errors: errors, scanPaths: [], completionState: completion)
+            XCTAssertFalse(report.isClean)
+        }
+    }
+
+    func testBatchedDownloadsDoNotAttributeCleanResultToAnUnverifiedFirstFile() async throws {
+        var settings = AppSettings.default
+        settings.showNotifications = true
+        settings.notifyOnCleanFiles = true
+        let runner = AppStateControlledRunner()
+        let notifications = AppStateMockNotificationManager()
+        let appState = AppState(
+            configManager: AppStateMockConfigManager(settings: settings),
+            fileWatcher: MockFileWatcher(),
+            scanCoordinator: ScanCoordinator(clamAVRunner: runner),
+            notificationManager: notifications,
+            startsInteractiveBackgroundServices: false
+        )
+        let scan = Task {
+            await appState.startScan(paths: [URL(fileURLWithPath: "/tmp/excluded-download"), URL(fileURLWithPath: "/tmp/scanned-download")], options: .default, source: .download)
+        }
+        try await waitUntil { runner.scanPaths.count == 1 }
+        runner.resumeNextScan(filesScanned: 1)
+        _ = await scan.value
+        XCTAssertTrue(notifications.cleanFileURLs.isEmpty)
+    }
+
     func testQuarantineResultRecordsSuccessfulActionAndPreservesIdentity() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1706,7 +1877,7 @@ private final class AppStateControlledRunner: ClamAVRunnerProtocol {
         }
     }
 
-    func resumeNextScan() {
+    func resumeNextScan(filesScanned: Int = 1, errors: [String] = [], completionState: ScanCompletionState = .success) {
         let pending = lock.withLock {
             continuations.isEmpty ? nil : continuations.removeFirst()
         }
@@ -1716,12 +1887,12 @@ private final class AppStateControlledRunner: ClamAVRunnerProtocol {
         continuation.resume(returning: ScanReport(
             startTime: Date(),
             endTime: Date(),
-            filesScanned: 1,
+            filesScanned: filesScanned,
             infectedFiles: infectedFiles,
-            errors: [],
+            errors: errors,
             scanPaths: paths,
             exitCode: 0,
-            completionState: .success
+            completionState: completionState
         ))
     }
 
@@ -1742,6 +1913,8 @@ private final class AppStateMockNotificationManager: NotificationManaging {
     var permissionError: String?
     var statusAfterRequest: NotificationPermissionStatus?
     var blockScheduledNotification = false
+    var blockCompletionNotification = false
+    private var completionContinuation: CheckedContinuation<Void, Never>?
     private(set) var threatNotifications: [[ScanResult]] = []
     private(set) var scanCompleteReports: [ScanReport] = []
     private(set) var cleanFileURLs: [URL] = []
@@ -1760,6 +1933,15 @@ private final class AppStateMockNotificationManager: NotificationManaging {
 
     func sendScanComplete(report: ScanReport, settings: AppSettings) async {
         scanCompleteReports.append(report)
+        if blockCompletionNotification {
+            blockCompletionNotification = false
+            await withCheckedContinuation { completionContinuation = $0 }
+        }
+    }
+
+    func resumeCompletionNotification() {
+        completionContinuation?.resume()
+        completionContinuation = nil
     }
 
     func sendThreatDetected(threats: [ScanResult], settings: AppSettings) async {

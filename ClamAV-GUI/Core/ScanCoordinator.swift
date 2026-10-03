@@ -4,6 +4,7 @@ import Foundation
 final class ScanCoordinator {
     private let clamAVRunner: ClamAVRunnerProtocol
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationRequested = false
 
     private(set) var isScanning = false
     private(set) var activeScanSource: ScanSource?
@@ -31,6 +32,7 @@ final class ScanCoordinator {
         }
 
         isScanning = true
+        cancellationRequested = false
         activeScanSource = request.source
         defer {
             isScanning = false
@@ -45,8 +47,12 @@ final class ScanCoordinator {
         do {
             try await onAdmitted?()
         } catch {
-            return .failed(admissionFailureMessage)
+            return cancellationRequested ? .cancelled : .failed(admissionFailureMessage)
         }
+
+        // Admission can await notification delivery or durable handoff work.
+        // Remember cancellation even when no scanner process exists yet.
+        guard !cancellationRequested else { return .cancelled }
 
         do {
             let report = try await clamAVRunner.scan(
@@ -63,6 +69,7 @@ final class ScanCoordinator {
     }
 
     func cancelCurrentScan() {
+        cancellationRequested = true
         clamAVRunner.cancelCurrentScan()
     }
 

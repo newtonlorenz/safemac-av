@@ -56,6 +56,8 @@ final class AppState: ObservableObject {
     private var pendingAutomaticDownloadPaths: [URL] = []
     private var isProcessingAutomaticDownloads = false
     private var activeScanGeneration: UUID?
+    private var scanLifecycleSource: ScanSource?
+    private var scanLifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     private var pendingAutomaticMonitoringPaths: [URL] = []
     private var isProcessingAutomaticMonitoring = false
     private var pendingExternalScanRequestIDs = Set<UUID>()
@@ -270,13 +272,20 @@ final class AppState: ObservableObject {
             return .failed(status.message)
         }
 
-        guard !scanCoordinator.isScanning else {
-            let outcome = ScanOutcome.skippedAlreadyRunning(active: scanCoordinator.activeScanSource)
+        guard scanLifecycleSource == nil, !scanCoordinator.isScanning else {
+            let outcome = ScanOutcome.skippedAlreadyRunning(active: scanLifecycleSource ?? scanCoordinator.activeScanSource)
             scanError = outcome.errorMessage
             addLog(.warning, outcome.errorMessage ?? "Skipped scan because another scan is running")
             return outcome
         }
 
+        scanLifecycleSource = source
+        defer {
+            scanLifecycleSource = nil
+            let waiters = scanLifecycleWaiters
+            scanLifecycleWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
         let generation = UUID()
         activeScanGeneration = generation
         scanError = nil
@@ -304,6 +313,12 @@ final class AppState: ObservableObject {
 
         switch outcome {
         case .completed(let report):
+            if isScanning {
+                currentScanProgress = ScanProgress(
+                    status: .completing, currentFile: nil, filesScanned: report.filesScanned,
+                    infectedCount: report.infectedFiles.count, startTime: report.startTime
+                )
+            }
             var results = report.infectedFiles
             var errors = report.errors
             if options.quarantineInfected {
@@ -351,6 +366,7 @@ final class AppState: ObservableObject {
     }
 
     func cancelScan() {
+        guard scanCoordinator.isScanning else { return }
         activeScanGeneration = nil
         scanCoordinator.cancelCurrentScan()
         isScanning = false
@@ -360,8 +376,10 @@ final class AppState: ObservableObject {
     }
 
     func pauseScan() {
+        guard scanCoordinator.isScanning, scanCoordinator.currentProcessPID != nil else { return }
         scanCoordinator.pauseScan()
         isScanPaused = scanCoordinator.scanIsPaused
+        guard isScanPaused else { return }
         if var progress = currentScanProgress {
             progress.status = .paused
             currentScanProgress = progress
@@ -370,8 +388,10 @@ final class AppState: ObservableObject {
     }
 
     func resumeScan() {
+        guard scanCoordinator.isScanning, scanCoordinator.currentProcessPID != nil else { return }
         scanCoordinator.resumeScan()
         isScanPaused = scanCoordinator.scanIsPaused
+        guard !isScanPaused else { return }
         if var progress = currentScanProgress {
             progress.status = .scanning
             currentScanProgress = progress
@@ -653,7 +673,7 @@ final class AppState: ObservableObject {
 
     func refreshProtectionScore() {
         protectionScore = protectionScoreManager.calculateScore(
-            lastScanDate: lastScanResult?.endTime,
+            lastScanDate: lastScanResult.flatMap { $0.completedWithoutErrors ? $0.endTime : nil },
             monitoringEnabled: isMonitoringActive,
             finderExtensionEnabled: FinderExtensionManager.isEnabled
         )
@@ -703,7 +723,7 @@ final class AppState: ObservableObject {
             }
 
             for request in requests {
-                await scanCoordinator.waitUntilIdle()
+                await waitUntilScanLifecycleIdle()
                 var didAcknowledge = false
                 let outcome = await startScan(
                     paths: request.paths.map { URL(fileURLWithPath: $0) },
@@ -757,6 +777,17 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Scanning remains exclusive while quarantine and result publication finish.
+    private func waitUntilScanLifecycleIdle() async {
+        while scanLifecycleSource != nil || scanCoordinator.isScanning {
+            if scanLifecycleSource != nil {
+                await withCheckedContinuation { scanLifecycleWaiters.append($0) }
+            } else {
+                await scanCoordinator.waitUntilIdle()
+            }
+        }
+    }
+
     private func setupFileWatcherAutoScan() {
         fileWatcher.onNewFileDetected = { [weak self] url in
             guard let self, self.settings.autoScanDownloads else { return }
@@ -783,7 +814,7 @@ final class AppState: ObservableObject {
         defer { isProcessingAutomaticDownloads = false }
 
         while !pendingAutomaticDownloadPaths.isEmpty {
-            await scanCoordinator.waitUntilIdle()
+            await waitUntilScanLifecycleIdle()
 
             guard settings.autoScanDownloads else {
                 pendingAutomaticDownloadPaths.removeAll()
@@ -792,7 +823,7 @@ final class AppState: ObservableObject {
 
             guard !pendingAutomaticDownloadPaths.isEmpty else { break }
 
-            guard !scanCoordinator.isScanning else { continue }
+            guard scanLifecycleSource == nil, !scanCoordinator.isScanning else { continue }
 
             let paths = pendingAutomaticDownloadPaths
             pendingAutomaticDownloadPaths.removeAll()
@@ -824,13 +855,13 @@ final class AppState: ObservableObject {
     private func processAutomaticMonitoringScans() async {
         defer { isProcessingAutomaticMonitoring = false }
         while !pendingAutomaticMonitoringPaths.isEmpty {
-            await scanCoordinator.waitUntilIdle()
+            await waitUntilScanLifecycleIdle()
             guard settings.monitoringEnabled else {
                 pendingAutomaticMonitoringPaths.removeAll()
                 break
             }
             guard !pendingAutomaticMonitoringPaths.isEmpty else { break }
-            guard !scanCoordinator.isScanning else { continue }
+            guard scanLifecycleSource == nil, !scanCoordinator.isScanning else { continue }
             let paths = pendingAutomaticMonitoringPaths
             pendingAutomaticMonitoringPaths.removeAll()
             let outcome = await startScan(
@@ -926,9 +957,18 @@ final class AppState: ObservableObject {
                 threats: report.infectedFiles,
                 settings: settings
             )
-        } else if source == .download, settings.notifyOnCleanFiles, let firstPath = requestedPaths.first {
-            await notificationManager.sendFileClean(url: firstPath, settings: settings)
-        } else if source != .download {
+        } else if source == .download {
+            if !report.completedWithoutErrors {
+                await notificationManager.sendScanComplete(report: report, settings: settings)
+            } else if settings.notifyOnCleanFiles {
+                if requestedPaths.count == 1, report.filesScanned == 1, let path = requestedPaths.first {
+                    await notificationManager.sendFileClean(url: path, settings: settings)
+                } else {
+                    // A batch count cannot establish which individual download was scanned.
+                    await notificationManager.sendScanComplete(report: report, settings: settings)
+                }
+            }
+        } else {
             await notificationManager.sendScanComplete(report: report, settings: settings)
         }
         updateNotificationPermissionState()

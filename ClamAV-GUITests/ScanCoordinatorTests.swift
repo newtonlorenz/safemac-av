@@ -3,6 +3,37 @@ import XCTest
 
 @MainActor
 final class ScanCoordinatorTests: XCTestCase {
+    func testCancellationDuringAdmissionPreventsLaunchAndDoesNotCancelNextScan() async {
+        let runner = MockCoordinatorRunner()
+        let coordinator = ScanCoordinator(clamAVRunner: runner)
+        let request = ScanRequest(source: .scheduled, paths: [URL(fileURLWithPath: "/tmp/fixture")], options: .default)
+        runner.nextReport = Self.report(paths: request.paths)
+        let admissionStarted = expectation(description: "Admission is awaiting completion")
+        var admissionContinuation: CheckedContinuation<Void, Never>?
+        let scan = Task { @MainActor in
+            await coordinator.run(request, onAdmitted: {
+                await withCheckedContinuation { continuation in
+                    admissionContinuation = continuation
+                    admissionStarted.fulfill()
+                }
+            }) { _ in }
+        }
+        await fulfillment(of: [admissionStarted], timeout: 2)
+
+        coordinator.cancelCurrentScan()
+        admissionContinuation?.resume()
+        let outcome = await scan.value
+
+        XCTAssertEqual(outcome, .cancelled)
+        XCTAssertEqual(runner.scanCallCount, 0)
+        XCTAssertFalse(coordinator.isScanning)
+        XCTAssertNil(coordinator.activeScanSource)
+
+        let nextOutcome = await coordinator.run(request) { _ in }
+        XCTAssertNotNil(nextOutcome.report)
+        XCTAssertEqual(runner.scanCallCount, 1)
+    }
+
     func testConcurrentRequestIsSkippedWhileScanIsActive() async {
         let runner = MockCoordinatorRunner()
         let coordinator = ScanCoordinator(clamAVRunner: runner)
@@ -88,6 +119,7 @@ private final class MockCoordinatorRunner: ClamAVRunnerProtocol {
     var scanCallCount = 0
     var cancelCallCount = 0
     var nextError: Error?
+    var nextReport: ScanReport?
     var pendingContinuation: CheckedContinuation<ScanReport, Error>?
     var currentProcessPID: Int32?
     var scanIsPaused = false
@@ -98,6 +130,8 @@ private final class MockCoordinatorRunner: ClamAVRunnerProtocol {
         if let nextError {
             throw nextError
         }
+
+        if let nextReport { return nextReport }
 
         return try await withCheckedThrowingContinuation { continuation in
             pendingContinuation = continuation

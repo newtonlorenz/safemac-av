@@ -110,8 +110,14 @@ struct ScanReport: Equatable {
         endTime.timeIntervalSince(startTime)
     }
 
+    var completedWithoutErrors: Bool {
+        let hasUsableOutcome = completionState == .success
+            || (completionState == .infectedFound && !infectedFiles.isEmpty)
+        return hasUsableOutcome && errors.isEmpty && filesScanned > 0
+    }
+
     var isClean: Bool {
-        infectedFiles.isEmpty
+        completedWithoutErrors && infectedFiles.isEmpty
     }
 
     static func == (lhs: ScanReport, rhs: ScanReport) -> Bool {
@@ -305,6 +311,10 @@ enum ScanOutcome: Equatable {
     var scheduledResultMessage: String {
         switch self {
         case .completed(let report):
+            if report.completionState == .cancelled { return "cancelled" }
+            guard report.completedWithoutErrors else {
+                return "incomplete: \(report.filesScanned) files scanned, \(report.infectedFiles.count) threat(s) found"
+            }
             return report.infectedFiles.isEmpty ? "success" : "success: \(report.infectedFiles.count) threat(s) found"
         case .failed(let message):
             return "failed: \(message)"

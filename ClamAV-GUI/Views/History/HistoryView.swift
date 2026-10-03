@@ -34,12 +34,15 @@ private struct ScanHistoryList: View {
             } else {
                 List(history.entries) { entry in
                     HStack(spacing: 16) {
-                        Image(systemName: entry.threatsFound == 0 ? "checkmark.circle" : "exclamationmark.triangle")
-                            .foregroundStyle(entry.threatsFound == 0 ? Color.green : Color.orange)
+                        Image(systemName: entry.threatsFound == 0 && entry.completedWithoutErrors ? "checkmark.circle" : "exclamationmark.triangle")
+                            .foregroundStyle(entry.threatsFound == 0 && entry.completedWithoutErrors ? Color.green : Color.orange)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("\(entry.scanType.rawValue) scan")
                                 .font(.headline)
+                            if !entry.completedWithoutErrors {
+                                Text("Needs attention").font(.caption).foregroundStyle(.orange)
+                            }
                             Text(entry.date, format: .dateTime.day().month().year().hour().minute())
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

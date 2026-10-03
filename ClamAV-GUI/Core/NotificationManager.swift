@@ -166,13 +166,22 @@ final class NotificationManager: NotificationManaging {
     }
 
     func sendScanComplete(report: ScanReport, settings: AppSettings) async {
-        let content = notificationContent(
-            title: "Scan complete",
-            body: report.infectedFiles.isEmpty
+        let title: String
+        let body: String
+        if report.completionState == .cancelled {
+            title = "Scan cancelled"
+            body = "SafeMac AV stopped before completing this scan. Open the app to review details."
+        } else if !report.completedWithoutErrors {
+            title = report.filesScanned == 0 && report.errors.isEmpty && report.completionState == .success
+                ? "No files scanned" : "Scan needs attention"
+            body = "SafeMac AV could not confirm a complete scan. Open the app to review details."
+        } else {
+            title = "Scan complete"
+            body = report.infectedFiles.isEmpty
                 ? "SafeMac AV scanned \(report.filesScanned) files and found no threats."
-                : "SafeMac AV scanned \(report.filesScanned) files and found \(report.infectedFiles.count) threats.",
-            category: Category.scanResult
-        )
+                : "SafeMac AV scanned \(report.filesScanned) files and found \(report.infectedFiles.count) threats."
+        }
+        let content = notificationContent(title: title, body: body, category: Category.scanResult)
         await post(content: content, identifierPrefix: "scan", settings: settings)
     }
 

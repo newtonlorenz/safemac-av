@@ -124,7 +124,7 @@ struct StatusCardsSection: View {
 
     private var lastScanColor: Color {
         guard let scan = appState.lastScanResult else { return .gray }
-        return scan.isClean ? .green : .red
+        return scan.infectedFiles.isEmpty ? (scan.isClean ? .green : .orange) : .red
     }
 
     private var lastUpdateStatus: String {
@@ -274,8 +274,14 @@ struct LastScanSection: View {
 
             HStack(spacing: 20) {
                 ScanStatView(title: "Files Scanned", value: "\(report.filesScanned)", color: .blue)
-                ScanStatView(title: "Threats Found", value: "\(report.infectedFiles.count)", color: report.isClean ? .green : .red)
+                ScanStatView(title: "Threats Found", value: "\(report.infectedFiles.count)", color: report.infectedFiles.isEmpty ? (report.isClean ? .green : .orange) : .red)
                 ScanStatView(title: "Duration", value: formatDuration(report.duration), color: .gray)
+            }
+
+            if !report.completedWithoutErrors {
+                Label("Scan needs attention", systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
             }
 
             if !report.infectedFiles.isEmpty {

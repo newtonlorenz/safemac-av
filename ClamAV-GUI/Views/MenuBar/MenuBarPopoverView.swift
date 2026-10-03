@@ -155,6 +155,9 @@ struct MenuBarPopoverView: View {
         }
 
         if let report = appState.lastScanResult {
+            if report.infectedFiles.isEmpty && !report.completedWithoutErrors {
+                return MenuBarStatus(icon: "exclamationmark.triangle.fill", tint: .orange, detail: "Last scan needs attention · \(report.filesScanned) files")
+            }
             let detail = report.isClean
                 ? "Last scan clean · \(report.filesScanned) files"
                 : "\(report.infectedFiles.count) threat\(report.infectedFiles.count == 1 ? "" : "s") found"

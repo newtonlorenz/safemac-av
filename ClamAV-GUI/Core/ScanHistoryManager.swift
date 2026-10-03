@@ -6,6 +6,7 @@ struct ScanHistoryEntry: Identifiable, Codable, Equatable {
     let scanType: ScanType
     let filesScanned: Int
     let threatsFound: Int
+    let completedWithoutErrors: Bool
 
     init(from report: ScanReport, scanType: ScanType) {
         id = UUID()
@@ -13,6 +14,7 @@ struct ScanHistoryEntry: Identifiable, Codable, Equatable {
         self.scanType = scanType
         filesScanned = report.filesScanned
         threatsFound = report.infectedFiles.count
+        completedWithoutErrors = report.completedWithoutErrors
     }
 }
 
